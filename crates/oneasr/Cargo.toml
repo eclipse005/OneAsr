@@ -1,0 +1,17 @@
+[package]
+name = "oneasr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OneAsr desktop app — pure GPUI shell"
+
+[[bin]]
+name = "oneasr"
+path = "src/main.rs"
+
+[dependencies]
+oneasr-core = { workspace = true }
+gpui = "0.2.2"
+anyhow = { workspace = true }
+rfd = "0.15"
+unicode-segmentation = "1"

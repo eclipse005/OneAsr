@@ -1,0 +1,10 @@
+/target
+/runs
+/output
+/terminals
+/mcps
+# Bundled ffmpeg is large; place bin/ffmpeg.exe locally for dev/run
+/bin/*.exe
+**/*.rs.bk
+.DS_Store
+*.pdb

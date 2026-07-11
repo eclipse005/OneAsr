@@ -1,0 +1,15 @@
+[package]
+name = "oneasr-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Prompt, postprocess, export, and job helpers for OneAsr"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+moss-transcribe-diarize-rs = { path = "../../../moss-transcribe-diarize-rs" }
+
+[dev-dependencies]
