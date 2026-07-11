@@ -5,6 +5,8 @@
 /mcps
 # Bundled ffmpeg is large; place bin/ffmpeg.exe locally for dev/run
 /bin/*.exe
+# User preferences (local machine paths)
+/settings.json
 **/*.rs.bk
 .DS_Store
 *.pdb

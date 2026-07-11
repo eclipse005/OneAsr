@@ -578,18 +578,18 @@ impl Render for HotwordInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .w_full()
-            .rounded_lg()
+            .rounded_md()
             .border_1()
             .border_color(LINE)
             .bg(PANEL)
-            .px_2()
-            .py_1()
+            .px_2p5()
+            .py_1p5()
             .line_height(px(22.))
             .text_size(px(13.))
             .text_color(TEXT)
             .child(
                 div()
-                    .h(px(28.))
+                    .h(px(26.))
                     .w_full()
                     .child(TextElement {
                         input: cx.entity(),

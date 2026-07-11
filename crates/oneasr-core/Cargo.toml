@@ -10,6 +10,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+rayon = "1.10"
 moss-transcribe-diarize-rs = { path = "../../../moss-transcribe-diarize-rs" }
 
 [dev-dependencies]

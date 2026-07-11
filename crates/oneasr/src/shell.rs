@@ -17,10 +17,14 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        // explorer /select,C:\path\to\file.srt
-        let arg = format!("/select,{}", file.display());
+        // Highlight the SRT in Explorer: explorer /select,"C:\path\to\file.srt"
+        use std::os::windows::process::CommandExt;
+        let path = file
+            .canonicalize()
+            .unwrap_or_else(|_| file.to_path_buf());
+        let arg = format!("/select,\"{}\"", path.display());
         Command::new("explorer")
-            .arg(arg)
+            .raw_arg(arg)
             .spawn()
             .map_err(|e| format!("无法打开资源管理器: {e}"))?;
         return Ok(());

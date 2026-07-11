@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Compact speaker / audio mark -->
+  <path d="M3.5 9.5h3.2L12 5.5v13l-5.3-4H3.5z"/>
+  <path d="M15.5 9.2a3.2 3.2 0 0 1 0 5.6"/>
+  <path d="M17.8 6.8a6 6 0 0 1 0 10.4"/>
+</svg>

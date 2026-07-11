@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskStatus {
-    /// 待处理
+    /// 待处理（未加入运行队列）
     Pending,
+    /// 已点开始，等待轮到（同一时间只跑一个）
+    Queued,
     /// 处理中
     Processing,
     /// 完成
@@ -21,10 +23,16 @@ impl TaskStatus {
     pub fn label(self) -> &'static str {
         match self {
             Self::Pending => "待处理",
+            Self::Queued => "排队中",
             Self::Processing => "处理中",
             Self::Done => "完成",
             Self::Error => "错误",
         }
+    }
+
+    /// Only the active ASR job locks start/delete.
+    pub fn locks_row_actions(self) -> bool {
+        matches!(self, Self::Processing)
     }
 }
 
@@ -61,6 +69,8 @@ pub struct Task {
     pub format: String,
     pub status: TaskStatus,
     pub error: Option<String>,
+    /// FIFO order when [`TaskStatus::Queued`] (lower runs first).
+    pub queue_seq: Option<u64>,
     /// Output SRT path when done.
     pub output_srt: Option<PathBuf>,
 }
@@ -87,8 +97,19 @@ impl Task {
             format,
             status: TaskStatus::Pending,
             error: None,
+            queue_seq: None,
             output_srt: None,
         }
+    }
+
+    /// 1-based rank among currently queued tasks (`排队中#n`).
+    pub fn queue_rank(tasks: &[Task], id: &str) -> Option<usize> {
+        let mut queued: Vec<&Task> = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Queued)
+            .collect();
+        queued.sort_by_key(|t| t.queue_seq.unwrap_or(u64::MAX));
+        queued.iter().position(|t| t.id == id).map(|i| i + 1)
     }
 
     pub fn size_label(&self) -> String {
@@ -112,6 +133,12 @@ fn new_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     format!("t{n}")
+}
+
+/// Monotonic queue sequence for FIFO start order.
+pub fn next_queue_seq() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 pub fn format_bytes(n: u64) -> String {

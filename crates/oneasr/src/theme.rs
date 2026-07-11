@@ -23,16 +23,16 @@ pub const TEXT: Rgba = rgba_hex(0x0f172a);
 pub const MUTED: Rgba = rgba_hex(0x64748b);
 /// Disabled / very soft secondary (still readable on white)
 pub const MUTED_SOFT: Rgba = rgba_hex(0x94a3b8);
-/// Neutral pill fill (pending) — cool slate, more contrast than BG
-pub const PILL_NEUTRAL_BG: Rgba = rgba_hex(0xf1f5f9);
-/// Neutral pill text
-pub const PILL_NEUTRAL_FG: Rgba = rgba_hex(0x475569);
 /// Brand / success
 pub const ACCENT: Rgba = rgba_hex(0x0d9488);
 /// Accent soft fill
 pub const ACCENT_SOFT: Rgba = rgba_hex(0xccfbf1);
 /// Very soft accent for empty-state / drop zone icons
 pub const ACCENT_MIST: Rgba = rgba_hex(0xe6fffa);
+/// Cool slate plate for media icons (less “toy” than accent mist)
+pub const MEDIA_PLATE: Rgba = rgba_hex(0xf1f5f9);
+/// Soft row hover / zebra
+pub const ROW_HOVER: Rgba = rgba_hex(0xf8fafc);
 /// Danger
 pub const DANGER: Rgba = rgba_hex(0xdc2626);
 /// Danger soft

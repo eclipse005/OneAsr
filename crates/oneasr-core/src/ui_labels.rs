@@ -12,16 +12,38 @@ pub fn containing_folder(file: &Path) -> Option<PathBuf> {
 }
 
 /// Short status bar text for the batch queue (no percentages).
+/// Sparse queues stay short so the bar doesn’t feel like a dashboard.
 pub fn format_queue_status(
     total: usize,
     pending: usize,
+    queued: usize,
     processing: usize,
     done: usize,
     error: usize,
 ) -> String {
-    format!(
-        "共 {total}  ·  处理中 {processing}  ·  剩余 {pending}  ·  完成 {done}  ·  错误 {error}"
-    )
+    if total == 0 {
+        return "暂无任务".into();
+    }
+    if processing == 0 && queued == 0 && done == 0 && error == 0 {
+        return format!("{total} 个任务 · 待处理 {pending}");
+    }
+    let mut parts = vec![format!("共 {total}")];
+    if processing > 0 {
+        parts.push(format!("处理中 {processing}"));
+    }
+    if queued > 0 {
+        parts.push(format!("排队 {queued}"));
+    }
+    if pending > 0 {
+        parts.push(format!("待处理 {pending}"));
+    }
+    if done > 0 {
+        parts.push(format!("完成 {done}"));
+    }
+    if error > 0 {
+        parts.push(format!("错误 {error}"));
+    }
+    parts.join("  ·  ")
 }
 
 /// Empty-state headline (list center — never shows model-loading; that belongs in status bar).
@@ -61,10 +83,13 @@ mod tests {
 
     #[test]
     fn queue_status_has_remaining_no_percent() {
-        let s = format_queue_status(5, 3, 1, 1, 0);
-        assert!(s.contains("剩余 3"));
+        let s = format_queue_status(5, 2, 1, 1, 1, 0);
+        assert!(s.contains("待处理 2"));
+        assert!(s.contains("排队 1"));
         assert!(s.contains("处理中 1"));
         assert!(!s.contains('%'));
+        assert_eq!(format_queue_status(0, 0, 0, 0, 0, 0), "暂无任务");
+        assert_eq!(format_queue_status(1, 1, 0, 0, 0, 0), "1 个任务 · 待处理 1");
     }
 
     #[test]

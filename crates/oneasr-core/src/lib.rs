@@ -12,6 +12,7 @@ pub mod job;
 pub mod media;
 pub mod paths;
 pub mod prompt;
+pub mod runtime;
 pub mod settings;
 pub mod ui_labels;
 
@@ -21,17 +22,18 @@ pub mod parse;
 pub mod segment;
 
 pub use asr::{
-    planned_output_path, preload_model, process_media_file, session_matches, unload_session,
-    AsrError,
+    check_model_dir, planned_output_path, preload_model, process_media_file,
+    process_media_file_with_progress, session_matches, unload_session, AsrError, AsrStage,
 };
+pub use runtime::{demote_current_thread, init_runtime};
 pub use engine::{
     export_json, export_plain, export_srt, export_vtt, format_srt_time, format_vtt_time,
     parse_transcript, ExportOptions, ParseError, Segment, SubtitleFormat, TranscriptDocument,
     TranscriptEngine,
 };
 pub use job::{
-    accept_input_path, format_bytes, format_duration, is_media_path, DurationState, Task,
-    TaskStatus,
+    accept_input_path, format_bytes, format_duration, is_media_path, next_queue_seq, DurationState,
+    Task, TaskStatus,
 };
 pub use media::{
     convert_to_16k_mono_wav, ffmpeg_available, probe_duration_sec, resolve_app_root, resolve_bin_dir,
