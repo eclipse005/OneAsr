@@ -12,5 +12,6 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 rayon = "1.10"
 moss-transcribe-diarize-rs = { path = "../../../moss-transcribe-diarize-rs" }
+fireredvad = { path = "../../../FireRedVad" }
 
 [dev-dependencies]

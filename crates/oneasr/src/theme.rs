@@ -31,13 +31,17 @@ pub const ACCENT_SOFT: Rgba = rgba_hex(0xccfbf1);
 pub const ACCENT_MIST: Rgba = rgba_hex(0xe6fffa);
 /// Cool slate plate for media icons (less “toy” than accent mist)
 pub const MEDIA_PLATE: Rgba = rgba_hex(0xf1f5f9);
-/// Soft row hover / zebra
+/// Soft row hover
 pub const ROW_HOVER: Rgba = rgba_hex(0xf8fafc);
+/// Alternating list row
+pub const ZEBRA: Rgba = rgba_hex(0xfafbfc);
 /// Danger
 pub const DANGER: Rgba = rgba_hex(0xdc2626);
 /// Danger soft
 pub const DANGER_SOFT: Rgba = rgba_hex(0xfee2e2);
 /// Warning / loading
 pub const WARN: Rgba = rgba_hex(0xd97706);
+/// Warning soft fill (status pill / hint)
+pub const WARN_SOFT: Rgba = rgba_hex(0xfff7ed);
 /// Logo mark fill
 pub const LOGO: Rgba = rgba_hex(0x0f766e);

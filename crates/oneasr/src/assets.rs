@@ -1,7 +1,7 @@
 //! Load `assets/` next to the repo / install root for SVG icons and sfx paths.
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use gpui::{AssetSource, SharedString};
@@ -66,11 +66,4 @@ impl AssetSource for AppAssets {
         }
         Ok(out)
     }
-}
-
-#[allow(dead_code)]
-pub fn asset_path(rel: impl AsRef<Path>) -> PathBuf {
-    resolve_assets_dir()
-        .unwrap_or_else(|| PathBuf::from("assets"))
-        .join(rel)
 }

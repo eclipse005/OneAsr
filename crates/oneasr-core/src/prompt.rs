@@ -1,18 +1,8 @@
-//! Official English prompts only — from MOSS `examples/prompts.md`.
-//!
-//! **Prompt A** (default, timestamped diarization):
-//! ```text
-//! Transcribe the audio. For each segment, start with the timestamp and speaker ID
-//! ([S01], [S02], [S03], ...), then the spoken text, and end with the segment timestamp.
-//! ```
-//!
-//! **Prompt B** (hotword hints) = Prompt A + ` Hotwords: {list}`  
-//! (official English hotword recipe).
+//! Official English prompts — from MOSS `examples/prompts.md`.
 
 use thiserror::Error;
 
-/// Official English Prompt A — timestamped diarization (no hotwords).
-pub const PROMPT_BASE: &str = "Transcribe the audio. For each segment, start with the timestamp and speaker ID ([S01], [S02], [S03], ...), then the spoken text, and end with the segment timestamp.";
+const PROMPT_BASE: &str = "Transcribe the audio. For each segment, start with the timestamp and speaker ID ([S01], [S02], [S03], ...), then the spoken text, and end with the segment timestamp.";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PromptError {
@@ -22,7 +12,7 @@ pub enum PromptError {
 
 /// Build the official English prompt.
 ///
-/// * `use_hotwords == false` → Prompt A  
+/// * `use_hotwords == false` → Prompt A
 /// * `use_hotwords == true`  → Prompt B (`… Hotwords: …`); non-empty list required
 pub fn build_prompt(use_hotwords: bool, hotwords: &str) -> Result<String, PromptError> {
     if !use_hotwords {
@@ -32,16 +22,7 @@ pub fn build_prompt(use_hotwords: bool, hotwords: &str) -> Result<String, Prompt
     if hw.is_empty() {
         return Err(PromptError::EmptyHotwords);
     }
-    // Official English hotword form from examples/prompts.md
     Ok(format!("{PROMPT_BASE} Hotwords: {hw}"))
-}
-
-/// Human-readable summary for UI (does not fail on empty hotwords when disabled).
-pub fn prompt_preview(use_hotwords: bool, hotwords: &str) -> String {
-    match build_prompt(use_hotwords, hotwords) {
-        Ok(p) => p,
-        Err(_) => format!("{PROMPT_BASE} Hotwords: (请填写热词)"),
-    }
 }
 
 #[cfg(test)]

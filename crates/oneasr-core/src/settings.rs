@@ -21,6 +21,9 @@ pub struct Settings {
     pub hotwords: String,
     /// Switch: prefix speaker in exports / list.
     pub export_show_speaker: bool,
+    /// Switch: split overlong subtitle segments at clause/connector boundaries.
+    #[serde(default = "default_split_long_sentences")]
+    pub split_long_sentences: bool,
 }
 
 impl Default for Settings {
@@ -34,8 +37,13 @@ impl Default for Settings {
             use_hotwords: false,
             hotwords: String::new(),
             export_show_speaker: true,
+            split_long_sentences: default_split_long_sentences(),
         }
     }
+}
+
+fn default_split_long_sentences() -> bool {
+    true
 }
 
 impl Settings {

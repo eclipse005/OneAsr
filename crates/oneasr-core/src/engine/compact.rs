@@ -1,17 +1,8 @@
 //! Compact MOSS transcript parser: `[start][Sxx]text[end]…`
 //!
-//! Extracts **timestamp**, **speaker**, and **text** from engine raw output.
-//! Port of Python `TranscriptStreamParser` (character state machine, no big regex).
-
-use thiserror::Error;
+//! Extracts timestamp, speaker, and text from engine raw output.
 
 use super::segment::Segment;
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum ParseError {
-    #[error("transcript parse error: {0}")]
-    Message(String),
-}
 
 /// Parse a full compact transcript into segments.
 pub fn parse_transcript(text: &str) -> Vec<Segment> {

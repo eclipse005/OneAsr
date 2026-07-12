@@ -1,15 +1,18 @@
 //! OS shell helpers (Windows-first). Never block the UI thread on completion.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use oneasr_core::containing_folder;
+fn parent_dir(file: &Path) -> Option<PathBuf> {
+    file.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+}
 
 /// Open the folder containing `file` and select it when possible (Windows).
 pub fn open_containing_folder(file: &Path) -> Result<(), String> {
     if !file.exists() {
-        // Still try parent if file was moved; prefer parent open.
-        if let Some(parent) = containing_folder(file) {
+        if let Some(parent) = parent_dir(file) {
             return open_folder(&parent);
         }
         return Err(format!("文件不存在: {}", file.display()));
@@ -17,7 +20,6 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        // Highlight the SRT in Explorer: explorer /select,"C:\path\to\file.srt"
         use std::os::windows::process::CommandExt;
         let path = file
             .canonicalize()
@@ -27,19 +29,19 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
             .raw_arg(arg)
             .spawn()
             .map_err(|e| format!("无法打开资源管理器: {e}"))?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(windows))]
     {
-        if let Some(parent) = containing_folder(file) {
+        if let Some(parent) = parent_dir(file) {
             return open_folder(&parent);
         }
         Err("无法解析输出目录".into())
     }
 }
 
-pub fn open_folder(dir: &Path) -> Result<(), String> {
+fn open_folder(dir: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         Command::new("explorer")
@@ -57,5 +59,3 @@ pub fn open_folder(dir: &Path) -> Result<(), String> {
         Ok(())
     }
 }
-
-

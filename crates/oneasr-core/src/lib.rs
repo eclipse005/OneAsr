@@ -1,10 +1,6 @@
-//! OneAsr core: batch jobs, prompts, **subtitle engine**, media, ASR.
+//! OneAsr core: batch jobs, prompts, subtitle engine, media, ASR.
 //!
-//! ## Layers
-//!
-//! 1. **ASR** (`asr`) — media → raw MOSS compact string  
-//! 2. **Engine** (`engine`) — raw → structured segments → SRT/VTT/JSON/plain  
-//! 3. **Job / UI** — batch list, paths under `output/{stem}.srt`
+//! Standalone app support library — not a public crate API surface.
 
 pub mod asr;
 pub mod engine;
@@ -15,33 +11,19 @@ pub mod prompt;
 pub mod runtime;
 pub mod settings;
 pub mod ui_labels;
+pub mod vad;
 
-// Thin compatibility modules (re-exports into `engine`).
-pub mod export;
-pub mod parse;
-pub mod segment;
-
+// App + integration tests.
 pub use asr::{
-    check_model_dir, planned_output_path, preload_model, process_media_file,
-    process_media_file_with_progress, session_matches, unload_session, AsrError, AsrStage,
-};
-pub use runtime::{demote_current_thread, init_runtime};
-pub use engine::{
-    export_json, export_plain, export_srt, export_vtt, format_srt_time, format_vtt_time,
-    parse_transcript, ExportOptions, ParseError, Segment, SubtitleFormat, TranscriptDocument,
-    TranscriptEngine,
+    check_model_dir, planned_output_path, process_media_file, process_media_file_with_progress,
+    unload_session, AsrStage, StageUpdate,
 };
 pub use job::{
-    accept_input_path, format_bytes, format_duration, is_media_path, next_queue_seq, DurationState,
-    Task, TaskStatus,
+    accept_input_path, next_queue_seq, DurationState, Task, TaskStatus,
 };
-pub use media::{
-    convert_to_16k_mono_wav, ffmpeg_available, probe_duration_sec, resolve_app_root, resolve_bin_dir,
-    resolve_ffmpeg, MediaError,
-};
-pub use paths::{media_stem, output_srt_path};
-pub use prompt::{build_prompt, prompt_preview, PROMPT_BASE};
+pub use media::{ffmpeg_available, probe_duration_sec, resolve_app_root};
+pub use runtime::{demote_current_thread, init_runtime};
 pub use settings::Settings;
 pub use ui_labels::{
-    can_open_output, containing_folder, empty_state_subtitle, empty_state_title, format_queue_status,
+    empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
 };

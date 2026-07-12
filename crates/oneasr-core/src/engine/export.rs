@@ -1,12 +1,10 @@
-//! Multi-format exporters — **only** consume structured [`Segment`]s.
-//!
-//! Never parse raw MOSS text here; always go through the parse engine first.
+//! Exporters — **only** consume structured [`Segment`]s.
 
 use super::segment::Segment;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExportOptions {
-    /// When true, prefix subtitle lines with `S01: ` (or equivalent).
+    /// When true, prefix lines with `S01: `.
     pub show_speaker: bool,
 }
 
@@ -24,24 +22,13 @@ fn display_text(seg: &Segment, opts: &ExportOptions) -> String {
     }
 }
 
-/// Format seconds as SRT timestamp `HH:MM:SS,mmm`.
-pub fn format_srt_time(seconds: f64) -> String {
+fn format_srt_time(seconds: f64) -> String {
     let ms_total = (seconds.max(0.0) * 1000.0).round() as u64;
     let hours = ms_total / 3_600_000;
     let minutes = (ms_total % 3_600_000) / 60_000;
     let secs = (ms_total % 60_000) / 1000;
     let ms = ms_total % 1000;
     format!("{hours:02}:{minutes:02}:{secs:02},{ms:03}")
-}
-
-/// Format seconds as VTT timestamp `HH:MM:SS.mmm`.
-pub fn format_vtt_time(seconds: f64) -> String {
-    let ms_total = (seconds.max(0.0) * 1000.0).round() as u64;
-    let hours = ms_total / 3_600_000;
-    let minutes = (ms_total % 3_600_000) / 60_000;
-    let secs = (ms_total % 60_000) / 1000;
-    let ms = ms_total % 1000;
-    format!("{hours:02}:{minutes:02}:{secs:02}.{ms:03}")
 }
 
 pub fn export_srt(segments: &[Segment], opts: &ExportOptions) -> String {
@@ -60,20 +47,6 @@ pub fn export_srt(segments: &[Segment], opts: &ExportOptions) -> String {
     } else {
         blocks.join("\n\n") + "\n"
     }
-}
-
-pub fn export_vtt(segments: &[Segment], opts: &ExportOptions) -> String {
-    let mut out = String::from("WEBVTT\n\n");
-    for (i, seg) in segments.iter().enumerate() {
-        out.push_str(&format!(
-            "{}\n{} --> {}\n{}\n\n",
-            i + 1,
-            format_vtt_time(seg.start),
-            format_vtt_time(seg.end),
-            display_text(seg, opts)
-        ));
-    }
-    out
 }
 
 pub fn export_json(segments: &[Segment]) -> String {
@@ -117,13 +90,6 @@ mod tests {
         let srt = export_srt(&sample(), &ExportOptions { show_speaker: false });
         assert!(srt.contains("Hello there"));
         assert!(!srt.contains("S01:"));
-    }
-
-    #[test]
-    fn vtt_header() {
-        let vtt = export_vtt(&sample(), &ExportOptions::default());
-        assert!(vtt.starts_with("WEBVTT"));
-        assert!(vtt.contains("00:00:01.920"));
     }
 
     #[test]

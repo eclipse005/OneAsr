@@ -6,6 +6,7 @@
 //! - UI may call [`unload_session`] / [`check_model_dir`] without freezing.
 //! - Never mutates process CWD (mel filterbank is embedded in moss).
 //! - Call [`crate::runtime::init_runtime`] at process start so rayon leaves a core for UI.
+//! - Product deliverable is SRT only (runs/ keeps debug json/txt).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -13,16 +14,22 @@ use std::sync::{Arc, Mutex};
 use moss_transcribe_diarize_rs::AsrInference;
 use thiserror::Error;
 
-use crate::engine::{ExportOptions, TranscriptEngine};
-use crate::media::convert_to_16k_mono_wav;
+use crate::engine::{split_long_segments, ExportOptions, Segment, TranscriptDocument, TranscriptEngine};
+use crate::media::{convert_to_16k_mono_wav, probe_duration_sec, slice_wav};
 use crate::paths::{media_stem, output_srt_path};
 use crate::settings::Settings;
+use crate::vad;
 
 #[derive(Debug, Error)]
 pub enum AsrError {
     #[error("{0}")]
     Msg(String),
 }
+
+/// Target seconds per ASR chunk. Audio longer than this is VAD-split at
+/// silence midpoints. Matches the validated Python asr.py default.
+const CHUNK_SEC: f32 = 180.0;
+const MIN_SILENCE_FALLBACK: f32 = 0.3;
 
 /// Fine-grained pipeline stage for live UI status (never blocks UI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +51,37 @@ impl AsrStage {
     }
 }
 
+/// A stage update sent to the UI, optionally carrying chunk progress.
+///
+/// `chunk` is `Some((current_1based, total))` during multi-chunk transcription,
+/// `None` for stages that don't have sub-progress (or single-chunk audio).
+#[derive(Debug, Clone, Copy)]
+pub struct StageUpdate {
+    pub stage: AsrStage,
+    pub chunk: Option<(usize, usize)>,
+}
+
+impl StageUpdate {
+    pub fn new(stage: AsrStage) -> Self {
+        Self { stage, chunk: None }
+    }
+
+    pub fn with_chunk(stage: AsrStage, current: usize, total: usize) -> Self {
+        Self {
+            stage,
+            chunk: Some((current, total)),
+        }
+    }
+
+    /// Format as a display label, e.g. "转写中 2/4".
+    pub fn label(&self) -> String {
+        match self.chunk {
+            Some((cur, total)) if total > 1 => format!("{} {cur}/{total}", self.stage.label()),
+            _ => self.stage.label().to_string(),
+        }
+    }
+}
+
 struct Session {
     backend: String,
     model_dir: PathBuf,
@@ -52,18 +90,6 @@ struct Session {
 }
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
-
-/// Whether a session is loaded for the given model/backend.
-pub fn session_matches(model_dir: &Path, backend: &str) -> bool {
-    SESSION
-        .lock()
-        .ok()
-        .and_then(|g| {
-            g.as_ref()
-                .map(|s| s.backend == backend && s.model_dir == model_dir)
-        })
-        .unwrap_or(false)
-}
 
 /// Drop the cached session (e.g. when the user changes model dir / backend).
 ///
@@ -173,13 +199,13 @@ fn parse_weight_map_shards(index_path: &Path) -> Result<Vec<String>, String> {
     Ok(set.into_iter().collect())
 }
 
-/// Load (or reuse) the model. Safe to call from a **worker** thread only.
-/// Catches panics so a bad directory cannot freeze the UI process permanently.
-pub fn preload_model(model_dir: &Path, backend: &str) -> Result<(), AsrError> {
+/// Load weights **outside** the session mutex, then install under a short lock.
+/// Safe only on a **worker** thread. Catches panics from bad model dirs.
+fn get_or_load(model_dir: &Path, backend: &str) -> Result<(), AsrError> {
     let model_dir = model_dir.to_path_buf();
     let backend = backend.to_string();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        get_or_load(&model_dir, &backend)
+        get_or_load_inner(&model_dir, &backend)
     })) {
         Ok(r) => r,
         Err(payload) => {
@@ -195,8 +221,7 @@ pub fn preload_model(model_dir: &Path, backend: &str) -> Result<(), AsrError> {
     }
 }
 
-/// Load weights **outside** the session mutex, then install under a short lock.
-fn get_or_load(model_dir: &Path, backend: &str) -> Result<(), AsrError> {
+fn get_or_load_inner(model_dir: &Path, backend: &str) -> Result<(), AsrError> {
     // 1) Fast path: already loaded for this dir/backend.
     {
         let guard = SESSION
@@ -279,13 +304,13 @@ pub fn process_media_file_with_progress(
     media_name: &str,
     settings: &Settings,
     app_root: &Path,
-    mut on_stage: impl FnMut(AsrStage),
+    mut on_stage: impl FnMut(StageUpdate),
 ) -> Result<PathBuf, AsrError> {
     let prompt = settings
         .build_prompt()
         .map_err(|e| AsrError::Msg(e.to_string()))?;
 
-    on_stage(AsrStage::LoadingModel);
+    on_stage(StageUpdate::new(AsrStage::LoadingModel));
     get_or_load(&settings.model_dir, &settings.backend)?;
 
     let stem = media_stem(input);
@@ -303,13 +328,79 @@ pub fn process_media_file_with_progress(
     }
 
     // 1. Convert with bundled ffmpeg
-    on_stage(AsrStage::Converting);
+    on_stage(StageUpdate::new(AsrStage::Converting));
     let wav = work_dir.join("input_16k.wav");
     convert_to_16k_mono_wav(input, &wav).map_err(|e| AsrError::Msg(e.to_string()))?;
 
-    // 2. Real ASR (blocking on this worker thread only)
-    on_stage(AsrStage::Transcribing);
-    let raw = transcribe_wav(&wav, &prompt, settings.max_new_tokens)?;
+    // 2. VAD chunk planning: split long audio at silence midpoints (~180s each).
+    //    Short audio (<= CHUNK_SEC) skips VAD and transcribes in one shot.
+    let duration = probe_duration_sec(&wav).unwrap_or(0.0) as f32;
+    let chunks = if duration > CHUNK_SEC {
+        let speech = vad::run_vad(&wav)?;
+        let silences = vad::speech_to_silences(&speech, duration, MIN_SILENCE_FALLBACK);
+        let planned = vad::plan_chunks(duration, &silences, CHUNK_SEC);
+        eprintln!(
+            "[vad] duration={duration:.1}s speech={} silence_gaps={} chunks={}",
+            speech.len(),
+            silences.len(),
+            planned.len(),
+        );
+        planned
+    } else {
+        vec![vad::Chunk {
+            start: 0.0,
+            end: duration,
+        }]
+    };
+
+    // 3. Real ASR per chunk (blocking on this worker thread only).
+    //    Each chunk is transcribed independently; timestamps are offset to the
+    //    global timeline by adding chunk.start before merging.
+    let total_chunks = chunks.len();
+    let mut all_segments: Vec<Segment> = Vec::new();
+    let mut all_raw: Vec<String> = Vec::new();
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        on_stage(StageUpdate::with_chunk(
+            AsrStage::Transcribing,
+            i + 1,
+            total_chunks,
+        ));
+        let chunk_wav = work_dir.join(format!("chunk_{i:03}.wav"));
+        // If single chunk covering the whole file, reuse the converted wav directly.
+        if chunks.len() == 1 {
+            // whole-file path: transcribe the already-converted input_16k.wav
+            let raw = transcribe_wav(&wav, &prompt, settings.max_new_tokens)?;
+            all_raw.push(raw);
+        } else {
+            slice_wav(&wav, chunk.start, chunk.end, &chunk_wav)
+                .map_err(|e| AsrError::Msg(e.to_string()))?;
+            let raw = transcribe_wav(&chunk_wav, &prompt, settings.max_new_tokens)?;
+            all_raw.push(raw);
+        }
+
+        let chunk_raw = all_raw.last().unwrap();
+        let chunk_doc = TranscriptEngine::parse_moss_compact(chunk_raw);
+        let offset = chunk.start as f64;
+        for mut seg in chunk_doc.segments {
+            seg.start += offset;
+            seg.end += offset;
+            all_segments.push(seg);
+        }
+    }
+
+    // Renumber merged segments globally.
+    for (i, seg) in all_segments.iter_mut().enumerate() {
+        seg.id = format!("seg_{:04}", i + 1);
+    }
+
+    // Split overlong segments for readability (only when enabled; English/Latin
+    // text is split at clause/connector points, CJK is left untouched).
+    if settings.split_long_sentences {
+        all_segments = split_long_segments(&all_segments);
+    }
+
+    let raw = all_raw.join("");
     std::fs::write(work_dir.join("raw_transcript.txt"), &raw)
         .map_err(|e| AsrError::Msg(e.to_string()))?;
 
@@ -320,9 +411,12 @@ pub fn process_media_file_with_progress(
         ));
     }
 
-    // 3. Parse + export
-    on_stage(AsrStage::Exporting);
-    let doc = TranscriptEngine::parse_moss_compact(&raw);
+    // 4. Build merged document + export
+    on_stage(StageUpdate::new(AsrStage::Exporting));
+    // Export is near-instant (parse + write SRT). Hold the "导出字幕" label for
+    // a beat so the user can perceive the stage transition before Done.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let doc = TranscriptDocument::new(all_segments).with_raw(&raw);
     if doc.is_empty() && !raw.trim().is_empty() {
         return Err(AsrError::Msg(format!(
             "解析引擎未解析出段落（raw 非空）: {}",

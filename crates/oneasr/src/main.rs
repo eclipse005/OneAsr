@@ -18,9 +18,9 @@ use gpui::{
 };
 use oneasr_core::{
     accept_input_path, check_model_dir, demote_current_thread, empty_state_subtitle,
-    empty_state_title, format_queue_status, init_runtime, next_queue_seq,
+    empty_state_title, format_batch_progress, format_queue_status, init_runtime, next_queue_seq,
     process_media_file_with_progress, probe_duration_sec, resolve_app_root, unload_session,
-    AsrStage, DurationState, Settings, Task, TaskStatus,
+    AsrStage, DurationState, Settings, StageUpdate, Task, TaskStatus,
 };
 
 use hotword_input::{
@@ -29,7 +29,7 @@ use hotword_input::{
 };
 use theme::{
     ACCENT, ACCENT_MIST, ACCENT_SOFT, BG, DANGER, DANGER_SOFT, LINE, LINE_SOFT, LOGO, MEDIA_PLATE,
-    MUTED, MUTED_SOFT, PANEL, ROW_HOVER, TEXT, WARN,
+    MUTED, MUTED_SOFT, PANEL, ROW_HOVER, TEXT, WARN, WARN_SOFT, ZEBRA,
 };
 
 /// Status-bar model indicator: **file probe only** (not weight load).
@@ -113,21 +113,25 @@ fn main() {
 
 struct OneAsrApp {
     settings: Settings,
+    /// Unsaved settings edits (toggles / backend / hotwords).
+    settings_dirty: bool,
     /// Desired drawer state (open / closed).
     settings_open: bool,
     /// Drawer slide progress source → target (0 = hidden, 1 = open).
     settings_from: f32,
     settings_to: f32,
     settings_anim_t0: Instant,
-    /// Row whose action icons are fading in.
+    /// Row currently under the pointer (action highlight).
     hover_row: Option<String>,
-    hover_t0: Instant,
     tasks: Vec<Task>,
     batch_mode: bool,
+    /// Jobs planned for the current batch run (for 进度 n/m).
+    batch_goal: Option<usize>,
+    /// Finished (ok or err) count within the current batch.
+    batch_done: usize,
     busy: bool,
     picking: bool,
     model_status: ModelStatus,
-    model_error: Option<SharedString>,
     /// Soft status-bar hint (no toast). Auto-clears after a few seconds.
     status_hint: Option<SharedString>,
     status_hint_until: Option<Instant>,
@@ -163,10 +167,10 @@ impl OneAsrApp {
                         } => {
                             let id_for_progress = id.clone();
                             let ptx = worker_tx.clone();
-                            let result = run_task(&path, &name, &settings, move |stage| {
+                            let result = run_task(&path, &name, &settings, move |update| {
                                 let _ = ptx.send(WorkerMsg::Progress {
                                     id: id_for_progress.clone(),
-                                    stage: SharedString::from(stage.label()),
+                                    stage: SharedString::from(update.label()),
                                 });
                             });
                             let _ = worker_tx.send(WorkerMsg::Finished { id, result });
@@ -188,18 +192,19 @@ impl OneAsrApp {
 
         let mut app = Self {
             settings,
+            settings_dirty: false,
             settings_open: false,
             settings_from: 0.0,
             settings_to: 0.0,
             settings_anim_t0: Instant::now(),
             hover_row: None,
-            hover_t0: Instant::now(),
             tasks: Vec::new(),
             batch_mode: false,
+            batch_goal: None,
+            batch_done: 0,
             busy: false,
             picking: false,
             model_status: ModelStatus::NotReady,
-            model_error: None,
             status_hint: None,
             status_hint_until: None,
             ui_phase: 0,
@@ -223,16 +228,11 @@ impl OneAsrApp {
 
     /// Fast FS check for status bar. Does not touch GPU / weights.
     fn refresh_model_probe(&mut self) {
-        match check_model_dir(&self.settings.model_dir) {
-            Ok(()) => {
-                self.model_status = ModelStatus::Ready;
-                self.model_error = None;
-            }
-            Err(e) => {
-                self.model_status = ModelStatus::NotReady;
-                self.model_error = Some(e.to_string().into());
-            }
-        }
+        self.model_status = if check_model_dir(&self.settings.model_dir).is_ok() {
+            ModelStatus::Ready
+        } else {
+            ModelStatus::NotReady
+        };
     }
 
     /// Drop any in-memory session and re-probe the configured folder.
@@ -242,11 +242,26 @@ impl OneAsrApp {
         cx.notify();
     }
 
+    fn mark_settings_dirty(&mut self, cx: &mut Context<Self>) {
+        if !self.settings_dirty {
+            self.settings_dirty = true;
+            cx.notify();
+        }
+    }
+
+    fn is_settings_dirty(&self, cx: &Context<Self>) -> bool {
+        if self.settings_dirty {
+            return true;
+        }
+        self.hotword_input.read(cx).text() != self.settings.hotwords
+    }
+
     /// Sync hotwords from UI, write `settings.json`, re-check model files.
     fn save_settings(&mut self, cx: &mut Context<Self>) {
         self.sync_hotwords_from_ui(cx);
         match self.settings.save() {
             Ok(_) => {
+                self.settings_dirty = false;
                 self.reset_model_config(cx);
                 self.flash_hint(
                     match self.model_status {
@@ -293,9 +308,9 @@ impl OneAsrApp {
                 }
                 Ok(WorkerMsg::ModelDirPicked(dir)) => {
                     self.settings.model_dir = dir;
-                    // Probe immediately after pick (no separate “re-detect” button).
+                    self.settings_dirty = false;
+                    // Probe + persist path immediately after pick.
                     self.reset_model_config(cx);
-                    // Persist path so next launch keeps the choice.
                     if let Err(e) = self.settings.save() {
                         self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
                     } else {
@@ -327,7 +342,6 @@ impl OneAsrApp {
                     {
                         self.active_stage = None;
                     }
-                    // Corner status stays file-probe only; load errors belong on the task row.
                     self.refresh_model_probe();
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                         match result {
@@ -343,6 +357,9 @@ impl OneAsrApp {
                                 t.error = Some(e);
                             }
                         }
+                    }
+                    if self.batch_mode {
+                        self.batch_done = self.batch_done.saturating_add(1);
                     }
                     cx.notify();
                     // Always drain the FIFO queue (one at a time).
@@ -426,6 +443,10 @@ impl OneAsrApp {
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         let open = !self.settings_open;
+        // Closing with unsaved edits → auto-save (desktop-tool default).
+        if !open && self.is_settings_dirty(cx) {
+            self.save_settings(cx);
+        }
         let cur = self.settings_progress();
         self.settings_from = cur;
         self.settings_to = if open { 1.0 } else { 0.0 };
@@ -456,9 +477,73 @@ impl OneAsrApp {
 
     /// Brief message in the bottom status bar (replaces toast).
     fn flash_hint(&mut self, msg: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.flash_hint_for(msg, Duration::from_secs(3), cx);
+    }
+
+    fn flash_hint_for(
+        &mut self,
+        msg: impl Into<SharedString>,
+        dur: Duration,
+        cx: &mut Context<Self>,
+    ) {
         self.status_hint = Some(msg.into());
-        self.status_hint_until = Some(Instant::now() + Duration::from_secs(3));
+        self.status_hint_until = Some(Instant::now() + dur);
         cx.notify();
+    }
+
+    fn begin_batch(&mut self, job_count: usize) {
+        if job_count == 0 {
+            return;
+        }
+        if self.batch_mode {
+            if let Some(g) = self.batch_goal.as_mut() {
+                *g = g.saturating_add(job_count);
+            } else {
+                self.batch_goal = Some(job_count);
+            }
+        } else {
+            self.batch_mode = true;
+            self.batch_goal = Some(job_count);
+            self.batch_done = 0;
+        }
+    }
+
+    fn end_batch_if_idle(&mut self, cx: &mut Context<Self>) {
+        if !self.batch_mode {
+            return;
+        }
+        let still =
+            self.tasks.iter().any(|t| {
+                matches!(t.status, TaskStatus::Queued | TaskStatus::Processing)
+            });
+        if still {
+            return;
+        }
+        let done = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Done)
+            .count();
+        let err = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Error)
+            .count();
+        let goal = self.batch_goal.unwrap_or(self.batch_done);
+        self.batch_mode = false;
+        self.batch_goal = None;
+        self.batch_done = 0;
+        if goal == 0 && done == 0 && err == 0 {
+            return;
+        }
+        let msg = if err == 0 {
+            format!("全部完成 · {done} 个任务")
+        } else if done == 0 {
+            format!("批次结束 · {err} 个失败")
+        } else {
+            format!("批次结束 · 完成 {done} · 失败 {err}")
+        };
+        self.flash_hint_for(msg, Duration::from_secs(6), cx);
     }
 
     /// Model / hotwords gate for starting work. Does **not** block when another
@@ -509,7 +594,7 @@ impl OneAsrApp {
             return;
         }
         sfx::play(sfx::Sfx::Click);
-        self.batch_mode = true;
+        self.begin_batch(enqueued);
         self.try_start_next(cx);
         cx.notify();
     }
@@ -549,6 +634,7 @@ impl OneAsrApp {
             t.queue_seq = Some(next_queue_seq());
         }
         sfx::play(sfx::Sfx::Click);
+        self.begin_batch(1);
         if slot_free {
             self.try_start_next(cx);
         } else {
@@ -573,7 +659,7 @@ impl OneAsrApp {
         match next_id {
             Some(id) => self.launch_task(&id, cx),
             None => {
-                self.batch_mode = false;
+                self.end_batch_if_idle(cx);
                 cx.notify();
             }
         }
@@ -651,6 +737,12 @@ impl OneAsrApp {
             .retain(|t| t.status == TaskStatus::Processing);
         if !had_proc {
             self.batch_mode = false;
+            self.batch_goal = None;
+            self.batch_done = 0;
+        } else if let Some(g) = self.batch_goal.as_mut() {
+            // Keep only the active job in the batch goal.
+            *g = 1;
+            self.batch_done = 0;
         }
         self.hover_row = None;
         if had_proc {
@@ -679,7 +771,7 @@ fn run_task(
     path: &std::path::Path,
     name: &str,
     settings: &Settings,
-    on_stage: impl FnMut(AsrStage),
+    on_stage: impl FnMut(StageUpdate),
 ) -> Result<PathBuf, String> {
     let app_root =
         resolve_app_root().ok_or_else(|| "找不到应用目录（需含 bin/ffmpeg.exe）".to_string())?;
@@ -724,8 +816,6 @@ impl Render for OneAsrApp {
                             .bg(PANEL)
                             .border_2()
                             .border_color(LINE)
-                            .m_3()
-                            .rounded_xl()
                             .overflow_hidden()
                             .can_drop(|drag, _, _| drag.is::<ExternalPaths>())
                             .drag_over::<ExternalPaths>(|style, _, _, _| {
@@ -794,8 +884,8 @@ impl OneAsrApp {
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let settings_open = self.settings_open;
         let picking = self.picking;
-        // Soften primary while model files aren't ready (still clickable → hint).
-        let start_emphasized = self.model_status == ModelStatus::Ready;
+        let can_start = self.model_status == ModelStatus::Ready;
+        let has_tasks = !self.tasks.is_empty();
 
         div()
             .h(px(52.))
@@ -833,13 +923,14 @@ impl OneAsrApp {
                     ))
                     .child(btn_cta(
                         "全部开始",
-                        start_emphasized,
+                        can_start,
+                        "模型未就绪，请先在设置中选择完整模型目录",
                         cx.listener(|this, _, _, cx| this.start_all(cx)),
                     ))
                     .child(btn(
                         "清空",
-                        BtnKind::Secondary,
-                        true,
+                        BtnKind::Quiet,
+                        has_tasks,
                         cx.listener(|this, _, _, cx| this.clear_all(cx)),
                     ))
                     .child(settings_gear_btn(
@@ -852,10 +943,9 @@ impl OneAsrApp {
     fn render_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.tasks.len();
         if count == 0 {
-            // Model loading stays in the status bar only — center is empty list + icon.
-            let title = empty_state_title(false);
-            let failed = self.model_status == ModelStatus::NotReady;
-            let subtitle = empty_state_subtitle(false, failed);
+            let title = empty_state_title();
+            let not_ready = self.model_status == ModelStatus::NotReady;
+            let subtitle = empty_state_subtitle(not_ready);
             return div()
                 .flex_1()
                 .flex()
@@ -880,7 +970,34 @@ impl OneAsrApp {
                             div()
                                 .text_sm()
                                 .text_color(MUTED_SOFT)
+                                .text_center()
+                                .max_w(px(320.))
                                 .child(subtitle),
+                        )
+                        .child(
+                            div()
+                                .mt_2()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(btn(
+                                    "添加文件",
+                                    BtnKind::Primary,
+                                    true,
+                                    cx.listener(|this, _, _, cx| this.add_files_dialog(cx)),
+                                ))
+                                .when(not_ready, |el| {
+                                    el.child(btn(
+                                        "打开设置",
+                                        BtnKind::Secondary,
+                                        true,
+                                        cx.listener(|this, _, _, cx| {
+                                            if !this.settings_open {
+                                                this.toggle_settings(cx);
+                                            }
+                                        }),
+                                    ))
+                                }),
                         ),
                 )
                 .into_any_element();
@@ -959,28 +1076,21 @@ impl OneAsrApp {
                     .as_ref()
                     .filter(|(sid, _)| sid == &task.id)
                     .map(|(_, s)| s.as_ref());
-                let (status_label, status_color) =
-                    status_line(status, phase, qn, stage_for_row);
+                let (status_label, status_color, status_bg) =
+                    status_pill_style(status, phase, qn, stage_for_row);
                 let meta_left = format!("{size_l}  ·  {dur}");
+                let accent = row_accent(status);
 
                 let row_bg = if is_hovered {
                     ROW_HOVER
                 } else if ix % 2 == 1 {
-                    // Ultra-light zebra for scanability.
-                    gpui::Rgba {
-                        r: 0xfa as f32 / 255.0,
-                        g: 0xfb as f32 / 255.0,
-                        b: 0xfc as f32 / 255.0,
-                        a: 1.0,
-                    }
+                    ZEBRA
                 } else {
                     PANEL
                 };
 
                 div()
                     .id(SharedString::from(format!("task-{row_id}")))
-                    .px_4()
-                    .py_3()
                     .flex()
                     .flex_col()
                     .w_full()
@@ -992,7 +1102,6 @@ impl OneAsrApp {
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered {
                             this.hover_row = Some(row_id_hover.clone());
-                            this.hover_t0 = Instant::now();
                         } else if this.hover_row.as_ref() == Some(&row_id_hover) {
                             this.hover_row = None;
                         }
@@ -1001,59 +1110,69 @@ impl OneAsrApp {
                     .child(
                         div()
                             .flex()
-                            .items_center()
                             .w_full()
                             .min_w_0()
-                            .gap_3()
-                            // Media plate + status accent border (status lives here + meta line).
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .child(media_type_icon(is_video, status)),
-                            )
+                            // Left status accent as border (full row height, no stretch API needed).
+                            .border_l_4()
+                            .border_color(accent)
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
+                                    .px_3()
+                                    .py_3()
                                     .flex()
-                                    .flex_col()
-                                    .gap_0p5()
+                                    .items_center()
+                                    .gap_3()
                                     .child(
                                         div()
-                                            .id(SharedString::from(format!("name-{row_id}")))
-                                            .w_full()
-                                            .overflow_hidden()
-                                            .text_sm()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(name)
-                                            .tooltip(move |_, cx| {
-                                                cx.new(|_| NameTooltip {
-                                                    text: name_tip.clone().into(),
-                                                })
-                                                .into()
-                                            }),
+                                            .flex_shrink_0()
+                                            .child(media_type_icon(is_video, status)),
                                     )
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
+                                            .flex_1()
                                             .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_0p5()
+                                            .overflow_hidden()
+                                            .pr_2()
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "name-{row_id}"
+                                                    )))
+                                                    .w_full()
+                                                    .min_w_0()
+                                                    .overflow_hidden()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .whitespace_nowrap()
+                                                    .child(name)
+                                                    .tooltip(move |_, cx| {
+                                                        cx.new(|_| NameTooltip {
+                                                            text: name_tip.clone().into(),
+                                                        })
+                                                        .into()
+                                                    }),
+                                            )
                                             .child(
                                                 div()
                                                     .text_xs()
                                                     .text_color(MUTED_SOFT)
                                                     .whitespace_nowrap()
                                                     .child(meta_left),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(MUTED_SOFT)
-                                                    .child("·"),
-                                            )
+                                            ),
+                                    )
+                                    // Status as its own pill (not mixed into file meta).
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(status_bg)
                                             .child(
                                                 div()
                                                     .text_xs()
@@ -1062,62 +1181,66 @@ impl OneAsrApp {
                                                     .whitespace_nowrap()
                                                     .child(status_label),
                                             ),
+                                    )
+                                    // Two fixed slots: primary (开始 | 打开字幕) + 删除.
+                                    .child(
+                                        div()
+                                            .w(px(ACTIONS_COL_PX))
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .gap_2()
+                                            .justify_end()
+                                            .items_center()
+                                            .child(icon_btn(
+                                                primary_kind,
+                                                primary_tip,
+                                                primary_enabled,
+                                                is_hovered,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    if this
+                                                        .tasks
+                                                        .iter()
+                                                        .find(|t| t.id == id_start)
+                                                        .map(|t| {
+                                                            t.status == TaskStatus::Done
+                                                                && t.output_srt.is_some()
+                                                        })
+                                                        .unwrap_or(false)
+                                                    {
+                                                        this.open_task_output(&id_open, cx);
+                                                    } else {
+                                                        this.start_one(&id_start, cx);
+                                                    }
+                                                }),
+                                            ))
+                                            .child(icon_btn(
+                                                IconKind::Trash,
+                                                "删除",
+                                                can_delete,
+                                                is_hovered,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.delete_task(&id_del, cx);
+                                                }),
+                                            )),
                                     ),
-                            )
-                            // Two fixed slots: primary (开始 | 打开字幕) + 删除 — gray when disabled.
-                            .child(
-                                div()
-                                    .w(px(ACTIONS_COL_PX))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .gap_2()
-                                    .justify_end()
-                                    .items_center()
-                                    .child(icon_btn(
-                                        primary_kind,
-                                        primary_tip,
-                                        primary_enabled,
-                                        is_hovered,
-                                        cx.listener(move |this, _, _, cx| {
-                                            if this
-                                                .tasks
-                                                .iter()
-                                                .find(|t| t.id == id_start)
-                                                .map(|t| {
-                                                    t.status == TaskStatus::Done
-                                                        && t.output_srt.is_some()
-                                                })
-                                                .unwrap_or(false)
-                                            {
-                                                this.open_task_output(&id_open, cx);
-                                            } else {
-                                                this.start_one(&id_start, cx);
-                                            }
-                                        }),
-                                    ))
-                                    .child(icon_btn(
-                                        IconKind::Trash,
-                                        "删除",
-                                        can_delete,
-                                        is_hovered,
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.delete_task(&id_del, cx);
-                                        }),
-                                    )),
                             ),
                     )
                     .when(err.is_some(), |el| {
                         el.child(
                             div()
-                                .mt_1()
-                                .ml(px(48.))
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .bg(DANGER_SOFT)
-                                .text_xs()
-                                .text_color(DANGER)
-                                .child(err.unwrap_or_default()),
+                                .px_3()
+                                .pb_2()
+                                .pl(px(48.))
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(DANGER_SOFT)
+                                        .text_xs()
+                                        .text_color(DANGER)
+                                        .child(err.unwrap_or_default()),
+                                ),
                         )
                     })
             }))
@@ -1132,6 +1255,8 @@ impl OneAsrApp {
         let model = self.settings.model_dir.display().to_string();
         let model_tip = model.clone();
         let hotword_field = self.hotword_input.clone();
+        let dirty = self.is_settings_dirty(cx);
+        let model_ready = self.model_status == ModelStatus::Ready;
 
         let section = |body: gpui::AnyElement| {
             div()
@@ -1160,10 +1285,24 @@ impl OneAsrApp {
                     .px_4()
                     .pt_4()
                     .pb_2()
-                    .text_base()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(TEXT)
-                    .child("设置"),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(TEXT)
+                            .child("设置"),
+                    )
+                    .when(dirty, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(WARN)
+                                .child("未保存"),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1183,10 +1322,51 @@ impl OneAsrApp {
                             .gap_1p5()
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(TEXT)
-                                    .child("模型目录"),
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("模型目录"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(if model_ready {
+                                                ACCENT_MIST
+                                            } else {
+                                                DANGER_SOFT
+                                            })
+                                            .child(
+                                                div()
+                                                    .size(px(6.))
+                                                    .rounded_full()
+                                                    .bg(if model_ready { ACCENT } else { DANGER }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .text_color(if model_ready {
+                                                        ACCENT
+                                                    } else {
+                                                        DANGER
+                                                    })
+                                                    .child(if model_ready {
+                                                        "就绪"
+                                                    } else {
+                                                        "未就绪"
+                                                    }),
+                                            ),
+                                    ),
                             )
                             .child(
                                 div()
@@ -1263,17 +1443,21 @@ impl OneAsrApp {
                                         cx.listener(|this, _, _, cx| {
                                             this.settings.use_hotwords =
                                                 !this.settings.use_hotwords;
-                                            cx.notify();
+                                            this.mark_settings_dirty(cx);
                                         }),
                                     )),
                             )
-                            .child(hotword_field)
-                            .when(use_hot && hotwords_now.trim().is_empty(), |el| {
-                                el.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(DANGER)
-                                        .child("请至少填写一个热词"),
+                            .when(use_hot, |el| {
+                                el.child(hotword_field).when(
+                                    hotwords_now.trim().is_empty(),
+                                    |el| {
+                                        el.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(DANGER)
+                                                .child("请至少填写一个热词"),
+                                        )
+                                    },
                                 )
                             })
                             .into_any_element(),
@@ -1295,7 +1479,7 @@ impl OneAsrApp {
                                 cx.listener(|this, _, _, cx| {
                                     this.settings.export_show_speaker =
                                         !this.settings.export_show_speaker;
-                                    cx.notify();
+                                    this.mark_settings_dirty(cx);
                                 }),
                             ))
                             .into_any_element(),
@@ -1313,10 +1497,16 @@ impl OneAsrApp {
                             )
                             .child(
                                 div().flex().gap_1p5().children(
-                                    ["auto", "cuda", "cpu"].into_iter().map(|b| {
-                                        let active = backend == b;
+                                    [
+                                        ("auto", "自动"),
+                                        ("cuda", "GPU"),
+                                        ("cpu", "CPU"),
+                                    ]
+                                    .into_iter()
+                                    .map(|(id, label)| {
+                                        let active = backend == id;
                                         btn(
-                                            b,
+                                            label,
                                             if active {
                                                 BtnKind::Primary
                                             } else {
@@ -1324,11 +1514,11 @@ impl OneAsrApp {
                                             },
                                             true,
                                             cx.listener(move |this, _, _, cx| {
-                                                if this.settings.backend != b {
-                                                    this.settings.backend = b.into();
+                                                if this.settings.backend != id {
+                                                    this.settings.backend = id.into();
                                                     unload_session();
                                                     this.refresh_model_probe();
-                                                    cx.notify();
+                                                    this.mark_settings_dirty(cx);
                                                 }
                                             }),
                                         )
@@ -1346,12 +1536,27 @@ impl OneAsrApp {
                     .border_t_1()
                     .border_color(LINE_SOFT)
                     .flex()
-                    .justify_end()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(MUTED_SOFT)
+                            .child(if dirty {
+                                "关闭面板时将自动保存"
+                            } else {
+                                "所有更改已保存"
+                            }),
+                    )
                     .child(
                         div().flex_shrink_0().child(btn(
-                            "保存设置",
-                            BtnKind::Primary,
-                            true,
+                            if dirty { "保存设置" } else { "已保存" },
+                            if dirty {
+                                BtnKind::Primary
+                            } else {
+                                BtnKind::Secondary
+                            },
+                            dirty,
                             cx.listener(|this, _, _, cx| this.save_settings(cx)),
                         )),
                     ),
@@ -1387,6 +1592,7 @@ impl OneAsrApp {
             .count();
         let queue = format_queue_status(total, pending, queued, proc, done, err);
         let batch = self.batch_mode;
+        let batch_prog = self.batch_goal.map(|g| format_batch_progress(self.batch_done, g));
         let model = self.model_status;
         let model_color = match model {
             ModelStatus::Ready => ACCENT,
@@ -1405,7 +1611,7 @@ impl OneAsrApp {
             .border_color(LINE)
             .text_xs()
             .text_color(MUTED)
-            // Left: queue only (never interaction errors).
+            // Left: queue + batch progress.
             .child(
                 div()
                     .flex()
@@ -1415,9 +1621,15 @@ impl OneAsrApp {
                     .child(queue)
                     .when(batch, |el| {
                         el.child(div().text_color(ACCENT).child("顺序处理中"))
-                    }),
+                    })
+                    .children(batch_prog.map(|p| {
+                        div()
+                            .text_color(ACCENT)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(p)
+                    })),
             )
-            // Right: model probe (常驻) OR transient interaction hint (几秒后恢复).
+            // Right: model probe (常驻) OR transient interaction hint.
             .child(
                 div()
                     .flex()
@@ -1425,21 +1637,13 @@ impl OneAsrApp {
                     .gap_2()
                     .min_w_0()
                     .max_w(px(360.))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_full()
                     .child(match hint {
                         Some(h) => div()
                             .flex()
                             .items_center()
                             .gap_2()
                             .min_w_0()
-                            .bg(gpui::Rgba {
-                                r: 0xff as f32 / 255.0,
-                                g: 0xf7 as f32 / 255.0,
-                                b: 0xed as f32 / 255.0,
-                                a: 1.0,
-                            })
+                            .bg(WARN_SOFT)
                             .px_2()
                             .py_0p5()
                             .rounded_full()
@@ -1506,10 +1710,12 @@ fn logo_bar(h: f32) -> impl IntoElement {
 
 #[derive(Clone, Copy)]
 enum BtnKind {
-    /// Sole solid CTA (全部开始).
+    /// Sole solid CTA (全部开始 / 空状态添加).
     Primary,
-    /// Outlined secondary (添加 / 清空 / 后端选项).
+    /// Outlined secondary (添加 / 后端选项).
     Secondary,
+    /// Low-emphasis destructive/utility (清空) — text only.
+    Quiet,
 }
 
 /// Fixed-size settings gear. Spins slowly while the drawer is open; stops when closed.
@@ -1559,35 +1765,39 @@ fn settings_gear_btn(
         .child(gear_el)
 }
 
-/// Primary CTA: full brand when model files are ready; softer when not.
+/// Primary CTA. When disabled: not clickable + tooltip explains why.
 fn btn_cta(
     label: &str,
-    emphasized: bool,
+    enabled: bool,
+    disabled_tip: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let id = SharedString::from(format!("cta-{label}-{emphasized}"));
-    let (bg, fg, border, opacity) = if emphasized {
-        (ACCENT, PANEL, ACCENT, 1.0)
-    } else {
-        // Still branded, not “dead gray” — but clearly not the moment to start.
-        (ACCENT, PANEL, ACCENT, 0.48)
-    };
-    div()
+    let id = SharedString::from(format!("cta-{label}-{enabled}"));
+    let tip: SharedString = disabled_tip.into();
+    let mut el = div()
         .id(id)
         .px_3()
         .py_1()
         .rounded_lg()
         .text_sm()
-        .bg(bg)
-        .text_color(fg)
+        .bg(ACCENT)
+        .text_color(PANEL)
         .border_1()
-        .border_color(border)
+        .border_color(ACCENT)
         .font_weight(gpui::FontWeight::SEMIBOLD)
-        .opacity(opacity)
-        .cursor_pointer()
-        .hover(|s| s.opacity(if emphasized { 0.92 } else { 0.62 }))
-        .on_click(on_click)
-        .child(label.to_string())
+        .opacity(if enabled { 1.0 } else { 0.42 })
+        .child(label.to_string());
+    if enabled {
+        el = el
+            .cursor_pointer()
+            .hover(|s| s.opacity(0.92))
+            .on_click(on_click);
+    } else {
+        el = el.tooltip(move |_, cx| {
+            cx.new(|_| NameTooltip { text: tip.clone() }).into()
+        });
+    }
+    el
 }
 
 fn btn(
@@ -1597,12 +1807,13 @@ fn btn(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let id = SharedString::from(format!("btn-{label}-{}-{enabled}", kind as u8));
-    // Primary disabled keeps brand teal (softer).
     let (bg, fg, border, opacity) = match (kind, enabled) {
         (BtnKind::Primary, true) => (ACCENT, PANEL, ACCENT, 1.0),
         (BtnKind::Primary, false) => (ACCENT, PANEL, ACCENT, 0.42),
         (BtnKind::Secondary, true) => (PANEL, TEXT, LINE, 1.0),
         (BtnKind::Secondary, false) => (PANEL, MUTED_SOFT, LINE, 1.0),
+        (BtnKind::Quiet, true) => (PANEL, MUTED, PANEL, 1.0),
+        (BtnKind::Quiet, false) => (PANEL, MUTED_SOFT, PANEL, 1.0),
     };
     let mut el = div()
         .id(id)
@@ -1616,7 +1827,7 @@ fn btn(
         .border_color(border)
         .font_weight(match kind {
             BtnKind::Primary => gpui::FontWeight::SEMIBOLD,
-            BtnKind::Secondary => gpui::FontWeight::NORMAL,
+            BtnKind::Secondary | BtnKind::Quiet => gpui::FontWeight::NORMAL,
         })
         .opacity(opacity)
         .child(label.to_string());
@@ -1626,6 +1837,7 @@ fn btn(
             .hover(|s| match kind {
                 BtnKind::Primary => s.opacity(0.92),
                 BtnKind::Secondary => s.border_color(ACCENT),
+                BtnKind::Quiet => s.text_color(DANGER).bg(DANGER_SOFT),
             })
             .on_click(on_click);
     }
@@ -1651,30 +1863,35 @@ fn status_border_color(status: TaskStatus) -> gpui::Rgba {
     }
 }
 
-/// Meta-line status fragment (text + color). Processing animates trailing dots.
-fn status_line(
+/// Status pill: (label, foreground, soft background).
+fn status_pill_style(
     status: TaskStatus,
-    phase: u8,
+    _phase: u8,
     queue_n: Option<usize>,
     stage: Option<&str>,
-) -> (String, gpui::Rgba) {
+) -> (String, gpui::Rgba, gpui::Rgba) {
     match status {
-        TaskStatus::Pending => ("待处理".into(), MUTED),
+        TaskStatus::Pending => ("待处理".into(), MUTED, MEDIA_PLATE),
         TaskStatus::Queued => {
             let n = queue_n.unwrap_or(0);
-            (format!("排队中#{n}"), MUTED)
+            (format!("排队#{n}"), MUTED, MEDIA_PLATE)
         }
         TaskStatus::Processing => {
             let base = stage.unwrap_or("处理中");
-            let dots = match (phase / 4) % 3 {
-                0 => ".",
-                1 => "..",
-                _ => "...",
-            };
-            (format!("{base}{dots}"), WARN)
+            (base.to_string(), WARN, WARN_SOFT)
         }
-        TaskStatus::Done => ("完成".into(), ACCENT),
-        TaskStatus::Error => ("错误".into(), DANGER),
+        TaskStatus::Done => ("完成".into(), ACCENT, ACCENT_SOFT),
+        TaskStatus::Error => ("错误".into(), DANGER, DANGER_SOFT),
+    }
+}
+
+/// Left edge accent for scannable error / active rows.
+fn row_accent(status: TaskStatus) -> gpui::Rgba {
+    match status {
+        TaskStatus::Processing => WARN,
+        TaskStatus::Error => DANGER,
+        TaskStatus::Done => ACCENT,
+        TaskStatus::Pending | TaskStatus::Queued => LINE_SOFT,
     }
 }
 
@@ -1820,7 +2037,9 @@ fn icon_btn(
             .hover(|s| match kind {
                 IconKind::Play => s.bg(ACCENT_SOFT).border_color(ACCENT),
                 IconKind::Trash => s.bg(DANGER_SOFT).border_color(DANGER),
-                IconKind::Folder => s.bg(ACCENT).border_color(ACCENT),
+                // Keep the bg light so the ACCENT icon stays readable (unlike a
+                // solid-ACCENT fill, which would eat the icon of the same color).
+                IconKind::Folder => s.bg(ACCENT_SOFT).border_color(ACCENT),
             })
             .on_click(on_click);
     }

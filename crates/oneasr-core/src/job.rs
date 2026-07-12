@@ -1,11 +1,9 @@
-//! Batch task model for the list UI (not a subtitle editor).
+//! Batch task model for the list UI.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     /// 待处理（未加入运行队列）
     Pending,
@@ -20,16 +18,6 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "待处理",
-            Self::Queued => "排队中",
-            Self::Processing => "处理中",
-            Self::Done => "完成",
-            Self::Error => "错误",
-        }
-    }
-
     /// Only the active ASR job locks start/delete.
     pub fn locks_row_actions(self) -> bool {
         matches!(self, Self::Processing)
@@ -37,7 +25,7 @@ impl TaskStatus {
 }
 
 /// Duration probe lifecycle for list display.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DurationState {
     /// Background probe in flight.
     Probing,
@@ -57,13 +45,12 @@ impl DurationState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Task {
     pub id: String,
     pub path: PathBuf,
     pub name: String,
     pub size_bytes: u64,
-    /// Duration probe state (… → value / —).
     pub duration: DurationState,
     /// Extension / container, e.g. `wav`, `mp4`.
     pub format: String,
@@ -87,9 +74,8 @@ impl Task {
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_else(|| "—".into());
-        let id = new_id();
         Self {
-            id,
+            id: new_id(),
             path,
             name,
             size_bytes,
@@ -102,22 +88,8 @@ impl Task {
         }
     }
 
-    /// 1-based rank among currently queued tasks (`排队中#n`).
-    pub fn queue_rank(tasks: &[Task], id: &str) -> Option<usize> {
-        let mut queued: Vec<&Task> = tasks
-            .iter()
-            .filter(|t| t.status == TaskStatus::Queued)
-            .collect();
-        queued.sort_by_key(|t| t.queue_seq.unwrap_or(u64::MAX));
-        queued.iter().position(|t| t.id == id).map(|i| i + 1)
-    }
-
     pub fn size_label(&self) -> String {
         format_bytes(self.size_bytes)
-    }
-
-    pub fn duration_label(&self) -> String {
-        self.duration.label()
     }
 
     pub fn set_duration(&mut self, sec: Option<f64>) {
@@ -128,7 +100,6 @@ impl Task {
     }
 }
 
-/// Unique task id (atomic counter — batch add must not collide).
 fn new_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -141,7 +112,7 @@ pub fn next_queue_seq() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-pub fn format_bytes(n: u64) -> String {
+fn format_bytes(n: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
@@ -157,7 +128,7 @@ pub fn format_bytes(n: u64) -> String {
     }
 }
 
-pub fn format_duration(sec: f64) -> String {
+fn format_duration(sec: f64) -> String {
     let s = sec.max(0.0).round() as u64;
     let h = s / 3600;
     let m = (s % 3600) / 60;
@@ -169,7 +140,7 @@ pub fn format_duration(sec: f64) -> String {
     }
 }
 
-pub fn is_media_path(path: &Path) -> bool {
+fn is_media_path(path: &Path) -> bool {
     const EXT: &[&str] = &[
         "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mkv", "mov", "webm",
         "avi", "flv", "ts", "m4v", "mpeg", "mpg", "wmv", "3gp",
@@ -188,7 +159,6 @@ pub fn accept_input_path(path: &Path) -> bool {
     if path.is_file() {
         return true;
     }
-    // Some Windows dialogs return paths that are files but is_file is flaky.
     std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
 }
 

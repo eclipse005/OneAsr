@@ -63,13 +63,11 @@ pub fn resolve_app_root() -> Option<PathBuf> {
     None
 }
 
-/// `{app_root}/bin`
-pub fn resolve_bin_dir() -> Option<PathBuf> {
+fn resolve_bin_dir() -> Option<PathBuf> {
     resolve_app_root().map(|root| root.join("bin"))
 }
 
-/// `{app_root}/bin/ffmpeg(.exe)`
-pub fn resolve_ffmpeg() -> Result<PathBuf, MediaError> {
+fn resolve_ffmpeg() -> Result<PathBuf, MediaError> {
     let path = resolve_bin_dir()
         .map(|d| d.join(FFMPEG_NAME))
         .ok_or_else(|| {
@@ -154,6 +152,44 @@ pub fn convert_to_16k_mono_wav(input: &Path, out_wav: &Path) -> Result<PathBuf, 
         .arg(input)
         .args(["-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"])
         .arg(out_wav);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(MediaError::FfmpegFailed(stderr.chars().take(500).collect()));
+    }
+    Ok(out_wav.to_path_buf())
+}
+
+/// Slice a time range `[start, end)` (seconds) from a WAV using bundled ffmpeg.
+///
+/// Output is always 16 kHz mono PCM s16le, matching what ASR expects.
+/// Uses `-ss` before `-i` for fast seek + `-to` for the absolute end time.
+pub fn slice_wav(input: &Path, start: f32, end: f32, out_wav: &Path) -> Result<PathBuf, MediaError> {
+    let ffmpeg = resolve_ffmpeg()?;
+    if let Some(parent) = out_wav.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut cmd = Command::new(&ffmpeg);
+    cmd.args([
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-ss",
+    ])
+    .arg(format!("{start:.3}"))
+    .args(["-to"])
+    .arg(format!("{end:.3}"))
+    .args(["-i"])
+    .arg(input)
+    .args(["-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"])
+    .arg(out_wav);
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
