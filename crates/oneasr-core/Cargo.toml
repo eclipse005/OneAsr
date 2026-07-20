@@ -6,6 +6,8 @@ license.workspace = true
 description = "Qwen ASR + align pipeline, subtitle segmentation, and job helpers for OneAsr"
 
 [features]
+# Default includes CUDA engines so one installer covers GPU + CPU backends.
+# Without CUDA DLLs next to the exe, runtime Auto/CPU still works.
 default = ["cuda"]
 cuda = ["qwen3-asr/cuda", "qwen-forced-aligner-rs/cuda"]
 

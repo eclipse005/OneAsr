@@ -11,12 +11,14 @@
 
 默认模型路径（安装/开发布局）：
 
-- ASR: `{app}/models/Qwen3-ASR-0.6B`
+- ASR: `{app}/models/Qwen3-ASR-0.6B`（可切换 **1.7B**）
 - Aligner: `{app}/models/Qwen3-ForcedAligner-0.6B`
 
-设置面板可一键从 ModelScope 下载到 `{app}/models/`（逻辑同 VoxTrans），也可手动选已有目录。
+**识别语言**需在设置中指定（与 VoxTrans 一致，对齐模型支持 11 种）：  
+中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский。  
+**无自动识别**——对齐阶段需要固定语种。
 
-> 当前为开发/便携布局（exe + `bin/` + `assets/` + `models/`）。Windows 安装包（Inno/NSIS）待后续补充。
+设置面板可一键从 ModelScope 下载到 `{app}/models/`（逻辑同 VoxTrans），也可手动选已有目录。
 
 ## 运行
 
@@ -28,6 +30,26 @@ cargo run -p oneasr
 ```
 
 `oneasr-core` 默认启用 `cuda` feature。
+
+## 打包（单一安装包）
+
+**一个 setup**，二进制含 CUDA 引擎；无卡/无 DLL 时仍可用 CPU。  
+GPU 用户在 **设置 → 下载 CUDA 运行库**（与 VoxTrans 相同的 ModelScope DLL：cudart/cublas/cublasLt/curand）。
+
+需要：Rust、`bin/ffmpeg.exe`、[Inno Setup 6](https://jrsoftware.org/isinfo.php)。
+
+```powershell
+.\scripts\pack-release.ps1
+# 产物：release\OneAsr_<ver>_setup.exe
+```
+
+| 路径 | 说明 |
+|------|------|
+| `dist\OneAsr\` | 暂存安装内容 |
+| `release\OneAsr_<ver>_setup.exe` | 安装包 |
+
+安装后：`models\` 下 ASR/Aligner，`output\` 出 SRT，`runs\` 中间产物；CUDA 运行库下载到 `{app}\dll\`（与 exe 同级的 dll 目录）。  
+UI 图标/音效在编译期嵌入 exe，安装目录**无** `assets\`。
 
 ## 输出
 

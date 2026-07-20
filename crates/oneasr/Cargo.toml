@@ -9,9 +9,18 @@ description = "OneAsr desktop app — pure GPUI shell"
 name = "oneasr"
 path = "src/main.rs"
 
+[features]
+# Single shippable build includes CUDA engines; CPU still works without CUDA DLLs.
+# GPU needs user-mode DLLs (download in Settings → CUDA 运行库).
+default = ["cuda"]
+cuda = ["oneasr-core/cuda"]
+
 [dependencies]
-oneasr-core = { workspace = true }
+oneasr-core = { workspace = true, default-features = false }
 gpui = "0.2.2"
 anyhow = { workspace = true }
 rfd = "0.15"
 unicode-segmentation = "1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

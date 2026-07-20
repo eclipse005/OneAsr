@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::lang::normalize_source_language;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     /// 待处理（未加入运行队列）
@@ -54,6 +56,8 @@ pub struct Task {
     pub duration: DurationState,
     /// Extension / container, e.g. `wav`, `mp4`.
     pub format: String,
+    /// Source language short id (`zh`, `en`, …). Per-task; defaults from settings.
+    pub language: String,
     pub status: TaskStatus,
     pub error: Option<String>,
     /// FIFO order when [`TaskStatus::Queued`] (lower runs first).
@@ -63,7 +67,8 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn from_path(path: impl Into<PathBuf>) -> Self {
+    /// Build a task; `language` is normalized to a catalog short id (e.g. `zh`).
+    pub fn from_path(path: impl Into<PathBuf>, language: impl Into<String>) -> Self {
         let path = path.into();
         let name = path
             .file_name()
@@ -81,11 +86,17 @@ impl Task {
             size_bytes,
             duration: DurationState::Probing,
             format,
+            language: normalize_source_language(&language.into()),
             status: TaskStatus::Pending,
             error: None,
             queue_seq: None,
             output_srt: None,
         }
+    }
+
+    /// Set source language (normalized to a known catalog id).
+    pub fn set_language(&mut self, language: impl AsRef<str>) {
+        self.language = normalize_source_language(language.as_ref());
     }
 
     pub fn size_label(&self) -> String {
@@ -185,11 +196,13 @@ mod tests {
 
     #[test]
     fn task_ids_are_unique() {
-        let a = Task::from_path("a.wav");
-        let b = Task::from_path("b.wav");
-        let c = Task::from_path("c.wav");
+        let a = Task::from_path("a.wav", "zh");
+        let b = Task::from_path("b.wav", "en");
+        let c = Task::from_path("c.wav", "ja");
         assert_ne!(a.id, b.id);
         assert_ne!(b.id, c.id);
         assert_ne!(a.id, c.id);
+        assert_eq!(a.language, "zh");
+        assert_eq!(b.language, "en");
     }
 }

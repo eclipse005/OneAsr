@@ -1,69 +1,108 @@
-//! Load `assets/` next to the repo / install root for SVG icons and sfx paths.
+//! Compile-time embedded UI assets (SVG icons + short WAV sfx).
+//!
+//! No runtime `assets/` folder is required next to the executable. Source files
+//! still live in the repo at `assets/` for editing; `include_bytes!` pulls them
+//! into the binary at build time.
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use gpui::{AssetSource, SharedString};
 
-pub struct AppAssets {
-    base: PathBuf,
-}
+/// Paths used by `svg().path(...)` — must match keys in the embed table.
+pub struct AppAssets;
 
 impl AppAssets {
     pub fn new() -> Self {
-        Self {
-            base: resolve_assets_dir().unwrap_or_else(|| PathBuf::from("assets")),
-        }
+        Self
     }
 }
 
-/// Prefer `{repo|install}/assets`.
-pub fn resolve_assets_dir() -> Option<PathBuf> {
-    let mut starts = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            starts.push(dir.to_path_buf());
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        starts.push(cwd);
-    }
-    for start in starts {
-        let mut dir = start;
-        for _ in 0..8 {
-            let assets = dir.join("assets");
-            if assets.is_dir() {
-                return Some(assets);
-            }
-            if !dir.pop() {
-                break;
-            }
-        }
-    }
-    None
+fn table() -> &'static HashMap<&'static str, &'static [u8]> {
+    static T: OnceLock<HashMap<&'static str, &'static [u8]>> = OnceLock::new();
+    T.get_or_init(|| {
+        // Paths relative to this crate → repo `assets/` (../../assets from crates/oneasr).
+        HashMap::from([
+            (
+                "icons/logo.svg",
+                include_bytes!("../../../assets/icons/logo.svg").as_slice(),
+            ),
+            (
+                "icons/gear.svg",
+                include_bytes!("../../../assets/icons/gear.svg").as_slice(),
+            ),
+            (
+                "icons/folder.svg",
+                include_bytes!("../../../assets/icons/folder.svg").as_slice(),
+            ),
+            (
+                "icons/play.svg",
+                include_bytes!("../../../assets/icons/play.svg").as_slice(),
+            ),
+            (
+                "icons/trash.svg",
+                include_bytes!("../../../assets/icons/trash.svg").as_slice(),
+            ),
+            (
+                "icons/audio.svg",
+                include_bytes!("../../../assets/icons/audio.svg").as_slice(),
+            ),
+            (
+                "icons/video.svg",
+                include_bytes!("../../../assets/icons/video.svg").as_slice(),
+            ),
+            (
+                "sounds/click.wav",
+                include_bytes!("../../../assets/sounds/click.wav").as_slice(),
+            ),
+            (
+                "sounds/drawer.wav",
+                include_bytes!("../../../assets/sounds/drawer.wav").as_slice(),
+            ),
+        ])
+    })
+}
+
+/// Raw bytes for an embedded asset path (e.g. `sounds/click.wav`).
+pub fn asset_bytes(path: &str) -> Option<&'static [u8]> {
+    table().get(path).copied()
 }
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        let full = self.base.join(path);
-        match std::fs::read(&full) {
-            Ok(bytes) => Ok(Some(Cow::Owned(bytes))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(asset_bytes(path).map(Cow::Borrowed))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        let full = self.base.join(path);
-        let mut out = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(full) {
-            for entry in rd.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    out.push(SharedString::from(name.to_string()));
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            let mut p = path.to_string();
+            if !p.ends_with('/') && !p.ends_with('\\') {
+                p.push('/');
+            }
+            p.replace('\\', "/")
+        };
+        let mut names = Vec::new();
+        for key in table().keys() {
+            let k = key.replace('\\', "/");
+            if prefix.is_empty() {
+                // top-level segment only
+                if let Some(seg) = k.split('/').next() {
+                    let s = SharedString::from(seg.to_string());
+                    if !names.iter().any(|x: &SharedString| x.as_ref() == s.as_ref()) {
+                        names.push(s);
+                    }
+                }
+            } else if let Some(rest) = k.strip_prefix(&prefix) {
+                if !rest.is_empty() && !rest.contains('/') {
+                    names.push(SharedString::from(rest.to_string()));
                 }
             }
         }
-        Ok(out)
+        names.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
+        Ok(names)
     }
 }

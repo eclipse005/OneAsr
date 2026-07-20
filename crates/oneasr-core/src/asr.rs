@@ -52,7 +52,7 @@ impl AsrStage {
             Self::LoadingModel => "加载模型",
             Self::Converting => "转码音频",
             Self::Transcribing => "转写中",
-            Self::Aligning => "对齐中",
+            Self::Aligning => "打轴中",
             Self::Exporting => "导出字幕",
         }
     }
@@ -150,22 +150,48 @@ pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     Ok(())
 }
 
+/// Resolve inference backend from settings.
+///
+/// Product rule (single installer + optional Settings「安装组件」):
+/// - **cpu** → always CPU
+/// - **cuda** → require app `dll/` CUDA runtime; error if missing
+/// - **auto** → CUDA only when app `dll/` is ready; otherwise CPU  
+///   (do **not** fall through to system CUDA — that bypasses the install gate)
 fn resolve_asr_backend(backend: &str) -> Result<AsrBackend, AsrError> {
     match backend.trim().to_ascii_lowercase().as_str() {
         "cpu" => Ok(AsrBackend::Cpu),
         "cuda" => {
             #[cfg(feature = "cuda")]
             {
+                if !crate::model::is_cuda_runtime_ready() {
+                    return Err(AsrError::Msg(
+                        "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
+                    ));
+                }
                 Ok(AsrBackend::Cuda)
             }
             #[cfg(not(feature = "cuda"))]
             {
                 Err(AsrError::Msg(
-                    "此构建未启用 CUDA，请使用 backend=cpu 或启用 cuda feature".into(),
+                    "此构建未启用 CUDA，请使用 backend=cpu".into(),
                 ))
             }
         }
-        _ => Ok(AsrBackend::Auto),
+        // auto
+        _ => {
+            #[cfg(feature = "cuda")]
+            {
+                if crate::model::is_cuda_runtime_ready() {
+                    Ok(AsrBackend::Cuda)
+                } else {
+                    Ok(AsrBackend::Cpu)
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                Ok(AsrBackend::Cpu)
+            }
+        }
     }
 }
 
@@ -175,16 +201,35 @@ fn resolve_align_device(backend: &str) -> Result<DeviceRequest, AsrError> {
         "cuda" => {
             #[cfg(feature = "cuda")]
             {
+                if !crate::model::is_cuda_runtime_ready() {
+                    return Err(AsrError::Msg(
+                        "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
+                    ));
+                }
                 Ok(DeviceRequest::Cuda(0))
             }
             #[cfg(not(feature = "cuda"))]
             {
                 Err(AsrError::Msg(
-                    "此构建未启用 CUDA，请使用 backend=cpu 或启用 cuda feature".into(),
+                    "此构建未启用 CUDA，请使用 backend=cpu".into(),
                 ))
             }
         }
-        _ => Ok(DeviceRequest::Auto),
+        // auto — same gate as ASR
+        _ => {
+            #[cfg(feature = "cuda")]
+            {
+                if crate::model::is_cuda_runtime_ready() {
+                    Ok(DeviceRequest::Cuda(0))
+                } else {
+                    Ok(DeviceRequest::Cpu)
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                Ok(DeviceRequest::Cpu)
+            }
+        }
     }
 }
 
@@ -286,18 +331,31 @@ pub fn process_media_file_with_progress(
         chunk_paths.push((chunk.clone(), chunk_wav));
     }
 
+    // Explicit source language (settings); no auto-detect — aligner needs a fixed code.
     let force_lang = to_qwen_language_label(&settings.language);
+    let source_lang_key = to_lang_key(&settings.language);
     let total_chunks = chunk_paths.len().max(1);
 
     // 3. Load ASR once → all chunks → drop (unload)
     on_stage(StageUpdate::new(AsrStage::LoadingModel));
     check_asr_model_dir(&settings.asr_model_dir)?;
     let asr_backend = resolve_asr_backend(&settings.backend)?;
+    let asr_backend_label = match &asr_backend {
+        AsrBackend::Cpu => "cpu",
+        AsrBackend::Cuda => "cuda",
+        #[allow(unreachable_patterns)]
+        _ => "other",
+    };
+    eprintln!(
+        "[backend] setting={} resolved_asr={} cuda_dlls={}",
+        settings.backend,
+        asr_backend_label,
+        crate::model::is_cuda_runtime_ready(),
+    );
     let asr = AsrInference::load(&settings.asr_model_dir, asr_backend)
         .map_err(|e| AsrError::Msg(format!("加载 ASR 失败: {e:#}")))?;
 
     let mut transcripts: Vec<ChunkTranscript> = Vec::new();
-    let mut detected_lang: Option<String> = force_lang.clone();
     let mut empty_chunks: Vec<usize> = Vec::new();
 
     for (i, (chunk, chunk_wav)) in chunk_paths.iter().enumerate() {
@@ -306,12 +364,9 @@ pub fn process_media_file_with_progress(
             i + 1,
             total_chunks,
         ));
-        let mut opts = TranscribeOptions::default().with_max_new_tokens(settings.max_new_tokens);
-        if let Some(ref lang) = detected_lang {
-            opts = opts.with_language(lang.clone());
-        } else if let Some(ref lang) = force_lang {
-            opts = opts.with_language(lang.clone());
-        }
+        let opts = TranscribeOptions::default()
+            .with_max_new_tokens(settings.max_new_tokens)
+            .with_language(force_lang.clone());
 
         let path_str = chunk_wav
             .to_str()
@@ -324,35 +379,21 @@ pub fn process_media_file_with_progress(
             empty_chunks.push(i);
             let _ = std::fs::write(
                 work_dir.join(format!("chunk_{i:03}.txt")),
-                "language=\n# empty transcript\n",
+                format!("language={force_lang}\n# empty transcript\n"),
             );
             continue;
         }
-        if detected_lang.is_none() && !report.language.is_empty() {
-            detected_lang = to_qwen_language_label(&report.language)
-                .or_else(|| Some(report.language.clone()));
-        }
-        let lang = detected_lang
-            .clone()
-            .or_else(|| to_qwen_language_label(&report.language))
-            .unwrap_or_else(|| {
-                if report.language.is_empty() {
-                    "English".into()
-                } else {
-                    report.language.clone()
-                }
-            });
 
         let _ = std::fs::write(
             work_dir.join(format!("chunk_{i:03}.txt")),
-            format!("language={lang}\n{text}\n"),
+            format!("language={force_lang}\n{text}\n"),
         );
 
         transcripts.push(ChunkTranscript {
             start_sec: chunk.start as f64,
             chunk_wav: chunk_wav.clone(),
             text,
-            language: lang,
+            language: force_lang.clone(),
         });
     }
     drop(asr); // unload ASR before loading aligner
@@ -440,10 +481,7 @@ pub fn process_media_file_with_progress(
         return Err(AsrError::Msg("对齐后词列表为空".into()));
     }
 
-    let source_lang = transcripts
-        .first()
-        .map(|t| to_lang_key(&t.language))
-        .unwrap_or_else(|| "en".into());
+    let source_lang = source_lang_key;
 
     let word_dtos: Vec<WordTokenDto> = words
         .into_iter()
@@ -490,8 +528,9 @@ pub fn process_media_file_with_progress(
     let _ = std::fs::write(
         work_dir.join("meta.txt"),
         format!(
-            "source={media_name}\nbackend={}\nasr={}\naligner={}\nlang={source_lang}\nchunks_total={total_chunks}\nchunks_ok={}\nchunks_empty={}\nempty_indices={empty_chunks:?}\noutput={}\n",
+            "source={media_name}\nbackend_setting={}\nbackend_resolved={asr_backend_label}\ncuda_dlls={}\nasr={}\naligner={}\nlang={source_lang}\nchunks_total={total_chunks}\nchunks_ok={}\nchunks_empty={}\nempty_indices={empty_chunks:?}\noutput={}\n",
             settings.backend,
+            crate::model::is_cuda_runtime_ready(),
             settings.asr_model_dir.display(),
             settings.aligner_model_dir.display(),
             transcripts.len(),

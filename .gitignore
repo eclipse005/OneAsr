@@ -5,8 +5,17 @@
 /mcps
 # Bundled ffmpeg is large; place bin/ffmpeg.exe locally for dev/run
 /bin/*.exe
+# Downloaded ASR/aligner weights (multi-GB; never commit)
+/models
+# CUDA DLLs installed next to the exe / into dll/
+/dll
 # User preferences (local machine paths)
 /settings.json
+# Release packaging output
+/dist
+/release
+# Icon gen intermediates
+assets/icons/_t*.png
 **/*.rs.bk
 .DS_Store
 *.pdb

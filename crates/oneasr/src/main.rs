@@ -1,5 +1,9 @@
 //! OneAsr — light-themed batch list for local Qwen ASR + align.
 
+// Release / installed builds: no console window (black cmd flash).
+// Debug keeps a console for logs (`cargo run`).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod assets;
 mod sfx;
 mod shell;
@@ -13,18 +17,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, hsla, linear, percentage, point, prelude::*, px, size, svg, Animation,
-    AnimationExt as _, App, Application, Bounds, BoxShadow, ClickEvent, Context,
-    ExternalPaths, MouseMoveEvent, Pixels, SharedString, Timer, Transformation, Window,
-    WindowBounds, WindowOptions,
+    actions, canvas, deferred, div, hsla, linear, percentage, point, prelude::*, px, size, svg,
+    Animation, AnimationExt as _, App, Application, Bounds, BoxShadow, ClickEvent, Context,
+    ExternalPaths, FocusHandle, KeyBinding, MouseButton, MouseMoveEvent, Pixels, SharedString,
+    Timer, Transformation, Window, WindowBounds, WindowOptions,
 };
 use oneasr_core::{
     accept_input_path, check_model_dir, demote_current_thread, download_model, empty_state_subtitle,
-    empty_state_title, format_batch_progress, format_queue_status, init_runtime, next_queue_seq,
-    process_media_file_with_progress, probe_duration_sec, resolve_app_root, unload_session,
-    AsrStage, DownloadHandle, DownloadProgress, DownloadState, DurationState, ModelId, ModelKind,
-    Settings, StageUpdate, Task, TaskStatus,
+    empty_state_title, format_batch_progress, format_queue_status, init_native_library_path,
+    init_runtime, is_cuda_runtime_ready, next_queue_seq, normalize_source_language,
+    process_media_file_with_progress, probe_duration_sec, resolve_app_root, source_language_by_id,
+    unload_session, AsrStage, DownloadHandle, DownloadProgress, DownloadState, DurationState,
+    ModelId, ModelKind, Settings, StageUpdate, Task, TaskStatus, SOURCE_LANGUAGES,
 };
+
+actions!(oneasr, [DismissMenus]);
 
 use theme::{
     ACCENT, ACCENT_MIST, ACCENT_SOFT, BG, DANGER, DANGER_SOFT, LINE, LINE_SOFT, LOGO, MEDIA_PLATE,
@@ -73,20 +80,35 @@ enum AsrJob {
 }
 
 fn main() {
+    // Native DLL dir must be registered before any worker threads exist.
+    // (`SetDllDirectoryW` only — no PATH mutation; see oneasr_core::model::path.)
+    init_native_library_path();
     // Cap rayon before any model load so the UI thread keeps a free core.
     init_runtime();
 
     Application::new()
         .with_assets(assets::AppAssets::new())
         .run(|cx: &mut App| {
+            cx.bind_keys([KeyBinding::new("escape", DismissMenus, None)]);
             // Compact default: list + toolbar, not a full-HD empty canvas.
             let bounds = Bounds::centered(None, size(px(860.), px(560.)), cx);
+            // Title bar promo (same style as VoxTrans).
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("OneAsr - dabao005 - www.52pojie.cn".into()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
-                |_, cx| cx.new(OneAsrApp::new),
+                |window, cx| {
+                    cx.new(|cx| {
+                        let app = OneAsrApp::new(cx);
+                        app.focus_handle.focus(window);
+                        app
+                    })
+                },
             )
             .expect("open window");
             cx.activate(true);
@@ -94,6 +116,8 @@ fn main() {
 }
 
 struct OneAsrApp {
+    /// Root focus so Escape / key bindings reach the app (menus, dismiss).
+    focus_handle: FocusHandle,
     settings: Settings,
     /// Unsaved settings edits (backend / paths).
     settings_dirty: bool,
@@ -105,6 +129,10 @@ struct OneAsrApp {
     settings_anim_t0: Instant,
     /// Row currently under the pointer (action highlight).
     hover_row: Option<String>,
+    /// Task id whose language dropdown is open (`None` = closed).
+    lang_menu: Option<String>,
+    /// Settings panel: default-language dropdown open.
+    settings_lang_open: bool,
     /// Empty-state wave: pointer currently over the strip.
     empty_wave_hover: bool,
     /// Last layout bounds of the wave hit area (window coords).
@@ -138,12 +166,14 @@ struct OneAsrApp {
     ui_phase: u8,
     /// Live stage label for the row currently Processing (from worker Progress).
     active_stage: Option<(String, SharedString)>,
-    /// Latest download progress for ASR / Aligner (settings panel).
+    /// Latest download progress (settings panel).
     asr_download: Option<DownloadProgress>,
     align_download: Option<DownloadProgress>,
-    /// Active download cancel handles (install-layout destination only).
+    cuda_download: Option<DownloadProgress>,
+    /// Active download cancel handles.
     asr_dl_handle: Option<DownloadHandle>,
     align_dl_handle: Option<DownloadHandle>,
+    cuda_dl_handle: Option<DownloadHandle>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
     /// Dedicated ASR worker (never run heavy work on the UI thread).
@@ -190,9 +220,18 @@ impl OneAsrApp {
         })
         .detach();
 
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        // Force-GPU without runtime DLLs is invalid → fall back to auto and persist.
+        let mut cuda_fallback_hint: Option<String> = None;
+        if settings.backend.eq_ignore_ascii_case("cuda") && !is_cuda_runtime_ready() {
+            settings.backend = "auto".into();
+            let _ = settings.save();
+            cuda_fallback_hint =
+                Some("未检测到 CUDA 运行库，已改用自动（可在设置中安装组件后选 GPU）".into());
+        }
 
         let mut app = Self {
+            focus_handle: cx.focus_handle(),
             settings,
             settings_dirty: false,
             settings_open: false,
@@ -200,6 +239,8 @@ impl OneAsrApp {
             settings_to: 0.0,
             settings_anim_t0: Instant::now(),
             hover_row: None,
+            lang_menu: None,
+            settings_lang_open: false,
             empty_wave_hover: false,
             empty_wave_bounds: None,
             empty_wave_cursor_x: 0.5,
@@ -221,8 +262,10 @@ impl OneAsrApp {
             active_stage: None,
             asr_download: None,
             align_download: None,
+            cuda_download: None,
             asr_dl_handle: None,
             align_dl_handle: None,
+            cuda_dl_handle: None,
             tx: tx.clone(),
             rx,
             job_tx,
@@ -230,14 +273,19 @@ impl OneAsrApp {
 
         // Probe files only — never load multi-GB weights on startup.
         app.refresh_model_probe();
+        if let Some(hint) = cuda_fallback_hint {
+            app.status_hint = Some(SharedString::from(hint));
+            app.status_hint_until = Some(Instant::now() + Duration::from_secs(5));
+        }
         app
     }
 
     /// Start ModelScope download into `{app}/models/...` (background).
     /// Does **not** rewrite settings until `DownloadOutcome::Completed`.
     fn start_model_download(&mut self, id: ModelId, cx: &mut Context<Self>) {
-        if self.download_busy(id) {
-            self.flash_hint("该模型已有下载任务进行中", cx);
+        // One job per kind — 0.6B / 1.7B share the ASR slot.
+        if self.download_kind_busy(id.kind()) {
+            self.flash_hint("已有同类下载任务进行中", cx);
             return;
         }
 
@@ -246,6 +294,7 @@ impl OneAsrApp {
         match id.kind() {
             ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
+            ModelKind::CudaRuntime => self.cuda_dl_handle = Some(handle.clone()),
         }
         self.set_download_progress(
             DownloadProgress {
@@ -255,7 +304,7 @@ impl OneAsrApp {
                 downloaded_bytes: 0,
                 total_bytes: 0,
                 speed_bytes_per_sec: 0,
-                message: format!("→ {}", model_dir.display()),
+                message: String::new(),
             },
         );
 
@@ -275,34 +324,90 @@ impl OneAsrApp {
     }
 
     fn cancel_model_download(&mut self, id: ModelId, cx: &mut Context<Self>) {
-        match id.kind() {
-            ModelKind::Asr => {
-                if let Some(h) = &self.asr_dl_handle {
-                    h.cancel();
-                }
-            }
-            ModelKind::Align => {
-                if let Some(h) = &self.align_dl_handle {
-                    h.cancel();
-                }
+        let handle = match id.kind() {
+            ModelKind::Asr => self.asr_dl_handle.as_ref(),
+            ModelKind::Align => self.align_dl_handle.as_ref(),
+            ModelKind::CudaRuntime => self.cuda_dl_handle.as_ref(),
+        };
+        if let Some(h) = handle {
+            if h.model_id == id {
+                h.cancel();
+                self.flash_hint("正在取消下载…", cx);
             }
         }
-        self.flash_hint("正在取消下载…", cx);
         cx.notify();
     }
 
+    /// True while **this** model id is downloading (UI busy / cancel for that row).
     fn download_busy(&self, id: ModelId) -> bool {
+        let handle_match = match id.kind() {
+            ModelKind::Asr => self.asr_dl_handle.as_ref().is_some_and(|h| h.model_id == id),
+            ModelKind::Align => self
+                .align_dl_handle
+                .as_ref()
+                .is_some_and(|h| h.model_id == id),
+            ModelKind::CudaRuntime => self
+                .cuda_dl_handle
+                .as_ref()
+                .is_some_and(|h| h.model_id == id),
+        };
+        handle_match
+            || self.progress_for(id).is_some_and(|p| p.state == DownloadState::Downloading)
+    }
+
+    /// One concurrent download per kind (0.6B and 1.7B share the ASR slot).
+    fn download_kind_busy(&self, kind: ModelKind) -> bool {
+        match kind {
+            ModelKind::Asr => {
+                self.asr_dl_handle.is_some()
+                    || self
+                        .asr_download
+                        .as_ref()
+                        .is_some_and(|p| p.state == DownloadState::Downloading)
+            }
+            ModelKind::Align => {
+                self.align_dl_handle.is_some()
+                    || self
+                        .align_download
+                        .as_ref()
+                        .is_some_and(|p| p.state == DownloadState::Downloading)
+            }
+            ModelKind::CudaRuntime => {
+                self.cuda_dl_handle.is_some()
+                    || self
+                        .cuda_download
+                        .as_ref()
+                        .is_some_and(|p| p.state == DownloadState::Downloading)
+            }
+        }
+    }
+
+    /// Any model / CUDA component download in flight (drives settings gear spin).
+    fn any_download_busy(&self) -> bool {
+        self.download_kind_busy(ModelKind::Asr)
+            || self.download_kind_busy(ModelKind::Align)
+            || self.download_kind_busy(ModelKind::CudaRuntime)
+    }
+
+    /// Progress snapshot for this exact model id (never another ASR size).
+    fn progress_for(&self, id: ModelId) -> Option<&DownloadProgress> {
         let p = match id.kind() {
             ModelKind::Asr => self.asr_download.as_ref(),
             ModelKind::Align => self.align_download.as_ref(),
-        };
-        p.is_some_and(|x| x.state == DownloadState::Downloading)
+            ModelKind::CudaRuntime => self.cuda_download.as_ref(),
+        }?;
+        if p.model_id == id {
+            Some(p)
+        } else {
+            None
+        }
     }
 
     fn set_download_progress(&mut self, progress: DownloadProgress) {
         match progress.model_id.kind() {
             ModelKind::Asr => self.asr_download = Some(progress),
             ModelKind::Align => self.align_download = Some(progress),
+            ModelKind::CudaRuntime => self.cuda_download = Some(progress),
         }
     }
 
@@ -310,10 +415,22 @@ impl OneAsrApp {
         match id.kind() {
             ModelKind::Asr => self.asr_dl_handle = None,
             ModelKind::Align => self.align_dl_handle = None,
+            ModelKind::CudaRuntime => self.cuda_dl_handle = None,
         }
     }
 
-        /// Fast FS check for status bar. Does not touch GPU / weights.
+    /// Drop progress snapshot when it no longer belongs to the visible selection.
+    fn clear_stale_asr_progress(&mut self) {
+        if let Some(p) = &self.asr_download {
+            if p.model_id != self.settings.selected_asr_id()
+                && p.state != DownloadState::Downloading
+            {
+                self.asr_download = None;
+            }
+        }
+    }
+
+    /// Fast FS check for status bar. Does not touch GPU / weights.
     fn refresh_model_probe(&mut self) {
         self.model_status = if check_model_dir(&self.settings.asr_model_dir).is_ok()
             && oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok()
@@ -392,6 +509,7 @@ impl OneAsrApp {
                     cx.notify();
                 }
                 Ok(WorkerMsg::ModelDirPicked(dir)) => {
+                    self.settings.asr_model = ModelId::from_asr_dir(&dir).as_str().into();
                     self.settings.asr_model_dir = dir;
                     self.settings_dirty = false;
                     // Probe + persist path immediately after pick.
@@ -417,8 +535,8 @@ impl OneAsrApp {
                     } else {
                         self.flash_hint(
                             match self.model_status {
-                                ModelStatus::Ready => "Aligner 目录已更新 · 就绪",
-                                ModelStatus::NotReady => "Aligner 目录已更新 · 未就绪",
+                                ModelStatus::Ready => "对齐模型目录已更新 · 就绪",
+                                ModelStatus::NotReady => "对齐模型目录已更新 · 未就绪",
                             },
                             cx,
                         );
@@ -437,20 +555,45 @@ impl OneAsrApp {
                         self.clear_download_handle(id);
                     }
                     if progress.state == DownloadState::Completed {
-                        // Only now bind settings to install-layout path.
-                        self.settings.apply_downloaded_model(id, progress.model_dir.clone());
-                        let _ = self.settings.save();
-                        self.settings_dirty = false;
-                        self.reset_model_config(cx);
-                        self.flash_hint(format!("{} 下载完成", id.label()), cx);
+                        // Install layout already has files. Bind active selection only
+                        // when this download is for the currently selected ASR (or Align).
+                        // CUDA never binds settings paths (`bind_download_if_active` → false);
+                        // dll/ was registered at process start so no re-init is needed.
+                        match id.kind() {
+                            ModelKind::CudaRuntime => {
+                                self.flash_hint(format!("{} 已安装", id.label()), cx);
+                            }
+                            ModelKind::Asr | ModelKind::Align => {
+                                let bound = self
+                                    .settings
+                                    .bind_download_if_active(id, progress.model_dir.clone());
+                                if bound {
+                                    let _ = self.settings.save();
+                                    self.settings_dirty = false;
+                                    self.reset_model_config(cx);
+                                    self.flash_hint(format!("{} 下载完成", id.label()), cx);
+                                } else {
+                                    // Non-selected ASR size finished installing on disk.
+                                    self.asr_download = None;
+                                    self.flash_hint(
+                                        format!("{} 已就绪，可在设置中切换使用", id.label()),
+                                        cx,
+                                    );
+                                }
+                            }
+                        }
                     } else if progress.state == DownloadState::Failed {
-                        self.flash_hint(
-                            format!("{} 下载失败: {}", id.label(), progress.message),
-                            cx,
-                        );
+                        let fail = if id.kind() == ModelKind::CudaRuntime {
+                            format!("{} 安装失败: {}", id.label(), progress.message)
+                        } else {
+                            format!("{} 下载失败: {}", id.label(), progress.message)
+                        };
+                        self.flash_hint(fail, cx);
                     } else if progress.state == DownloadState::Cancelled {
                         self.flash_hint(format!("{} 已取消", id.label()), cx);
                     }
+                    // Hide another size's terminal snapshot when viewing this size.
+                    self.clear_stale_asr_progress();
                     cx.notify();
                 }
                 Ok(WorkerMsg::Probed { id, duration_sec }) => {
@@ -549,7 +692,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         let start = self.settings.aligner_model_dir.clone();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择 Aligner 模型目录");
+            let mut dlg = rfd::FileDialog::new().set_title("选择对齐模型目录");
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }
@@ -561,6 +704,8 @@ impl OneAsrApp {
     }
 
     fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // New tasks inherit the settings default language (per-task override later).
+        let default_lang = self.settings.language.clone();
         for path in paths {
             let path = path.canonicalize().unwrap_or(path);
             if !accept_input_path(&path) {
@@ -569,7 +714,7 @@ impl OneAsrApp {
             if self.tasks.iter().any(|t| t.path == path) {
                 continue;
             }
-            let task = Task::from_path(&path);
+            let task = Task::from_path(&path, default_lang.clone());
             let id = task.id.clone();
             let p = task.path.clone();
             let tx = self.tx.clone();
@@ -591,6 +736,54 @@ impl OneAsrApp {
         cx.notify();
     }
 
+    /// Open / close the per-task language dropdown.
+    fn toggle_lang_menu(&mut self, id: &str, cx: &mut Context<Self>) {
+        let locked = self
+            .tasks
+            .iter()
+            .find(|t| t.id == id)
+            .is_some_and(|t| t.status.locks_row_actions());
+        if locked {
+            self.flash_hint("处理中的任务不能改语言", cx);
+            return;
+        }
+        self.settings_lang_open = false;
+        if self.lang_menu.as_deref() == Some(id) {
+            self.lang_menu = None;
+        } else {
+            self.lang_menu = Some(id.to_string());
+        }
+        cx.notify();
+    }
+
+    /// Set a task's source language and close the dropdown.
+    fn set_task_language(&mut self, id: &str, language: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+            return;
+        };
+        if task.status.locks_row_actions() {
+            self.flash_hint("处理中的任务不能改语言", cx);
+            return;
+        }
+        task.set_language(language);
+        self.lang_menu = None;
+        cx.notify();
+    }
+
+    /// Close language dropdowns (Escape / click-outside).
+    fn dismiss_menus(&mut self, cx: &mut Context<Self>) {
+        if self.lang_menu.is_none() && !self.settings_lang_open {
+            return;
+        }
+        self.lang_menu = None;
+        self.settings_lang_open = false;
+        cx.notify();
+    }
+
+    fn any_menu_open(&self) -> bool {
+        self.lang_menu.is_some() || self.settings_lang_open
+    }
+
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         let open = !self.settings_open;
         // Closing with unsaved edits → auto-save (desktop-tool default).
@@ -602,6 +795,8 @@ impl OneAsrApp {
         self.settings_to = if open { 1.0 } else { 0.0 };
         self.settings_anim_t0 = Instant::now();
         self.settings_open = open;
+        self.lang_menu = None;
+        self.settings_lang_open = false;
         if open {
             sfx::play(sfx::Sfx::Drawer);
         }
@@ -883,7 +1078,9 @@ impl OneAsrApp {
         let id = task.id.clone();
         let path = task.path.clone();
         let name = task.name.clone();
-        let settings = self.settings.clone();
+        // Per-task language overrides settings default for this run only.
+        let mut settings = self.settings.clone();
+        settings.language = normalize_source_language(&task.language);
 
         // Hand off to the dedicated ASR worker — never block the UI thread.
         if self
@@ -1004,13 +1201,20 @@ impl Render for OneAsrApp {
 
         let drawer_p = self.settings_progress();
 
+        let menu_open = self.any_menu_open();
+
         div()
+            .id("oneasr-root")
+            .track_focus(&self.focus_handle)
             .size_full()
             .flex()
             .flex_col()
             .bg(BG)
             .text_color(TEXT)
             .font_family("Segoe UI")
+            .on_action(cx.listener(|this, _: &DismissMenus, _, cx| {
+                this.dismiss_menus(cx);
+            }))
             .child(self.render_toolbar(cx))
             .child(
                 // Relative shell: list fills; settings drawer overlays from the right.
@@ -1020,6 +1224,27 @@ impl Render for OneAsrApp {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
+                    // Click-outside layer under floating menus (priority 5 < menu 10).
+                    .when(menu_open, |el| {
+                        el.child(
+                            deferred(
+                                div()
+                                    .id("menu-dismiss-layer")
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full()
+                                    .cursor_default()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.dismiss_menus(cx);
+                                        }),
+                                    ),
+                            )
+                            .with_priority(5),
+                        )
+                    })
                     .child(
                         div()
                             .id("task-drop-zone")
@@ -1091,6 +1316,10 @@ const ROW_ENTER_SECS: f32 = 0.30;
 const ROW_EXIT_SECS: f32 = 0.22;
 /// Actions column: play + delete (+ open/copy when done).
 const ACTIONS_COL_PX: f32 = 120.;
+/// Language chip column (fixed so status changes never shove it).
+const LANG_COL_PX: f32 = 64.;
+/// Status pill column — wide enough for「转写中 99/99」「导出字幕」「排队#99」.
+const STATUS_COL_PX: f32 = 112.;
 
 /// Smooth deceleration (approx cubic-bezier ease-out).
 fn ease_out_cubic(t: f32) -> f32 {
@@ -1101,6 +1330,7 @@ fn ease_out_cubic(t: f32) -> f32 {
 impl OneAsrApp {
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let settings_open = self.settings_open;
+        let dl_busy = self.any_download_busy();
         let picking = self.picking;
         let can_start = self.model_status == ModelStatus::Ready;
         let has_tasks = self.tasks.iter().any(|t| !self.exiting.contains_key(&t.id));
@@ -1123,34 +1353,21 @@ impl OneAsrApp {
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .justify_center()
+                            .items_baseline()
                             .gap_0()
                             .child(
                                 div()
-                                    .flex()
-                                    .items_baseline()
-                                    .gap_0()
-                                    .child(
-                                        div()
-                                            .text_lg()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(TEXT)
-                                            .child("One"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_lg()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(ACCENT)
-                                            .child("Asr"),
-                                    ),
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(TEXT)
+                                    .child("One"),
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(MUTED_SOFT)
-                                    .child("本地转写"),
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(ACCENT)
+                                    .child("Asr"),
                             ),
                     ),
             )
@@ -1179,6 +1396,7 @@ impl OneAsrApp {
                     ))
                     .child(settings_gear_btn(
                         settings_open,
+                        dl_busy,
                         cx.listener(|this, _, _, cx| this.toggle_settings(cx)),
                     )),
             )
@@ -1284,6 +1502,7 @@ impl OneAsrApp {
 
         let phase = self.ui_phase;
         let hover_id = self.hover_row.clone();
+        let lang_menu = self.lang_menu.clone();
         let active_stage = self.active_stage.clone();
         // Snapshot ranks for 排队中#n labels (live queue only).
         let queue_ranks: Vec<(String, usize)> = {
@@ -1311,6 +1530,7 @@ impl OneAsrApp {
                 let id_start = task.id.clone();
                 let id_del = task.id.clone();
                 let id_open = task.id.clone();
+                let id_lang = task.id.clone();
                 // Always show primary + delete slots (gray when locked — never disappear).
                 let done_with_out =
                     task.status == TaskStatus::Done && task.output_srt.is_some();
@@ -1332,11 +1552,17 @@ impl OneAsrApp {
                         matches!(task.status, TaskStatus::Pending | TaskStatus::Error)
                     };
                 let can_delete = interactive && !task.status.locks_row_actions();
+                let can_edit_lang = interactive && !task.status.locks_row_actions();
+                let lang_open = lang_menu.as_ref() == Some(&task.id);
+                let lang_meta = source_language_by_id(&task.language);
+                let lang_short = lang_meta.map(|l| l.short).unwrap_or("?");
+                let lang_current = task.language.clone();
                 let err = task.error.clone();
                 let name = task.name.clone();
                 let name_tip = task.name.clone();
                 let row_id = task.id.clone();
                 let row_id_hover = task.id.clone();
+                let id_lang_pick = task.id.clone();
                 let size_l = task.size_label();
                 let duration = task.duration;
                 let status = task.status;
@@ -1369,13 +1595,101 @@ impl OneAsrApp {
                     PANEL
                 };
 
+                // Floating menu options (attached under the language chip — GPUI has no Select widget).
+                let lang_menu_float: Option<gpui::AnyElement> =
+                    if lang_open && can_edit_lang {
+                        let menu_task = id_lang_pick.clone();
+                        let menu_cur = lang_current.clone();
+                        let opts: Vec<gpui::AnyElement> = SOURCE_LANGUAGES
+                            .iter()
+                            .map(|lang| {
+                                let tid = menu_task.clone();
+                                let lid = lang.id;
+                                let label = lang.label;
+                                let active = menu_cur == lid;
+                                div()
+                                    .id(SharedString::from(format!("lang-opt-{tid}-{lid}")))
+                                    .px_2p5()
+                                    .py_1p5()
+                                    .cursor_pointer()
+                                    .bg(if active { ACCENT_SOFT } else { PANEL })
+                                    .hover(|s| s.bg(if active { ACCENT_SOFT } else { BG }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_task_language(&tid, lid, cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(if active { ACCENT } else { TEXT })
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .child(label.to_string()),
+                                            )
+                                            .when(active, |el| {
+                                                el.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(ACCENT)
+                                                        .child("✓"),
+                                                )
+                                            }),
+                                    )
+                                    .into_any_element()
+                            })
+                            .collect();
+                        Some(
+                            deferred(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "lang-menu-{id_lang_pick}"
+                                    )))
+                                    .absolute()
+                                    .top(px(30.))
+                                    .right_0()
+                                    .w(px(168.))
+                                    .max_h(px(280.))
+                                    .overflow_y_scroll()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(LINE)
+                                    .bg(PANEL)
+                                    .shadow(vec![
+                                        BoxShadow {
+                                            color: hsla(0., 0., 0., 0.08),
+                                            offset: point(px(0.), px(2.)),
+                                            blur_radius: px(4.),
+                                            spread_radius: px(0.),
+                                        },
+                                        BoxShadow {
+                                            color: hsla(0., 0., 0., 0.14),
+                                            offset: point(px(0.), px(8.)),
+                                            blur_radius: px(20.),
+                                            spread_radius: px(0.),
+                                        },
+                                    ])
+                                    .py_1()
+                                    .children(opts),
+                            )
+                            .with_priority(10)
+                            .into_any_element(),
+                        )
+                    } else {
+                        None
+                    };
+
                 div()
                     .id(SharedString::from(format!("task-{row_id}")))
                     .flex()
                     .flex_col()
                     .w_full()
                     .min_w_0()
-                    .overflow_hidden()
+                    // Allow floating language menu to paint outside the row box.
+                    .when(!lang_open, |el| el.overflow_hidden())
                     .border_b_1()
                     .border_color(LINE_SOFT)
                     .bg(row_bg)
@@ -1449,21 +1763,116 @@ impl OneAsrApp {
                                                     .child(meta_left),
                                             ),
                                     )
-                                    // Status as its own pill (not mixed into file meta).
+                                    // Language select — fixed column so status length never shifts it.
                                     .child(
                                         div()
+                                            .w(px(LANG_COL_PX))
                                             .flex_shrink_0()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded_full()
-                                            .bg(status_bg)
+                                            .flex()
+                                            .justify_center()
+                                            .items_center()
                                             .child(
                                                 div()
-                                                    .text_xs()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(status_color)
-                                                    .whitespace_nowrap()
-                                                    .child(status_label),
+                                                    .relative()
+                                                    .child(
+                                                        div()
+                                                            .id(SharedString::from(format!(
+                                                                "lang-{row_id}"
+                                                            )))
+                                                            .px_2()
+                                                            .py_0p5()
+                                                            .rounded_md()
+                                                            .border_1()
+                                                            .border_color(if lang_open {
+                                                                ACCENT
+                                                            } else if can_edit_lang {
+                                                                LINE
+                                                            } else {
+                                                                LINE_SOFT
+                                                            })
+                                                            .bg(if lang_open {
+                                                                ACCENT_SOFT
+                                                            } else if can_edit_lang {
+                                                                BG
+                                                            } else {
+                                                                PANEL
+                                                            })
+                                                            .when(can_edit_lang, |el| {
+                                                                el.cursor_pointer().hover(|s| {
+                                                                    s.bg(ACCENT_SOFT)
+                                                                        .border_color(ACCENT)
+                                                                })
+                                                            })
+                                                            .when(can_edit_lang, |el| {
+                                                                el.on_click(cx.listener(
+                                                                    move |this, _, _, cx| {
+                                                                        this.toggle_lang_menu(
+                                                                            &id_lang, cx,
+                                                                        );
+                                                                    },
+                                                                ))
+                                                            })
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .gap_1()
+                                                                    .child(
+                                                                        div()
+                                                                            .text_xs()
+                                                                            .font_weight(
+                                                                                gpui::FontWeight::MEDIUM,
+                                                                            )
+                                                                            .text_color(
+                                                                                if can_edit_lang {
+                                                                                    TEXT
+                                                                                } else {
+                                                                                    MUTED_SOFT
+                                                                                },
+                                                                            )
+                                                                            .whitespace_nowrap()
+                                                                            .child(
+                                                                                lang_short
+                                                                                    .to_string(),
+                                                                            ),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_xs()
+                                                                            .text_color(MUTED)
+                                                                            .child(if lang_open {
+                                                                                "▴"
+                                                                            } else {
+                                                                                "▾"
+                                                                            }),
+                                                                    ),
+                                                            ),
+                                                    )
+                                                    .children(lang_menu_float),
+                                            ),
+                                    )
+                                    // Status — fixed width; only the filename column shrinks.
+                                    .child(
+                                        div()
+                                            .w(px(STATUS_COL_PX))
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .justify_center()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py_0p5()
+                                                    .rounded_full()
+                                                    .bg(status_bg)
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                                            .text_color(status_color)
+                                                            .whitespace_nowrap()
+                                                            .child(status_label),
+                                                    ),
                                             ),
                                     )
                                     // Two fixed slots: primary (开始 | 打开字幕) + 删除.
@@ -1481,6 +1890,7 @@ impl OneAsrApp {
                                                 primary_enabled,
                                                 is_hovered,
                                                 cx.listener(move |this, _, _, cx| {
+                                                    this.lang_menu = None;
                                                     if this
                                                         .tasks
                                                         .iter()
@@ -1503,6 +1913,7 @@ impl OneAsrApp {
                                                 can_delete,
                                                 is_hovered,
                                                 cx.listener(move |this, _, _, cx| {
+                                                    this.lang_menu = None;
                                                     this.delete_task(&id_del, cx);
                                                 }),
                                             )),
@@ -1533,6 +1944,9 @@ impl OneAsrApp {
 
     fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let backend = self.settings.backend.clone();
+        let language = self.settings.language.clone();
+        let length_preset = self.settings.subtitle_length_preset.clone();
+        let asr_id = self.settings.selected_asr_id();
         let model = self.settings.asr_model_dir.display().to_string();
         let model_tip = model.clone();
         let aligner = self.settings.aligner_model_dir.display().to_string();
@@ -1541,14 +1955,15 @@ impl OneAsrApp {
         let asr_ready = check_model_dir(&self.settings.asr_model_dir).is_ok();
         let align_ready =
             oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
-        let asr_dl = self.asr_download.clone();
-        let align_dl = self.align_download.clone();
-        let asr_dl_busy = asr_dl
-            .as_ref()
-            .is_some_and(|p| p.state == DownloadState::Downloading);
-        let align_dl_busy = align_dl
-            .as_ref()
-            .is_some_and(|p| p.state == DownloadState::Downloading);
+        // Progress is keyed by model id — never show another size’s snapshot here.
+        let asr_dl = self.progress_for(asr_id).cloned();
+        let align_dl = self.progress_for(ModelId::QwenAlign06B).cloned();
+        let cuda_dl = self.progress_for(ModelId::CudaRuntime).cloned();
+        let asr_dl_busy = self.download_busy(asr_id);
+        let asr_size_locked = self.download_kind_busy(ModelKind::Asr);
+        let align_dl_busy = self.download_busy(ModelId::QwenAlign06B);
+        let cuda_dl_busy = self.download_busy(ModelId::CudaRuntime);
+        let cuda_ready = is_cuda_runtime_ready();
 
         let section = |body: gpui::AnyElement| {
             div()
@@ -1607,6 +2022,231 @@ impl OneAsrApp {
                     .flex()
                     .flex_col()
                     .gap_2p5()
+                    .child(section({
+                        let open = self.settings_lang_open;
+                        let cur_label = source_language_by_id(&language)
+                            .map(|l| l.label)
+                            .unwrap_or("中文普通话");
+                        let menu_cur = language.clone();
+                        let opts: Vec<gpui::AnyElement> = if open {
+                            SOURCE_LANGUAGES
+                                .iter()
+                                .map(|lang| {
+                                    let lid = lang.id;
+                                    let label = lang.label;
+                                    let active = menu_cur == lid;
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "settings-lang-opt-{lid}"
+                                        )))
+                                        .px_2p5()
+                                        .py_1p5()
+                                        .cursor_pointer()
+                                        .bg(if active { ACCENT_SOFT } else { PANEL })
+                                        .hover(|s| {
+                                            s.bg(if active { ACCENT_SOFT } else { BG })
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.settings.language = lid.into();
+                                            this.settings_lang_open = false;
+                                            this.mark_settings_dirty(cx);
+                                        }))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(if active {
+                                                            ACCENT
+                                                        } else {
+                                                            TEXT
+                                                        })
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .child(label.to_string()),
+                                                )
+                                                .when(active, |el| {
+                                                    el.child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(ACCENT)
+                                                            .child("✓"),
+                                                    )
+                                                }),
+                                        )
+                                        .into_any_element()
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+
+                        // 语言 | 字幕长度 并排平分
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap_2p5()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("默认语言"),
+                                    )
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .w_full()
+                                            .child(
+                                                div()
+                                                    .id("settings-lang-trigger")
+                                                    .w_full()
+                                                    .px_2p5()
+                                                    .py_1p5()
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(if open {
+                                                        ACCENT
+                                                    } else {
+                                                        LINE
+                                                    })
+                                                    .bg(if open { ACCENT_SOFT } else { BG })
+                                                    .cursor_pointer()
+                                                    .hover(|s| {
+                                                        s.bg(ACCENT_SOFT).border_color(ACCENT)
+                                                    })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.lang_menu = None;
+                                                        this.settings_lang_open =
+                                                            !this.settings_lang_open;
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .text_color(TEXT)
+                                                                    .whitespace_nowrap()
+                                                                    .child(cur_label.to_string()),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(MUTED)
+                                                                    .child(if open {
+                                                                        "▴"
+                                                                    } else {
+                                                                        "▾"
+                                                                    }),
+                                                            ),
+                                                    ),
+                                            )
+                                            .when(open, |el| {
+                                                el.child(
+                                                    deferred(
+                                                        div()
+                                                            .id("settings-lang-menu")
+                                                            .absolute()
+                                                            .top(px(38.))
+                                                            .left_0()
+                                                            .right_0()
+                                                            .max_h(px(280.))
+                                                            .overflow_y_scroll()
+                                                            .rounded_lg()
+                                                            .border_1()
+                                                            .border_color(LINE)
+                                                            .bg(PANEL)
+                                                            .shadow(vec![
+                                                                BoxShadow {
+                                                                    color: hsla(0., 0., 0., 0.08),
+                                                                    offset: point(
+                                                                        px(0.),
+                                                                        px(2.),
+                                                                    ),
+                                                                    blur_radius: px(4.),
+                                                                    spread_radius: px(0.),
+                                                                },
+                                                                BoxShadow {
+                                                                    color: hsla(0., 0., 0., 0.14),
+                                                                    offset: point(
+                                                                        px(0.),
+                                                                        px(8.),
+                                                                    ),
+                                                                    blur_radius: px(20.),
+                                                                    spread_radius: px(0.),
+                                                                },
+                                                            ])
+                                                            .py_1()
+                                                            .children(opts),
+                                                    )
+                                                    .with_priority(10),
+                                                )
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("字幕长度"),
+                                    )
+                                    .child(
+                                        div().flex().gap_1p5().children(
+                                            [
+                                                ("short", "短"),
+                                                ("standard", "标准"),
+                                                ("loose", "宽松"),
+                                            ]
+                                            .into_iter()
+                                            .map(|(id, label)| {
+                                                let active = length_preset == id;
+                                                btn(
+                                                    label,
+                                                    if active {
+                                                        BtnKind::Primary
+                                                    } else {
+                                                        BtnKind::Secondary
+                                                    },
+                                                    true,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        if this.settings.subtitle_length_preset
+                                                            == id
+                                                        {
+                                                            return;
+                                                        }
+                                                        this.settings.subtitle_length_preset =
+                                                            id.into();
+                                                        this.mark_settings_dirty(cx);
+                                                    }),
+                                                )
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .into_any_element()
+                    }))
                     .child(section(
                         div()
                             .flex()
@@ -1630,6 +2270,40 @@ impl OneAsrApp {
                                             .rounded_full()
                                             .bg(if asr_ready { ACCENT } else { DANGER }),
                                     ),
+                            )
+                            .child(
+                                div().flex().gap_1p5().children(
+                                    ModelId::ASR_CHOICES.into_iter().map(|id| {
+                                        let active = asr_id == id;
+                                        let can_switch = !asr_size_locked || active;
+                                        btn(
+                                            id.short_label(),
+                                            if active {
+                                                BtnKind::Primary
+                                            } else {
+                                                BtnKind::Secondary
+                                            },
+                                            can_switch,
+                                            cx.listener(move |this, _, _, cx| {
+                                                if this.settings.selected_asr_id() == id {
+                                                    return;
+                                                }
+                                                if this.download_kind_busy(ModelKind::Asr) {
+                                                    this.flash_hint(
+                                                        "ASR 下载进行中，请稍后再切换尺寸",
+                                                        cx,
+                                                    );
+                                                    return;
+                                                }
+                                                this.settings.select_asr_model(id);
+                                                this.clear_stale_asr_progress();
+                                                unload_session();
+                                                this.refresh_model_probe();
+                                                this.mark_settings_dirty(cx);
+                                            }),
+                                        )
+                                    }),
+                                ),
                             )
                             .child(
                                 div()
@@ -1688,11 +2362,14 @@ impl OneAsrApp {
                                 asr_ready,
                                 asr_dl_busy,
                                 asr_dl.as_ref(),
-                                cx.listener(|this, _, _, cx| {
-                                    this.start_model_download(ModelId::Qwen3Asr06B, cx);
+                                ModelKind::Asr,
+                                cx.listener(move |this, _, _, cx| {
+                                    let id = this.settings.selected_asr_id();
+                                    this.start_model_download(id, cx);
                                 }),
-                                cx.listener(|this, _, _, cx| {
-                                    this.cancel_model_download(ModelId::Qwen3Asr06B, cx);
+                                cx.listener(move |this, _, _, cx| {
+                                    let id = this.settings.selected_asr_id();
+                                    this.cancel_model_download(id, cx);
                                 }),
                             ))
                             .into_any_element(),
@@ -1712,7 +2389,7 @@ impl OneAsrApp {
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(TEXT)
-                                            .child("Aligner 模型"),
+                                            .child("对齐模型"),
                                     )
                                     .child(
                                         div()
@@ -1778,6 +2455,7 @@ impl OneAsrApp {
                                 align_ready,
                                 align_dl_busy,
                                 align_dl.as_ref(),
+                                ModelKind::Align,
                                 cx.listener(|this, _, _, cx| {
                                     this.start_model_download(ModelId::QwenAlign06B, cx);
                                 }),
@@ -1787,6 +2465,7 @@ impl OneAsrApp {
                             ))
                             .into_any_element(),
                     ))
+                    // Compute: backend first, then CUDA pack (only needed for GPU).
                     .child(section(
                         div()
                             .flex()
@@ -1817,17 +2496,70 @@ impl OneAsrApp {
                                             },
                                             true,
                                             cx.listener(move |this, _, _, cx| {
-                                                if this.settings.backend != id {
-                                                    this.settings.backend = id.into();
-                                                    unload_session();
-                                                    this.refresh_model_probe();
-                                                    this.mark_settings_dirty(cx);
+                                                if this.settings.backend == id {
+                                                    return;
                                                 }
+                                                if id == "cuda" && !is_cuda_runtime_ready() {
+                                                    this.flash_hint(
+                                                        "请先下载 CUDA 运行库，再选择 GPU",
+                                                        cx,
+                                                    );
+                                                    return;
+                                                }
+                                                this.settings.backend = id.into();
+                                                unload_session();
+                                                this.refresh_model_probe();
+                                                this.mark_settings_dirty(cx);
                                             }),
                                         )
                                     }),
                                 ),
                             )
+                            .into_any_element(),
+                    ))
+                    .child(section(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("CUDA 运行库"),
+                                    )
+                                    .child(
+                                        div()
+                                            .size(px(8.))
+                                            .rounded_full()
+                                            .bg(if cuda_ready { ACCENT } else { DANGER }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED)
+                                    .child("CUDA 加速需要"),
+                            )
+                            .child(component_install_row(
+                                "cuda-dl-btn",
+                                "cuda-dl-cancel",
+                                cuda_ready,
+                                cuda_dl_busy,
+                                cuda_dl.as_ref(),
+                                cx.listener(|this, _, _, cx| {
+                                    this.start_model_download(ModelId::CudaRuntime, cx);
+                                }),
+                                cx.listener(|this, _, _, cx| {
+                                    this.cancel_model_download(ModelId::CudaRuntime, cx);
+                                }),
+                            ))
                             .into_any_element(),
                     )),
             )
@@ -2000,22 +2732,84 @@ fn model_download_row(
     ready: bool,
     busy: bool,
     progress: Option<&DownloadProgress>,
+    kind: ModelKind,
     on_download: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let dest_hint = progress
-        .map(|p| p.model_dir.display().to_string())
-        .unwrap_or_else(|| "安装目录 models/".into());
+    download_action_row(
+        id,
+        cancel_id,
+        ready,
+        busy,
+        progress,
+        ActionCopy {
+            ready_status: "已就绪",
+            idle_status: "未下载",
+            busy_btn: "下载中…",
+            idle_btn: "下载模型",
+            ready_btn: "重新下载",
+            kind,
+        },
+        on_download,
+        on_cancel,
+    )
+}
+
+/// CUDA / native runtime components → `{exe}/dll/`, button「安装组件」.
+fn component_install_row(
+    id: &'static str,
+    cancel_id: &'static str,
+    ready: bool,
+    busy: bool,
+    progress: Option<&DownloadProgress>,
+    on_install: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    download_action_row(
+        id,
+        cancel_id,
+        ready,
+        busy,
+        progress,
+        ActionCopy {
+            ready_status: "已安装",
+            idle_status: "未安装",
+            busy_btn: "安装中…",
+            idle_btn: "安装组件",
+            ready_btn: "重新安装",
+            kind: ModelKind::CudaRuntime,
+        },
+        on_install,
+        on_cancel,
+    )
+}
+
+struct ActionCopy {
+    ready_status: &'static str,
+    idle_status: &'static str,
+    busy_btn: &'static str,
+    idle_btn: &'static str,
+    ready_btn: &'static str,
+    kind: ModelKind,
+}
+
+fn download_action_row(
+    id: &'static str,
+    cancel_id: &'static str,
+    ready: bool,
+    busy: bool,
+    progress: Option<&DownloadProgress>,
+    copy: ActionCopy,
+    on_action: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    // Short status only — no filesystem path (model path is already above).
     let status_text = if let Some(p) = progress {
-        if p.state == DownloadState::Downloading {
-            format!("{} · {}", p.label(), dest_hint)
-        } else {
-            p.label()
-        }
+        p.label_for_kind(copy.kind)
     } else if ready {
-        "已就绪".to_string()
+        copy.ready_status.to_string()
     } else {
-        format!("未下载 · 将保存到 {dest_hint}")
+        copy.idle_status.to_string()
     };
     let status_color = if ready && !busy {
         ACCENT
@@ -2026,6 +2820,8 @@ fn model_download_row(
     } else {
         MUTED
     };
+    let busy_label = copy.busy_btn;
+    let action_label = if ready { copy.ready_btn } else { copy.idle_btn };
 
     div()
         .flex()
@@ -2077,11 +2873,10 @@ fn model_download_row(
                             .text_xs()
                             .text_color(MUTED)
                             .opacity(0.7)
-                            .child("下载中…")
+                            .child(busy_label)
                             .into_any_element(),
                     );
                 } else {
-                    let label = if ready { "重新下载" } else { "下载模型" };
                     kids.push(
                         div()
                             .id(id)
@@ -2097,8 +2892,8 @@ fn model_download_row(
                             .text_color(ACCENT)
                             .cursor_pointer()
                             .hover(|s| s.bg(ACCENT).text_color(gpui::rgb(0xffffff)))
-                            .on_click(on_download)
-                            .child(label)
+                            .on_click(on_action)
+                            .child(action_label)
                             .into_any_element(),
                     );
                 }
@@ -2107,16 +2902,16 @@ fn model_download_row(
         )
 }
 
-/// Brand mark: teal tile + SVG “waveform → subtitle lines”.
+/// Brand mark: teal tile + SVG waveform → subtitle (matches app-icon.ico).
 fn app_logo() -> impl IntoElement {
     div()
-        .size(px(34.))
+        .size(px(36.))
         .rounded_xl()
         .bg(LOGO)
         .shadow(vec![BoxShadow {
-            color: hsla(174. / 360., 0.55, 0.28, 0.22),
+            color: hsla(174. / 360., 0.55, 0.28, 0.28),
             offset: point(px(0.), px(1.)),
-            blur_radius: px(4.),
+            blur_radius: px(6.),
             spread_radius: px(0.),
         }])
         .flex()
@@ -2124,7 +2919,7 @@ fn app_logo() -> impl IntoElement {
         .justify_center()
         .child(
             svg()
-                .size(px(20.))
+                .size(px(22.))
                 .path("icons/logo.svg")
                 .text_color(gpui::rgb(0xffffff)),
         )
@@ -2140,18 +2935,22 @@ enum BtnKind {
     Quiet,
 }
 
-/// Fixed-size settings gear. Spins slowly while the drawer is open; stops when closed.
+/// Settings gear.
+/// - **Spin**: only while any model / CUDA DLL download is in flight (open or closed).
+/// - **Tint**: settings drawer open, or download running (so closed-panel DL is still visible).
 fn settings_gear_btn(
     open: bool,
+    downloading: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let active = open || downloading;
     let gear = svg()
         .size(px(18.))
         .path("icons/gear.svg")
-        .text_color(if open { ACCENT } else { MUTED });
+        .text_color(if active { ACCENT } else { MUTED });
 
-    let gear_el = if open {
-        // Slow continuous spin while panel is open (~4s per turn).
+    // Distinct element ids so GPUI remounts when download starts/stops (reliable spin on/off).
+    let gear_el = if downloading {
         gear.with_animation(
             "settings-gear-spin",
             Animation::new(Duration::from_secs(4))
@@ -2165,7 +2964,11 @@ fn settings_gear_btn(
     };
 
     div()
-        .id("settings-gear")
+        .id(if downloading {
+            "settings-gear-dl"
+        } else {
+            "settings-gear"
+        })
         .size(px(36.))
         .rounded_lg()
         .flex()

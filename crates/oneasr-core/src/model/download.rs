@@ -44,17 +44,44 @@ impl DownloadProgress {
     }
 
     pub fn label(&self) -> String {
+        self.label_for_kind(self.model_id.kind())
+    }
+
+    /// Human status; CUDA uses “组件” wording, models use “下载”.
+    pub fn label_for_kind(&self, kind: crate::model::ModelKind) -> String {
+        use crate::model::ModelKind;
+        let component = matches!(kind, ModelKind::CudaRuntime);
         match self.state {
-            DownloadState::Idle => "未下载".into(),
+            DownloadState::Idle => {
+                if component {
+                    "未安装".into()
+                } else {
+                    "未下载".into()
+                }
+            }
             DownloadState::Downloading => {
                 let pct = self.percent();
                 let speed = format_speed(self.speed_bytes_per_sec);
-                format!("下载中 {pct:.0}% · {speed}")
+                if component {
+                    format!("安装中 {pct:.0}% · {speed}")
+                } else {
+                    format!("下载中 {pct:.0}% · {speed}")
+                }
             }
-            DownloadState::Completed => "已就绪".into(),
+            DownloadState::Completed => {
+                if component {
+                    "已安装".into()
+                } else {
+                    "已就绪".into()
+                }
+            }
             DownloadState::Failed => {
                 if self.message.is_empty() {
-                    "下载失败".into()
+                    if component {
+                        "安装失败".into()
+                    } else {
+                        "下载失败".into()
+                    }
                 } else {
                     format!("失败: {}", truncate(&self.message, 48))
                 }
@@ -158,12 +185,32 @@ impl DownloadHandle {
     }
 }
 
-/// Whether all required files exist under the model dir.
+/// Whether all catalog files are present with non-truncated sizes.
+///
+/// Uses each file's catalog `expected_size` as a low watermark (50%): rejects
+/// empty / partial copies while staying tolerant of rounded CUDA size estimates.
 pub fn is_model_ready(id: ModelId) -> bool {
     let def = model_definition(id);
-    def.required_files
-        .iter()
-        .all(|name| def.model_dir.join(name).is_file())
+    def.download_files.iter().all(|file| {
+        let path = def.model_dir.join(&file.file_name);
+        file_meets_catalog_size(&path, file.expected_size)
+    })
+}
+
+/// CUDA runtime DLLs under `{exe}/dll/` with plausible sizes (for GPU backend).
+pub fn is_cuda_runtime_ready() -> bool {
+    is_model_ready(ModelId::CudaRuntime)
+}
+
+/// File exists and is large enough vs catalog expected size (not empty/truncated).
+fn file_meets_catalog_size(path: &Path, expected_size: u64) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {
+            let min = (expected_size / 2).max(1);
+            meta.len() >= min
+        }
+        _ => false,
+    }
 }
 
 /// Download (or resume) into the install-layout dir for `id`.
@@ -350,15 +397,17 @@ pub fn download_model(
         }
     }
 
-    let missing: Vec<_> = definition
-        .required_files
+    let bad: Vec<_> = definition
+        .download_files
         .iter()
-        .filter(|n| !definition.model_dir.join(n).is_file())
-        .cloned()
+        .filter(|f| {
+            !file_meets_catalog_size(&definition.model_dir.join(&f.file_name), f.expected_size)
+        })
+        .map(|f| f.file_name.clone())
         .collect();
-    if !missing.is_empty() {
+    if !bad.is_empty() {
         return DownloadOutcome::Failed {
-            message: format!("文件缺失: {}", missing.join(", ")),
+            message: format!("文件缺失或损坏: {}", bad.join(", ")),
             downloaded_bytes,
             total_bytes,
         };
@@ -472,5 +521,40 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", s.chars().take(max).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn catalog_size_rejects_empty_and_truncated() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr-ready-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.dll");
+
+        assert!(!file_meets_catalog_size(&path, 1000));
+
+        std::fs::File::create(&path).unwrap();
+        assert!(!file_meets_catalog_size(&path, 1000));
+
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&[0u8; 100]).unwrap();
+        drop(f);
+        // 100 < 50% of 1000
+        assert!(!file_meets_catalog_size(&path, 1000));
+
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&[0u8; 500]).unwrap();
+        drop(f);
+        assert!(file_meets_catalog_size(&path, 1000));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
