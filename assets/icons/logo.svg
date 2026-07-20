@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="currentColor">
+  <!--
+    OneAsr mark: speech waveform flowing into subtitle lines.
+    Drawn for a solid brand tile (white on teal).
+  -->
+  <!-- Wave bars (left) — rising then falling, rounded caps -->
+  <rect x="5" y="13.5" width="2.4" height="9" rx="1.2"/>
+  <rect x="9.2" y="9.5" width="2.4" height="13" rx="1.2"/>
+  <rect x="13.4" y="6.5" width="2.4" height="16" rx="1.2"/>
+  <rect x="17.6" y="10.5" width="2.4" height="12" rx="1.2"/>
+  <!-- Bridge: small peak linking wave to text -->
+  <rect x="20.5" y="14" width="1.6" height="6" rx="0.8"/>
+  <!-- Subtitle lines (right) — caption stack, last line shorter -->
+  <rect x="23.2" y="10" width="5.5" height="2.1" rx="1.05"/>
+  <rect x="23.2" y="14.95" width="5.5" height="2.1" rx="1.05"/>
+  <rect x="23.2" y="19.9" width="3.6" height="2.1" rx="1.05"/>
+</svg>

@@ -3,7 +3,11 @@ name = "oneasr-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Prompt, postprocess, export, and job helpers for OneAsr"
+description = "Qwen ASR + align pipeline, subtitle segmentation, and job helpers for OneAsr"
+
+[features]
+default = ["cuda"]
+cuda = ["qwen3-asr/cuda", "qwen-forced-aligner-rs/cuda"]
 
 [dependencies]
 serde = { workspace = true }
@@ -11,7 +15,16 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 rayon = "1.10"
-moss-transcribe-diarize-rs = { path = "../../../moss-transcribe-diarize-rs" }
-fireredvad = { path = "../../../FireRedVad" }
+jieba-rs = "0.10"
+hound = "3.5"
+punkt = { git = "https://github.com/eclipse005/rust-punkt.git" }
+# Pin same revs as VoxTrans for a known-good Qwen stack.
+qwen3-asr = { git = "https://github.com/eclipse005/qwen3-asr-rs.git", rev = "b468cb92613fcec913749431e56380399138dfb8", default-features = false }
+qwen-forced-aligner-rs = { git = "https://github.com/eclipse005/qwen-aligner-rs.git", rev = "a8d77031daaf4a216f07f53e72c803814afd3680", default-features = false, features = ["cpu"] }
+fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+[build-dependencies]
+serde_json = { workspace = true }
 
 [dev-dependencies]

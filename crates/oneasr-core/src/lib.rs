@@ -1,27 +1,31 @@
-//! OneAsr core: batch jobs, prompts, subtitle engine, media, ASR.
-//!
-//! Standalone app support library — not a public crate API surface.
+//! OneAsr core: Qwen ASR + ForcedAligner pipeline, sentence boundary, jobs.
 
 pub mod asr;
 pub mod engine;
 pub mod job;
+pub mod lang;
 pub mod media;
+pub mod model;
 pub mod paths;
-pub mod prompt;
 pub mod runtime;
+pub mod sentence_boundary;
 pub mod settings;
+pub mod subtitle;
+pub mod subtitle_length;
 pub mod ui_labels;
 pub mod vad;
 
-// App + integration tests.
 pub use asr::{
-    check_model_dir, planned_output_path, process_media_file, process_media_file_with_progress,
-    unload_session, AsrStage, StageUpdate,
+    check_aligner_model_dir, check_asr_model_dir, check_model_dir, planned_output_path,
+    process_media_file, process_media_file_with_progress, unload_session, AsrStage, StageUpdate,
 };
-pub use job::{
-    accept_input_path, next_queue_seq, DurationState, Task, TaskStatus,
-};
+pub use job::{accept_input_path, next_queue_seq, DurationState, Task, TaskStatus};
 pub use media::{ffmpeg_available, probe_duration_sec, resolve_app_root};
+pub use model::{
+    default_aligner_model_dir, default_asr_model_dir, download_model, is_model_ready,
+    resolve_models_root, DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, ModelId,
+    ModelKind,
+};
 pub use runtime::{demote_current_thread, init_runtime};
 pub use settings::Settings;
 pub use ui_labels::{

@@ -1,56 +1,59 @@
 # OneAsr
 
-本地音视频批量转字幕。亮色列表 UI + 真实 MOSS Rust ASR。
+本地音视频批量转字幕。亮色列表 UI + **Qwen3-ASR** + **Qwen3-ForcedAligner**（与 VoxTrans 同款流水线与断句逻辑）。
+
+## 依赖
+
+| 组件 | Git |
+|------|-----|
+| ASR | https://github.com/eclipse005/qwen3-asr-rs.git |
+| Aligner | https://github.com/eclipse005/qwen-aligner-rs.git |
+
+默认模型路径（安装/开发布局）：
+
+- ASR: `{app}/models/Qwen3-ASR-0.6B`
+- Aligner: `{app}/models/Qwen3-ForcedAligner-0.6B`
+
+设置面板可一键从 ModelScope 下载到 `{app}/models/`（逻辑同 VoxTrans），也可手动选已有目录。
+
+> 当前为开发/便携布局（exe + `bin/` + `assets/` + `models/`）。Windows 安装包（Inno/NSIS）待后续补充。
 
 ## 运行
 
-准备：将 `ffmpeg.exe` 放到 `bin/ffmpeg.exe`（应用启动时从该目录解析）。
+准备：将 `ffmpeg.exe` 放到 `bin/ffmpeg.exe`。
 
 ```powershell
 cd D:\OneAsr
 cargo run -p oneasr
 ```
 
-## 输出
+`oneasr-core` 默认启用 `cuda` feature。
 
-成功转写后自动写入安装目录：
+## 输出
 
 ```text
 {app_root}/output/{视频名}.srt
 ```
 
-例如 `D:\OneAsr\output\ja.srt`。中间产物在 `runs/`。
+中间产物在 `runs/`（chunk wav、转写 txt、align json 等）。
 
 ## 流程
 
-启动加载模型 → 添加文件 → 全部开始（顺序）  
-→ `bin/ffmpeg` 转 16k → `AsrInference`（raw）  
-→ **解析引擎** `TranscriptEngine`：raw → 时间/说话人/正文  
-→ 导出 SRT / TXT → `output/{stem}.srt`
-
-### 解析引擎（最佳实践）
-
 ```text
-MOSS raw  [t][Sxx]text[t]…
-    ↓  TranscriptEngine::parse_moss_compact
-TranscriptDocument { segments: [{start,end,speaker,text}, …] }
-    ↓  to_srt / to_vtt / to_json / to_plain
-多格式字幕
+ffmpeg → 16k mono
+  → VAD 分段（~30–180s）
+  → load ASR 一次 → 各段转写 → drop ASR
+  → load Aligner 一次 → 各段对齐 → drop Aligner
+  → 标点还原 + normalize_word_tokens
+  → VoxTrans 断句（标点硬切 + 字幕长度 DP）
+  → output/{stem}.srt
 ```
 
-ASR 只负责出 raw；格式导出只读结构化 `Segment`，不重新抠 raw。
-
-## 不做
-
-- 长音频 VAD 分窗合并（仅设计，未实现）
-- 进度百分比
-- 字幕编辑器
+任意时刻显存中只有一个大模型。
 
 ## 测试
 
 ```powershell
 cargo test -p oneasr-core
-cargo test -p oneasr-core --test pipeline_contract
-cargo test -p oneasr-core --test real_or_honest
 cargo build -p oneasr
 ```

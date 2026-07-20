@@ -2,52 +2,67 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::media::resolve_app_root;
-use crate::prompt::{build_prompt, PromptError};
+use crate::model::{default_aligner_model_dir, default_asr_model_dir, ModelId};
 
-/// User-facing settings. Switches map 1:1 to product plan.
-///
-/// Bundled tools (`bin/ffmpeg`) are **not** settings — they always live under
-/// the install/app root (see [`crate::media`]).
+/// User-facing settings for the Qwen ASR + ForcedAligner pipeline.
 ///
 /// Persisted as `{app_root}/settings.json` when possible.
+/// Model dirs default to install layout: `{app}/models/{name}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    pub model_dir: PathBuf,
+    /// Qwen3-ASR model directory.
+    #[serde(default = "default_asr_model_dir", alias = "model_dir")]
+    pub asr_model_dir: PathBuf,
+    /// Qwen3-ForcedAligner directory.
+    #[serde(default = "default_aligner_model_dir")]
+    pub aligner_model_dir: PathBuf,
     /// `auto` | `cuda` | `cpu`
+    #[serde(default = "default_backend")]
     pub backend: String,
+    #[serde(default = "default_max_new_tokens")]
     pub max_new_tokens: usize,
-    /// Switch: use hotword prompt B.
-    pub use_hotwords: bool,
-    pub hotwords: String,
-    /// Switch: prefix speaker in exports / list.
-    pub export_show_speaker: bool,
-    /// Switch: split overlong subtitle segments at clause/connector boundaries.
-    #[serde(default = "default_split_long_sentences")]
-    pub split_long_sentences: bool,
+    /// Forced language (e.g. `English`, `Japanese`). Empty = auto-detect.
+    #[serde(default)]
+    pub language: String,
+    /// `short` | `standard` | `loose`
+    #[serde(default = "default_subtitle_length_preset")]
+    pub subtitle_length_preset: String,
+    /// VAD chunk target seconds (clamped 30–180 at runtime).
+    #[serde(default = "default_chunk_target_seconds")]
+    pub chunk_target_seconds: u32,
+}
+
+fn default_backend() -> String {
+    "auto".into()
+}
+
+fn default_max_new_tokens() -> usize {
+    2048
+}
+
+fn default_subtitle_length_preset() -> String {
+    "standard".into()
+}
+
+fn default_chunk_target_seconds() -> u32 {
+    180
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            model_dir: PathBuf::from(
-                r"D:\MOSS-Transcribe-Diarize\pretrained\moss-transcribe-diarize",
-            ),
-            backend: "auto".into(),
-            max_new_tokens: 2048,
-            use_hotwords: false,
-            hotwords: String::new(),
-            export_show_speaker: true,
-            split_long_sentences: default_split_long_sentences(),
+            asr_model_dir: default_asr_model_dir(),
+            aligner_model_dir: default_aligner_model_dir(),
+            backend: default_backend(),
+            max_new_tokens: default_max_new_tokens(),
+            language: String::new(),
+            subtitle_length_preset: default_subtitle_length_preset(),
+            chunk_target_seconds: default_chunk_target_seconds(),
         }
     }
 }
 
-fn default_split_long_sentences() -> bool {
-    true
-}
-
 impl Settings {
-    /// Prefer `{app_root}/settings.json`, else next to the executable.
     pub fn config_path() -> Option<PathBuf> {
         if let Some(root) = resolve_app_root() {
             return Some(root.join("settings.json"));
@@ -57,7 +72,6 @@ impl Settings {
             .and_then(|p| p.parent().map(|d| d.join("settings.json")))
     }
 
-    /// Load from disk or fall back to defaults.
     pub fn load() -> Self {
         let Some(path) = Self::config_path() else {
             return Self::default();
@@ -71,7 +85,6 @@ impl Settings {
         }
     }
 
-    /// Persist to `{app_root}/settings.json`.
     pub fn save(&self) -> Result<PathBuf, String> {
         let path = Self::config_path().ok_or_else(|| "找不到应用目录，无法保存设置".to_string())?;
         if let Some(parent) = path.parent() {
@@ -82,12 +95,16 @@ impl Settings {
         Ok(path)
     }
 
-    pub fn build_prompt(&self) -> Result<String, PromptError> {
-        build_prompt(self.use_hotwords, &self.hotwords)
+    pub fn can_start(&self) -> Result<(), String> {
+        Ok(())
     }
 
-    pub fn can_start(&self) -> Result<(), PromptError> {
-        self.build_prompt().map(|_| ())
+    /// Apply install-layout path for a model **after successful download**.
+    pub fn apply_downloaded_model(&mut self, id: ModelId, model_dir: PathBuf) {
+        match id.kind() {
+            crate::model::ModelKind::Asr => self.asr_model_dir = model_dir,
+            crate::model::ModelKind::Align => self.aligner_model_dir = model_dir,
+        }
     }
 
     #[cfg(test)]
@@ -106,35 +123,21 @@ mod tests {
     }
 
     #[test]
-    fn hotwords_on_requires_text() {
-        let mut s = Settings::default();
-        s.use_hotwords = true;
-        assert!(s.can_start().is_err());
-        s.hotwords = "OpenAI".into();
-        assert!(s.can_start().is_ok());
+    fn loads_legacy_model_dir_alias() {
+        let json = r#"{
+            "model_dir": "D:\\legacy\\asr",
+            "backend": "cuda"
+        }"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.asr_model_dir, PathBuf::from(r"D:\legacy\asr"));
+        assert_eq!(s.backend, "cuda");
     }
 
     #[test]
-    fn save_load_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("oneasr_settings_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        // Write via the same shape as save(), without needing app root.
+    fn apply_download_only_updates_matching_slot() {
         let mut s = Settings::default();
-        s.use_hotwords = true;
-        s.hotwords = "Alpha, Beta".into();
-        s.backend = "cpu".into();
-        s.export_show_speaker = false;
-        s.model_dir = PathBuf::from(r"D:\models\demo");
-        let path = Settings::config_path_for(&dir);
-        let text = serde_json::to_string_pretty(&s).unwrap();
-        std::fs::write(&path, text).unwrap();
-        let loaded: Settings = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(loaded.use_hotwords);
-        assert_eq!(loaded.hotwords, "Alpha, Beta");
-        assert_eq!(loaded.backend, "cpu");
-        assert!(!loaded.export_show_speaker);
-        assert_eq!(loaded.model_dir, PathBuf::from(r"D:\models\demo"));
-        let _ = std::fs::remove_dir_all(&dir);
+        let asr = PathBuf::from(r"C:\App\models\Qwen3-ASR-0.6B");
+        s.apply_downloaded_model(ModelId::Qwen3Asr06B, asr.clone());
+        assert_eq!(s.asr_model_dir, asr);
     }
 }

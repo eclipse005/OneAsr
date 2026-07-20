@@ -1,32 +1,31 @@
-//! OneAsr — light-themed batch list for local MOSS transcription.
+//! OneAsr — light-themed batch list for local Qwen ASR + align.
 
 mod assets;
-mod hotword_input;
 mod sfx;
 mod shell;
 mod theme;
 
+use std::collections::HashMap;
+use std::f32::consts::TAU;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, hsla, linear, percentage, point, prelude::*, px, size, svg, Animation, AnimationExt as _,
-    App, Application, Bounds, BoxShadow, ClickEvent, Context, Entity, ExternalPaths, KeyBinding,
-    SharedString, Timer, Transformation, Window, WindowBounds, WindowOptions,
+    canvas, div, hsla, linear, percentage, point, prelude::*, px, size, svg, Animation,
+    AnimationExt as _, App, Application, Bounds, BoxShadow, ClickEvent, Context,
+    ExternalPaths, MouseMoveEvent, Pixels, SharedString, Timer, Transformation, Window,
+    WindowBounds, WindowOptions,
 };
 use oneasr_core::{
-    accept_input_path, check_model_dir, demote_current_thread, empty_state_subtitle,
+    accept_input_path, check_model_dir, demote_current_thread, download_model, empty_state_subtitle,
     empty_state_title, format_batch_progress, format_queue_status, init_runtime, next_queue_seq,
     process_media_file_with_progress, probe_duration_sec, resolve_app_root, unload_session,
-    AsrStage, DurationState, Settings, StageUpdate, Task, TaskStatus,
+    AsrStage, DownloadHandle, DownloadProgress, DownloadState, DurationState, ModelId, ModelKind,
+    Settings, StageUpdate, Task, TaskStatus,
 };
 
-use hotword_input::{
-    Backspace, Copy, Cut, Delete, End, Home, HotwordInput, Left, Paste, Right, SelectAll,
-    SelectLeft, SelectRight,
-};
 use theme::{
     ACCENT, ACCENT_MIST, ACCENT_SOFT, BG, DANGER, DANGER_SOFT, LINE, LINE_SOFT, LOGO, MEDIA_PLATE,
     MUTED, MUTED_SOFT, PANEL, ROW_HOVER, TEXT, WARN, WARN_SOFT, ZEBRA,
@@ -45,6 +44,7 @@ enum WorkerMsg {
     FilesPicked(Vec<PathBuf>),
     PickCancelled,
     ModelDirPicked(PathBuf),
+    AlignerDirPicked(PathBuf),
     Probed {
         id: String,
         duration_sec: Option<f64>,
@@ -58,6 +58,8 @@ enum WorkerMsg {
         id: String,
         result: Result<PathBuf, String>,
     },
+    /// Model download progress / completion (background thread).
+    ModelDownload(DownloadProgress),
 }
 
 /// Jobs for the long-lived ASR worker (one active job at a time by design).
@@ -71,32 +73,12 @@ enum AsrJob {
 }
 
 fn main() {
-    // Cap rayon before any MOSS load so the UI thread keeps a free core.
+    // Cap rayon before any model load so the UI thread keeps a free core.
     init_runtime();
 
     Application::new()
         .with_assets(assets::AppAssets::new())
         .run(|cx: &mut App| {
-            // Hotword field key bindings (Windows: ctrl; also cmd for consistency).
-            cx.bind_keys([
-                KeyBinding::new("backspace", Backspace, Some("HotwordInput")),
-                KeyBinding::new("delete", Delete, Some("HotwordInput")),
-                KeyBinding::new("left", Left, Some("HotwordInput")),
-                KeyBinding::new("right", Right, Some("HotwordInput")),
-                KeyBinding::new("shift-left", SelectLeft, Some("HotwordInput")),
-                KeyBinding::new("shift-right", SelectRight, Some("HotwordInput")),
-                KeyBinding::new("ctrl-a", SelectAll, Some("HotwordInput")),
-                KeyBinding::new("cmd-a", SelectAll, Some("HotwordInput")),
-                KeyBinding::new("ctrl-v", Paste, Some("HotwordInput")),
-                KeyBinding::new("cmd-v", Paste, Some("HotwordInput")),
-                KeyBinding::new("ctrl-c", Copy, Some("HotwordInput")),
-                KeyBinding::new("cmd-c", Copy, Some("HotwordInput")),
-                KeyBinding::new("ctrl-x", Cut, Some("HotwordInput")),
-                KeyBinding::new("cmd-x", Cut, Some("HotwordInput")),
-                KeyBinding::new("home", Home, Some("HotwordInput")),
-                KeyBinding::new("end", End, Some("HotwordInput")),
-            ]);
-
             // Compact default: list + toolbar, not a full-HD empty canvas.
             let bounds = Bounds::centered(None, size(px(860.), px(560.)), cx);
             cx.open_window(
@@ -113,7 +95,7 @@ fn main() {
 
 struct OneAsrApp {
     settings: Settings,
-    /// Unsaved settings edits (toggles / backend / hotwords).
+    /// Unsaved settings edits (backend / paths).
     settings_dirty: bool,
     /// Desired drawer state (open / closed).
     settings_open: bool,
@@ -123,7 +105,24 @@ struct OneAsrApp {
     settings_anim_t0: Instant,
     /// Row currently under the pointer (action highlight).
     hover_row: Option<String>,
+    /// Empty-state wave: pointer currently over the strip.
+    empty_wave_hover: bool,
+    /// Last layout bounds of the wave hit area (window coords).
+    empty_wave_bounds: Option<Bounds<Pixels>>,
+    /// Target cursor X along the strip (0..=1).
+    empty_wave_cursor_x: f32,
+    /// Smoothed cursor X (follows target).
+    empty_wave_smooth_x: f32,
+    /// 0 = flat line, 1 = full local bulge (eased in/out).
+    empty_wave_amp: f32,
+    /// Epoch for time-based shimmer under the bulge.
+    empty_wave_clock: Instant,
     tasks: Vec<Task>,
+    /// Rows just added — opacity 0→1 over `ROW_ENTER_SECS`.
+    entering: HashMap<String, Instant>,
+    /// Rows marked for delete/clear, still in `tasks` until fade completes
+    /// (tombstones keep list order — do not move to the bottom while fading).
+    exiting: HashMap<String, Instant>,
     batch_mode: bool,
     /// Jobs planned for the current batch run (for 进度 n/m).
     batch_goal: Option<usize>,
@@ -139,7 +138,12 @@ struct OneAsrApp {
     ui_phase: u8,
     /// Live stage label for the row currently Processing (from worker Progress).
     active_stage: Option<(String, SharedString)>,
-    hotword_input: Entity<HotwordInput>,
+    /// Latest download progress for ASR / Aligner (settings panel).
+    asr_download: Option<DownloadProgress>,
+    align_download: Option<DownloadProgress>,
+    /// Active download cancel handles (install-layout destination only).
+    asr_dl_handle: Option<DownloadHandle>,
+    align_dl_handle: Option<DownloadHandle>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
     /// Dedicated ASR worker (never run heavy work on the UI thread).
@@ -187,8 +191,6 @@ impl OneAsrApp {
         .detach();
 
         let settings = Settings::load();
-        let hotword_input =
-            cx.new(|cx| HotwordInput::new(cx, &settings.hotwords));
 
         let mut app = Self {
             settings,
@@ -198,7 +200,15 @@ impl OneAsrApp {
             settings_to: 0.0,
             settings_anim_t0: Instant::now(),
             hover_row: None,
+            empty_wave_hover: false,
+            empty_wave_bounds: None,
+            empty_wave_cursor_x: 0.5,
+            empty_wave_smooth_x: 0.5,
+            empty_wave_amp: 0.0,
+            empty_wave_clock: Instant::now(),
             tasks: Vec::new(),
+            entering: HashMap::new(),
+            exiting: HashMap::new(),
             batch_mode: false,
             batch_goal: None,
             batch_done: 0,
@@ -209,7 +219,10 @@ impl OneAsrApp {
             status_hint_until: None,
             ui_phase: 0,
             active_stage: None,
-            hotword_input,
+            asr_download: None,
+            align_download: None,
+            asr_dl_handle: None,
+            align_dl_handle: None,
             tx: tx.clone(),
             rx,
             job_tx,
@@ -220,15 +233,91 @@ impl OneAsrApp {
         app
     }
 
-    /// Pull hotword text from the real input field into settings (before ASR).
-    fn sync_hotwords_from_ui(&mut self, cx: &mut Context<Self>) {
-        let text = self.hotword_input.read(cx).text();
-        self.settings.hotwords = text;
+    /// Start ModelScope download into `{app}/models/...` (background).
+    /// Does **not** rewrite settings until `DownloadOutcome::Completed`.
+    fn start_model_download(&mut self, id: ModelId, cx: &mut Context<Self>) {
+        if self.download_busy(id) {
+            self.flash_hint("该模型已有下载任务进行中", cx);
+            return;
+        }
+
+        let handle = DownloadHandle::new(id);
+        let model_dir = handle.model_dir.clone();
+        match id.kind() {
+            ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
+            ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
+        }
+        self.set_download_progress(
+            DownloadProgress {
+                state: DownloadState::Downloading,
+                model_id: id,
+                model_dir: model_dir.clone(),
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                speed_bytes_per_sec: 0,
+                message: format!("→ {}", model_dir.display()),
+            },
+        );
+
+        let tx = self.tx.clone();
+        thread::Builder::new()
+            .name(format!("oneasr-dl-{}", id.as_str()))
+            .spawn(move || {
+                let outcome = download_model(&handle, |p| {
+                    let _ = tx.send(WorkerMsg::ModelDownload(p));
+                });
+                // Single terminal event — never double-emit Failed from Err.
+                let snap = DownloadProgress::from_outcome(id, handle.model_dir.clone(), &outcome);
+                let _ = tx.send(WorkerMsg::ModelDownload(snap));
+            })
+            .ok();
+        cx.notify();
     }
 
-    /// Fast FS check for status bar. Does not touch GPU / weights.
+    fn cancel_model_download(&mut self, id: ModelId, cx: &mut Context<Self>) {
+        match id.kind() {
+            ModelKind::Asr => {
+                if let Some(h) = &self.asr_dl_handle {
+                    h.cancel();
+                }
+            }
+            ModelKind::Align => {
+                if let Some(h) = &self.align_dl_handle {
+                    h.cancel();
+                }
+            }
+        }
+        self.flash_hint("正在取消下载…", cx);
+        cx.notify();
+    }
+
+    fn download_busy(&self, id: ModelId) -> bool {
+        let p = match id.kind() {
+            ModelKind::Asr => self.asr_download.as_ref(),
+            ModelKind::Align => self.align_download.as_ref(),
+        };
+        p.is_some_and(|x| x.state == DownloadState::Downloading)
+    }
+
+    fn set_download_progress(&mut self, progress: DownloadProgress) {
+        match progress.model_id.kind() {
+            ModelKind::Asr => self.asr_download = Some(progress),
+            ModelKind::Align => self.align_download = Some(progress),
+        }
+    }
+
+    fn clear_download_handle(&mut self, id: ModelId) {
+        match id.kind() {
+            ModelKind::Asr => self.asr_dl_handle = None,
+            ModelKind::Align => self.align_dl_handle = None,
+        }
+    }
+
+        /// Fast FS check for status bar. Does not touch GPU / weights.
     fn refresh_model_probe(&mut self) {
-        self.model_status = if check_model_dir(&self.settings.model_dir).is_ok() {
+        self.model_status = if check_model_dir(&self.settings.asr_model_dir).is_ok()
+            && oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok()
+        {
             ModelStatus::Ready
         } else {
             ModelStatus::NotReady
@@ -249,16 +338,12 @@ impl OneAsrApp {
         }
     }
 
-    fn is_settings_dirty(&self, cx: &Context<Self>) -> bool {
-        if self.settings_dirty {
-            return true;
-        }
-        self.hotword_input.read(cx).text() != self.settings.hotwords
+    fn is_settings_dirty(&self, _cx: &Context<Self>) -> bool {
+        self.settings_dirty
     }
 
-    /// Sync hotwords from UI, write `settings.json`, re-check model files.
+    /// Write `settings.json`, re-check model files.
     fn save_settings(&mut self, cx: &mut Context<Self>) {
-        self.sync_hotwords_from_ui(cx);
         match self.settings.save() {
             Ok(_) => {
                 self.settings_dirty = false;
@@ -307,7 +392,7 @@ impl OneAsrApp {
                     cx.notify();
                 }
                 Ok(WorkerMsg::ModelDirPicked(dir)) => {
-                    self.settings.model_dir = dir;
+                    self.settings.asr_model_dir = dir;
                     self.settings_dirty = false;
                     // Probe + persist path immediately after pick.
                     self.reset_model_config(cx);
@@ -316,12 +401,57 @@ impl OneAsrApp {
                     } else {
                         self.flash_hint(
                             match self.model_status {
-                                ModelStatus::Ready => "模型目录已更新 · 模型就绪",
-                                ModelStatus::NotReady => "模型目录已更新 · 模型未就绪",
+                                ModelStatus::Ready => "ASR 模型目录已更新 · 就绪",
+                                ModelStatus::NotReady => "ASR 模型目录已更新 · 未就绪",
                             },
                             cx,
                         );
                     }
+                }
+                Ok(WorkerMsg::AlignerDirPicked(dir)) => {
+                    self.settings.aligner_model_dir = dir;
+                    self.settings_dirty = false;
+                    self.reset_model_config(cx);
+                    if let Err(e) = self.settings.save() {
+                        self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
+                    } else {
+                        self.flash_hint(
+                            match self.model_status {
+                                ModelStatus::Ready => "Aligner 目录已更新 · 就绪",
+                                ModelStatus::NotReady => "Aligner 目录已更新 · 未就绪",
+                            },
+                            cx,
+                        );
+                    }
+                }
+                Ok(WorkerMsg::ModelDownload(progress)) => {
+                    let id = progress.model_id;
+                    let terminal = matches!(
+                        progress.state,
+                        DownloadState::Completed
+                            | DownloadState::Failed
+                            | DownloadState::Cancelled
+                    );
+                    self.set_download_progress(progress.clone());
+                    if terminal {
+                        self.clear_download_handle(id);
+                    }
+                    if progress.state == DownloadState::Completed {
+                        // Only now bind settings to install-layout path.
+                        self.settings.apply_downloaded_model(id, progress.model_dir.clone());
+                        let _ = self.settings.save();
+                        self.settings_dirty = false;
+                        self.reset_model_config(cx);
+                        self.flash_hint(format!("{} 下载完成", id.label()), cx);
+                    } else if progress.state == DownloadState::Failed {
+                        self.flash_hint(
+                            format!("{} 下载失败: {}", id.label(), progress.message),
+                            cx,
+                        );
+                    } else if progress.state == DownloadState::Cancelled {
+                        self.flash_hint(format!("{} 已取消", id.label()), cx);
+                    }
+                    cx.notify();
                 }
                 Ok(WorkerMsg::Probed { id, duration_sec }) => {
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
@@ -402,14 +532,29 @@ impl OneAsrApp {
 
     fn pick_model_dir(&mut self, cx: &mut Context<Self>) {
         let tx = self.tx.clone();
-        let start = self.settings.model_dir.clone();
+        let start = self.settings.asr_model_dir.clone();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择模型目录");
+            let mut dlg = rfd::FileDialog::new().set_title("选择 ASR 模型目录");
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }
             if let Some(dir) = dlg.pick_folder() {
                 let _ = tx.send(WorkerMsg::ModelDirPicked(dir));
+            }
+        });
+        cx.notify();
+    }
+
+    fn pick_aligner_dir(&mut self, cx: &mut Context<Self>) {
+        let tx = self.tx.clone();
+        let start = self.settings.aligner_model_dir.clone();
+        thread::spawn(move || {
+            let mut dlg = rfd::FileDialog::new().set_title("选择 Aligner 模型目录");
+            if start.is_dir() {
+                dlg = dlg.set_directory(&start);
+            }
+            if let Some(dir) = dlg.pick_folder() {
+                let _ = tx.send(WorkerMsg::AlignerDirPicked(dir));
             }
         });
         cx.notify();
@@ -435,7 +580,12 @@ impl OneAsrApp {
                     duration_sec: dur,
                 });
             });
+            let anim_id = task.id.clone();
             self.tasks.push(task);
+            // Wave: fade the new row in (symmetric with delete exit).
+            self.entering
+                .entry(anim_id)
+                .or_insert_with(Instant::now);
         }
         // Feedback = list itself (no toast).
         cx.notify();
@@ -466,13 +616,58 @@ impl OneAsrApp {
     }
 
     fn animations_active(&self) -> bool {
-        // Drawer slide + processing status dots ("处理中...").
+        // Drawer slide + processing status dots + row enter/exit + empty-wave hover.
         let drawer = (self.settings_progress() - self.settings_to).abs() > 0.002;
         let processing = self
             .tasks
             .iter()
             .any(|t| t.status == TaskStatus::Processing);
-        drawer || processing
+        let row_anim = !self.exiting.is_empty() || !self.entering.is_empty();
+        // Keep RAF while amp eases out after mouse leaves (smooth collapse to flat).
+        let empty_wave =
+            self.tasks.is_empty() && (self.empty_wave_hover || self.empty_wave_amp > 0.008);
+        drawer || processing || row_anim || empty_wave
+    }
+
+    /// Advance empty-wave smoothing (cursor follow + amp ease). Call once per frame while active.
+    fn tick_empty_wave(&mut self) {
+        let target_amp = if self.empty_wave_hover { 1.0 } else { 0.0 };
+        // Snappy but not instant — ~120–180ms feel at 60fps.
+        self.empty_wave_amp += (target_amp - self.empty_wave_amp) * 0.18;
+        if self.empty_wave_amp < 0.004 && !self.empty_wave_hover {
+            self.empty_wave_amp = 0.0;
+        }
+        self.empty_wave_smooth_x +=
+            (self.empty_wave_cursor_x - self.empty_wave_smooth_x) * 0.22;
+    }
+
+    fn is_exiting(&self, id: &str) -> bool {
+        self.exiting.contains_key(id)
+    }
+
+    /// Drop finished enter/exit fades (call once per frame from list render).
+    /// Exit tombstones are removed from `tasks` only after the fade completes.
+    fn drain_row_anims(&mut self) {
+        let now = Instant::now();
+        let finished: Vec<String> = self
+            .exiting
+            .iter()
+            .filter(|(_, t0)| now.duration_since(**t0).as_secs_f32() >= ROW_EXIT_SECS)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in finished {
+            self.exiting.remove(&id);
+            self.entering.remove(&id);
+            self.tasks.retain(|t| t.id != id);
+            if self.hover_row.as_ref().is_some_and(|h| h == &id) {
+                self.hover_row = None;
+            }
+        }
+        self.entering
+            .retain(|id, t0| {
+                !self.exiting.contains_key(id)
+                    && now.duration_since(*t0).as_secs_f32() < ROW_ENTER_SECS
+            });
     }
 
     /// Brief message in the bottom status bar (replaces toast).
@@ -546,20 +741,10 @@ impl OneAsrApp {
         self.flash_hint_for(msg, Duration::from_secs(6), cx);
     }
 
-    /// Model / hotwords gate for starting work. Does **not** block when another
-    /// job is running — those requests join the FIFO queue instead.
+    /// Soft gate before enqueue. Queue/start buttons also check model files.
     fn ensure_can_start(&mut self, cx: &mut Context<Self>) -> bool {
-        self.refresh_model_probe();
-        if self.model_status == ModelStatus::NotReady {
-            self.flash_hint("模型未就绪，请在设置中选择完整模型目录", cx);
-            if !self.settings_open {
-                self.toggle_settings(cx);
-            }
-            return false;
-        }
-        self.sync_hotwords_from_ui(cx);
-        if self.settings.can_start().is_err() {
-            self.flash_hint("已开启热词：请至少填写一个", cx);
+        if self.model_status != ModelStatus::Ready {
+            self.flash_hint("模型未就绪，请在设置中下载或选择模型目录", cx);
             if !self.settings_open {
                 self.toggle_settings(cx);
             }
@@ -574,6 +759,9 @@ impl OneAsrApp {
         }
         let mut enqueued = 0usize;
         for t in self.tasks.iter_mut() {
+            if self.exiting.contains_key(&t.id) {
+                continue;
+            }
             if matches!(t.status, TaskStatus::Pending | TaskStatus::Error) {
                 t.status = TaskStatus::Queued;
                 t.queue_seq = Some(next_queue_seq());
@@ -582,10 +770,15 @@ impl OneAsrApp {
             }
         }
         if enqueued == 0 {
-            if self.tasks.is_empty() {
+            let live: Vec<_> = self
+                .tasks
+                .iter()
+                .filter(|t| !self.exiting.contains_key(&t.id))
+                .collect();
+            if live.is_empty() {
                 self.flash_hint("请先添加音视频文件", cx);
-            } else if self.tasks.iter().any(|t| t.status == TaskStatus::Processing)
-                || self.tasks.iter().any(|t| t.status == TaskStatus::Queued)
+            } else if live.iter().any(|t| t.status == TaskStatus::Processing)
+                || live.iter().any(|t| t.status == TaskStatus::Queued)
             {
                 self.flash_hint("任务已在处理或排队中", cx);
             } else {
@@ -601,6 +794,9 @@ impl OneAsrApp {
 
     fn start_one(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.ensure_can_start(cx) {
+            return;
+        }
+        if self.is_exiting(id) {
             return;
         }
         let status = match self.tasks.iter().find(|t| t.id == id) {
@@ -651,7 +847,7 @@ impl OneAsrApp {
             let mut queued: Vec<&Task> = self
                 .tasks
                 .iter()
-                .filter(|t| t.status == TaskStatus::Queued)
+                .filter(|t| t.status == TaskStatus::Queued && !self.exiting.contains_key(&t.id))
                 .collect();
             queued.sort_by_key(|t| t.queue_seq.unwrap_or(u64::MAX));
             queued.first().map(|t| t.id.clone())
@@ -716,25 +912,43 @@ impl OneAsrApp {
                 self.flash_hint("处理中的任务不能删除", cx);
                 return;
             }
+        } else {
+            return;
+        }
+        // Already fading out — ignore double-clicks.
+        if self.is_exiting(id) {
+            return;
         }
         sfx::play(sfx::Sfx::Click);
-        self.tasks.retain(|t| t.id != id);
+        // Tombstone in place so the row fades without jumping to the list bottom.
+        self.entering.remove(id);
+        self.exiting.insert(id.to_string(), Instant::now());
+        if self.hover_row.as_ref().is_some_and(|h| h == id) {
+            self.hover_row = None;
+        }
         cx.notify();
     }
 
     /// Clear the whole list. Keeps the active Processing row if any.
+    /// Non-processing rows fade out in place (same 0.22s exit as single delete).
     fn clear_all(&mut self, cx: &mut Context<Self>) {
-        if self.tasks.is_empty() {
+        let live_any = self.tasks.iter().any(|t| !self.exiting.contains_key(&t.id));
+        if !live_any {
             self.flash_hint("列表已空", cx);
             return;
         }
-        let had_proc = self
-            .tasks
-            .iter()
-            .any(|t| t.status == TaskStatus::Processing);
+        let had_proc = self.tasks.iter().any(|t| {
+            t.status == TaskStatus::Processing && !self.exiting.contains_key(&t.id)
+        });
         sfx::play(sfx::Sfx::Click);
-        self.tasks
-            .retain(|t| t.status == TaskStatus::Processing);
+        let now = Instant::now();
+        for t in &self.tasks {
+            if t.status == TaskStatus::Processing {
+                continue;
+            }
+            self.entering.remove(&t.id);
+            self.exiting.entry(t.id.clone()).or_insert(now);
+        }
         if !had_proc {
             self.batch_mode = false;
             self.batch_goal = None;
@@ -871,6 +1085,10 @@ impl Render for OneAsrApp {
 /// Settings drawer width (overlay, does not shrink the list).
 const SETTINGS_W: f32 = 400.;
 const DRAWER_ANIM_SECS: f32 = 0.34;
+/// Row add fade-in duration (seconds).
+const ROW_ENTER_SECS: f32 = 0.30;
+/// Row delete / clear fade-out duration (seconds).
+const ROW_EXIT_SECS: f32 = 0.22;
 /// Actions column: play + delete (+ open/copy when done).
 const ACTIONS_COL_PX: f32 = 120.;
 
@@ -885,7 +1103,7 @@ impl OneAsrApp {
         let settings_open = self.settings_open;
         let picking = self.picking;
         let can_start = self.model_status == ModelStatus::Ready;
-        let has_tasks = !self.tasks.is_empty();
+        let has_tasks = self.tasks.iter().any(|t| !self.exiting.contains_key(&t.id));
 
         div()
             .h(px(52.))
@@ -900,14 +1118,40 @@ impl OneAsrApp {
                 div()
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap_2p5()
                     .child(app_logo())
                     .child(
                         div()
-                            .text_lg()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(TEXT)
-                            .child("OneAsr"),
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .gap_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap_0()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(TEXT)
+                                            .child("One"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(ACCENT)
+                                            .child("Asr"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED_SOFT)
+                                    .child("本地转写"),
+                            ),
                     ),
             )
             .child(
@@ -941,16 +1185,24 @@ impl OneAsrApp {
     }
 
     fn render_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.tasks.len();
-        if count == 0 {
+        self.drain_row_anims();
+
+        if self.tasks.is_empty() {
             let title = empty_state_title();
             let not_ready = self.model_status == ModelStatus::NotReady;
             let subtitle = empty_state_subtitle(not_ready);
+            self.tick_empty_wave();
+            let wave = self.render_empty_wave(cx);
             return div()
                 .flex_1()
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .w_full()
+                .min_w_0()
+                // Full-width interactive wave sits above the copy block.
+                .child(wave)
                 .child(
                     div()
                         .flex()
@@ -958,7 +1210,7 @@ impl OneAsrApp {
                         .items_center()
                         .gap_3()
                         .px_6()
-                        .child(empty_state_icon())
+                        .mt_4()
                         .child(
                             div()
                                 .text_base()
@@ -1003,13 +1255,40 @@ impl OneAsrApp {
                 .into_any_element();
         }
 
-        let rows: Vec<Task> = self.tasks.clone();
+        // Rows stay in `tasks` order. Exit tombstones fade in place (1→0);
+        // enter map fades new rows (0→1). Exiting rows are non-interactive.
+        let now = Instant::now();
+        let items: Vec<(Task, f32, bool)> = self
+            .tasks
+            .iter()
+            .cloned()
+            .map(|t| {
+                if let Some(t0) = self.exiting.get(&t.id) {
+                    let p = (now.duration_since(*t0).as_secs_f32() / ROW_EXIT_SECS).clamp(0.0, 1.0);
+                    let opacity = 1.0 - ease_out_cubic(p);
+                    (t, opacity, false)
+                } else {
+                    let opacity = self
+                        .entering
+                        .get(&t.id)
+                        .map(|t0| {
+                            let p = (now.duration_since(*t0).as_secs_f32() / ROW_ENTER_SECS)
+                                .clamp(0.0, 1.0);
+                            ease_out_cubic(p)
+                        })
+                        .unwrap_or(1.0);
+                    (t, opacity, true)
+                }
+            })
+            .collect();
+
         let phase = self.ui_phase;
         let hover_id = self.hover_row.clone();
         let active_stage = self.active_stage.clone();
-        // Snapshot ranks for 排队中#n labels.
+        // Snapshot ranks for 排队中#n labels (live queue only).
         let queue_ranks: Vec<(String, usize)> = {
-            let mut q: Vec<&Task> = rows
+            let mut q: Vec<&Task> = self
+                .tasks
                 .iter()
                 .filter(|t| t.status == TaskStatus::Queued)
                 .collect();
@@ -1028,7 +1307,7 @@ impl OneAsrApp {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(rows.into_iter().enumerate().map(move |(ix, task)| {
+            .children(items.into_iter().enumerate().map(move |(ix, (task, row_opacity, interactive))| {
                 let id_start = task.id.clone();
                 let id_del = task.id.clone();
                 let id_open = task.id.clone();
@@ -1046,12 +1325,13 @@ impl OneAsrApp {
                 } else {
                     "开始"
                 };
-                let primary_enabled = if done_with_out {
-                    true
-                } else {
-                    matches!(task.status, TaskStatus::Pending | TaskStatus::Error)
-                };
-                let can_delete = !task.status.locks_row_actions();
+                let primary_enabled = interactive
+                    && if done_with_out {
+                        true
+                    } else {
+                        matches!(task.status, TaskStatus::Pending | TaskStatus::Error)
+                    };
+                let can_delete = interactive && !task.status.locks_row_actions();
                 let err = task.error.clone();
                 let name = task.name.clone();
                 let name_tip = task.name.clone();
@@ -1061,7 +1341,7 @@ impl OneAsrApp {
                 let duration = task.duration;
                 let status = task.status;
                 let is_video = is_video_format(&task.format);
-                let is_hovered = hover_id.as_ref() == Some(&task.id);
+                let is_hovered = interactive && hover_id.as_ref() == Some(&task.id);
                 let qn = queue_ranks
                     .iter()
                     .find(|(id, _)| id == &task.id)
@@ -1099,7 +1379,11 @@ impl OneAsrApp {
                     .border_b_1()
                     .border_color(LINE_SOFT)
                     .bg(row_bg)
+                    .opacity(row_opacity)
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if !interactive {
+                            return;
+                        }
                         if *hovered {
                             this.hover_row = Some(row_id_hover.clone());
                         } else if this.hover_row.as_ref() == Some(&row_id_hover) {
@@ -1248,15 +1532,23 @@ impl OneAsrApp {
     }
 
     fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let use_hot = self.settings.use_hotwords;
-        let show_spk = self.settings.export_show_speaker;
-        let hotwords_now = self.hotword_input.read(cx).text();
         let backend = self.settings.backend.clone();
-        let model = self.settings.model_dir.display().to_string();
+        let model = self.settings.asr_model_dir.display().to_string();
         let model_tip = model.clone();
-        let hotword_field = self.hotword_input.clone();
+        let aligner = self.settings.aligner_model_dir.display().to_string();
+        let aligner_tip = aligner.clone();
         let dirty = self.is_settings_dirty(cx);
-        let model_ready = self.model_status == ModelStatus::Ready;
+        let asr_ready = check_model_dir(&self.settings.asr_model_dir).is_ok();
+        let align_ready =
+            oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
+        let asr_dl = self.asr_download.clone();
+        let align_dl = self.align_download.clone();
+        let asr_dl_busy = asr_dl
+            .as_ref()
+            .is_some_and(|p| p.state == DownloadState::Downloading);
+        let align_dl_busy = align_dl
+            .as_ref()
+            .is_some_and(|p| p.state == DownloadState::Downloading);
 
         let section = |body: gpui::AnyElement| {
             div()
@@ -1330,42 +1622,13 @@ impl OneAsrApp {
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(TEXT)
-                                            .child("模型目录"),
+                                            .child("ASR 模型"),
                                     )
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .px_1p5()
-                                            .py_0p5()
+                                            .size(px(8.))
                                             .rounded_full()
-                                            .bg(if model_ready {
-                                                ACCENT_MIST
-                                            } else {
-                                                DANGER_SOFT
-                                            })
-                                            .child(
-                                                div()
-                                                    .size(px(6.))
-                                                    .rounded_full()
-                                                    .bg(if model_ready { ACCENT } else { DANGER }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(if model_ready {
-                                                        ACCENT
-                                                    } else {
-                                                        DANGER
-                                                    })
-                                                    .child(if model_ready {
-                                                        "就绪"
-                                                    } else {
-                                                        "未就绪"
-                                                    }),
-                                            ),
+                                            .bg(if asr_ready { ACCENT } else { DANGER }),
                                     ),
                             )
                             .child(
@@ -1419,6 +1682,19 @@ impl OneAsrApp {
                                             })),
                                     ),
                             )
+                            .child(model_download_row(
+                                "asr-dl-btn",
+                                "asr-dl-cancel",
+                                asr_ready,
+                                asr_dl_busy,
+                                asr_dl.as_ref(),
+                                cx.listener(|this, _, _, cx| {
+                                    this.start_model_download(ModelId::Qwen3Asr06B, cx);
+                                }),
+                                cx.listener(|this, _, _, cx| {
+                                    this.cancel_model_download(ModelId::Qwen3Asr06B, cx);
+                                }),
+                            ))
                             .into_any_element(),
                     ))
                     .child(section(
@@ -1435,51 +1711,78 @@ impl OneAsrApp {
                                         div()
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child("使用热词"),
+                                            .text_color(TEXT)
+                                            .child("Aligner 模型"),
                                     )
-                                    .child(toggle(
-                                        "hot",
-                                        use_hot,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.settings.use_hotwords =
-                                                !this.settings.use_hotwords;
-                                            this.mark_settings_dirty(cx);
-                                        }),
-                                    )),
+                                    .child(
+                                        div()
+                                            .size(px(8.))
+                                            .rounded_full()
+                                            .bg(if align_ready { ACCENT } else { DANGER }),
+                                    ),
                             )
-                            .when(use_hot, |el| {
-                                el.child(hotword_field).when(
-                                    hotwords_now.trim().is_empty(),
-                                    |el| {
-                                        el.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(DANGER)
-                                                .child("请至少填写一个热词"),
-                                        )
-                                    },
-                                )
-                            })
-                            .into_any_element(),
-                    ))
-                    .child(section(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child("导出显示说话人"),
+                                    .id("aligner-dir")
+                                    .flex()
+                                    .items_center()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(LINE)
+                                    .bg(PANEL)
+                                    .overflow_hidden()
+                                    .hover(|s| s.border_color(ACCENT))
+                                    .child(
+                                        div()
+                                            .id("aligner-dir-path")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .px_2p5()
+                                            .py_1p5()
+                                            .text_xs()
+                                            .text_color(TEXT)
+                                            .whitespace_normal()
+                                            .line_clamp(2)
+                                            .child(aligner)
+                                            .tooltip(move |_, cx| {
+                                                cx.new(|_| NameTooltip {
+                                                    text: aligner_tip.clone().into(),
+                                                })
+                                                .into()
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("aligner-dir-browse")
+                                            .flex_shrink_0()
+                                            .px_2p5()
+                                            .py_1p5()
+                                            .border_l_1()
+                                            .border_color(LINE_SOFT)
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(ACCENT_SOFT))
+                                            .child(
+                                                svg()
+                                                    .size(px(15.))
+                                                    .path("icons/folder.svg")
+                                                    .text_color(MUTED),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.pick_aligner_dir(cx)
+                                            })),
+                                    ),
                             )
-                            .child(toggle(
-                                "spk",
-                                show_spk,
+                            .child(model_download_row(
+                                "align-dl-btn",
+                                "align-dl-cancel",
+                                align_ready,
+                                align_dl_busy,
+                                align_dl.as_ref(),
                                 cx.listener(|this, _, _, cx| {
-                                    this.settings.export_show_speaker =
-                                        !this.settings.export_show_speaker;
-                                    this.mark_settings_dirty(cx);
+                                    this.start_model_download(ModelId::QwenAlign06B, cx);
+                                }),
+                                cx.listener(|this, _, _, cx| {
+                                    this.cancel_model_download(ModelId::QwenAlign06B, cx);
                                 }),
                             ))
                             .into_any_element(),
@@ -1564,35 +1867,44 @@ impl OneAsrApp {
     }
 
     fn render_status_bar(&self) -> impl IntoElement {
-        let total = self.tasks.len();
-        let pending = self
+        // Exclude exit tombstones so counts do not include rows mid-fade.
+        let live: Vec<&Task> = self
             .tasks
+            .iter()
+            .filter(|t| !self.exiting.contains_key(&t.id))
+            .collect();
+        let total = live.len();
+        let pending = live
             .iter()
             .filter(|t| t.status == TaskStatus::Pending)
             .count();
-        let queued = self
-            .tasks
+        let queued = live
             .iter()
             .filter(|t| t.status == TaskStatus::Queued)
             .count();
-        let done = self
-            .tasks
+        let done = live
             .iter()
             .filter(|t| t.status == TaskStatus::Done)
             .count();
-        let err = self
-            .tasks
+        let err = live
             .iter()
             .filter(|t| t.status == TaskStatus::Error)
             .count();
-        let proc = self
-            .tasks
+        let proc = live
             .iter()
             .filter(|t| t.status == TaskStatus::Processing)
             .count();
         let queue = format_queue_status(total, pending, queued, proc, done, err);
         let batch = self.batch_mode;
-        let batch_prog = self.batch_goal.map(|g| format_batch_progress(self.batch_done, g));
+        // Sequential batch: one line only — 进度 n/m (no "共 n · 处理中" echo).
+        let left: SharedString = if batch {
+            self.batch_goal
+                .map(|g| format_batch_progress(self.batch_done, g))
+                .unwrap_or_else(|| "进度 …".into())
+                .into()
+        } else {
+            queue.into()
+        };
         let model = self.model_status;
         let model_color = match model {
             ModelStatus::Ready => ACCENT,
@@ -1611,23 +1923,21 @@ impl OneAsrApp {
             .border_color(LINE)
             .text_xs()
             .text_color(MUTED)
-            // Left: queue + batch progress.
+            // Left: idle = queue summary; batch = progress only.
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
                     .min_w_0()
-                    .child(queue)
-                    .when(batch, |el| {
-                        el.child(div().text_color(ACCENT).child("顺序处理中"))
-                    })
-                    .children(batch_prog.map(|p| {
+                    .child(
                         div()
-                            .text_color(ACCENT)
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(p)
-                    })),
+                            .when(batch, |el| {
+                                el.text_color(ACCENT)
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                            })
+                            .child(left),
+                    ),
             )
             // Right: model probe (常驻) OR transient interaction hint.
             .child(
@@ -1683,29 +1993,141 @@ impl OneAsrApp {
     }
 }
 
-/// Simple brand mark: rounded tile + waveform bars.
+/// Compact download row under a model path field.
+fn model_download_row(
+    id: &'static str,
+    cancel_id: &'static str,
+    ready: bool,
+    busy: bool,
+    progress: Option<&DownloadProgress>,
+    on_download: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let dest_hint = progress
+        .map(|p| p.model_dir.display().to_string())
+        .unwrap_or_else(|| "安装目录 models/".into());
+    let status_text = if let Some(p) = progress {
+        if p.state == DownloadState::Downloading {
+            format!("{} · {}", p.label(), dest_hint)
+        } else {
+            p.label()
+        }
+    } else if ready {
+        "已就绪".to_string()
+    } else {
+        format!("未下载 · 将保存到 {dest_hint}")
+    };
+    let status_color = if ready && !busy {
+        ACCENT
+    } else if busy {
+        WARN
+    } else if progress.is_some_and(|p| p.state == DownloadState::Failed) {
+        DANGER
+    } else {
+        MUTED
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(status_color)
+                .whitespace_normal()
+                .line_clamp(2)
+                .child(status_text),
+        )
+        .child(
+            div().flex().items_center().gap_1p5().children({
+                let mut kids: Vec<gpui::AnyElement> = Vec::new();
+                if busy {
+                    kids.push(
+                        div()
+                            .id(cancel_id)
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(LINE)
+                            .bg(BG)
+                            .text_xs()
+                            .text_color(MUTED)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(DANGER_SOFT).text_color(DANGER).border_color(DANGER))
+                            .on_click(on_cancel)
+                            .child("取消")
+                            .into_any_element(),
+                    );
+                    kids.push(
+                        div()
+                            .id(id)
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(LINE)
+                            .bg(BG)
+                            .text_xs()
+                            .text_color(MUTED)
+                            .opacity(0.7)
+                            .child("下载中…")
+                            .into_any_element(),
+                    );
+                } else {
+                    let label = if ready { "重新下载" } else { "下载模型" };
+                    kids.push(
+                        div()
+                            .id(id)
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(ACCENT)
+                            .bg(ACCENT_SOFT)
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(ACCENT)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ACCENT).text_color(gpui::rgb(0xffffff)))
+                            .on_click(on_download)
+                            .child(label)
+                            .into_any_element(),
+                    );
+                }
+                kids
+            }),
+        )
+}
+
+/// Brand mark: teal tile + SVG “waveform → subtitle lines”.
 fn app_logo() -> impl IntoElement {
     div()
-        .size(px(32.))
-        .rounded_lg()
+        .size(px(34.))
+        .rounded_xl()
         .bg(LOGO)
+        .shadow(vec![BoxShadow {
+            color: hsla(174. / 360., 0.55, 0.28, 0.22),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(4.),
+            spread_radius: px(0.),
+        }])
         .flex()
         .items_center()
         .justify_center()
-        .gap_1()
-        .child(logo_bar(10.))
-        .child(logo_bar(16.))
-        .child(logo_bar(12.))
-        .child(logo_bar(18.))
-        .child(logo_bar(8.))
-}
-
-fn logo_bar(h: f32) -> impl IntoElement {
-    div()
-        .w(px(2.5))
-        .h(px(h))
-        .rounded_full()
-        .bg(gpui::rgb(0xffffff))
+        .child(
+            svg()
+                .size(px(20.))
+                .path("icons/logo.svg")
+                .text_color(gpui::rgb(0xffffff)),
+        )
 }
 
 #[derive(Clone, Copy)]
@@ -1926,30 +2348,108 @@ fn media_type_icon(is_video: bool, status: TaskStatus) -> impl IntoElement {
         )
 }
 
-/// Soft empty-state mark: mist circle + waveform bars (drop hint).
-fn empty_state_icon() -> impl IntoElement {
-    div()
-        .size(px(64.))
-        .rounded_full()
-        .bg(ACCENT_MIST)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap_1()
-        .child(empty_bar(12., 0.45))
-        .child(empty_bar(22., 0.7))
-        .child(empty_bar(16., 0.55))
-        .child(empty_bar(26., 0.85))
-        .child(empty_bar(14., 0.5))
+/// Decorative full-width empty-state strip (not real audio FFT).
+/// Idle = flat baseline across the content width. Pointer locally bulges a
+/// soft waveform under the cursor; the bulge eases in/out and follows smoothly.
+const EMPTY_WAVE_BARS: usize = 64;
+const EMPTY_WAVE_MAX_H: f32 = 78.0;
+const EMPTY_WAVE_FLAT_H: f32 = 5.0;
+/// How wide the local bulge is (fraction of strip width, ~gaussian sigma).
+const EMPTY_WAVE_SIGMA: f32 = 0.09;
+
+impl OneAsrApp {
+    fn render_empty_wave(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.empty_wave_clock.elapsed().as_secs_f32();
+        let heights = empty_wave_heights(
+            t,
+            self.empty_wave_smooth_x,
+            self.empty_wave_amp,
+        );
+        let entity = cx.entity().clone();
+
+        div()
+            .id("empty-wave")
+            .w_full()
+            .h(px(EMPTY_WAVE_MAX_H + 24.0))
+            .relative()
+            .cursor_default()
+            // Capture layout bounds so mouse X can be mapped 0..=1 along the strip.
+            .child(
+                canvas(
+                    {
+                        let entity = entity.clone();
+                        move |bounds, _window, cx| {
+                            entity.update(cx, |app, _cx| {
+                                app.empty_wave_bounds = Some(bounds);
+                            });
+                        }
+                    },
+                    |_bounds, (), _window, _cx| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if let Some(b) = this.empty_wave_bounds {
+                    let w = f32::from(b.size.width).max(1.0);
+                    let local = (f32::from(event.position.x) - f32::from(b.left())) / w;
+                    this.empty_wave_cursor_x = local.clamp(0.0, 1.0);
+                    if !this.empty_wave_hover {
+                        this.empty_wave_hover = true;
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.empty_wave_hover != *hovered {
+                    this.empty_wave_hover = *hovered;
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .px_6()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .children((0..EMPTY_WAVE_BARS).map(move |i| {
+                        let h = heights[i];
+                        let u = ((h - EMPTY_WAVE_FLAT_H)
+                            / (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H))
+                            .clamp(0.0, 1.0);
+                        let opacity = 0.40 + 0.55 * u;
+                        div()
+                            .w(px(2.5))
+                            .h(px(h))
+                            .rounded_full()
+                            .bg(ACCENT)
+                            .opacity(opacity)
+                    })),
+            )
+    }
 }
 
-fn empty_bar(h: f32, opacity: f32) -> impl IntoElement {
-    div()
-        .w(px(3.))
-        .h(px(h))
-        .rounded_full()
-        .bg(ACCENT)
-        .opacity(opacity)
+/// Bar heights in px. Flat when `amp≈0`; local gaussian bulge at `cx` (0..=1) otherwise.
+fn empty_wave_heights(t_secs: f32, cx: f32, amp: f32) -> [f32; EMPTY_WAVE_BARS] {
+    let mut out = [EMPTY_WAVE_FLAT_H; EMPTY_WAVE_BARS];
+    if amp < 0.004 {
+        return out;
+    }
+    let n = (EMPTY_WAVE_BARS - 1) as f32;
+    let sigma2 = 2.0 * EMPTY_WAVE_SIGMA * EMPTY_WAVE_SIGMA;
+    for i in 0..EMPTY_WAVE_BARS {
+        let x = i as f32 / n;
+        let dx = x - cx;
+        let env = (-(dx * dx) / sigma2).exp();
+        // Gentle shimmer only under the bulge (not whole-line jitter).
+        let ripple = (x * TAU * 5.0 - t_secs * 5.5).sin() * 0.18;
+        let fine = (x * TAU * 11.0 + t_secs * 3.2).sin() * 0.07;
+        let u = (env * (0.88 + ripple + fine)).clamp(0.0, 1.0) * amp;
+        out[i] = EMPTY_WAVE_FLAT_H + u * (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H);
+    }
+    out
 }
 
 /// Lightweight hover tooltip for truncated filenames.
@@ -2052,29 +2552,4 @@ fn icon_svg_path(kind: IconKind) -> &'static str {
         IconKind::Trash => "icons/trash.svg",
         IconKind::Folder => "icons/folder.svg",
     }
-}
-
-fn toggle(
-    id: &'static str,
-    on: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .w(px(40.))
-        .h(px(22.))
-        .rounded_full()
-        .bg(if on { ACCENT } else { LINE })
-        .flex()
-        .items_center()
-        .px_1()
-        .cursor_pointer()
-        .on_click(on_click)
-        .child(
-            div()
-                .size(px(16.))
-                .rounded_full()
-                .bg(PANEL)
-                .when(on, |el| el.ml_auto()),
-        )
 }
