@@ -13,6 +13,7 @@
 //! `output/{stem}.srt` (atomic write). On success the scratch dir is removed.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 use qwen_forced_aligner_rs::{
@@ -42,22 +43,37 @@ pub enum AsrError {
 
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
 
-/// Fine-grained pipeline stage for live UI status.
+/// Fine-grained pipeline stage for live UI status and timing breakdown.
+///
+/// Order in a successful run:
+/// `Converting` → `Planning` → `LoadingAsr` → `Transcribing` →
+/// `LoadingAligner` → `Aligning` → `Exporting`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrStage {
-    LoadingModel,
+    /// ffmpeg → 16 kHz mono master WAV.
     Converting,
+    /// VAD + chunk plan (or single-chunk plan for short audio).
+    Planning,
+    /// Load Qwen ASR weights.
+    LoadingAsr,
+    /// ASR inference over planned chunks.
     Transcribing,
+    /// Load ForcedAligner weights.
+    LoadingAligner,
+    /// Forced alignment over transcript chunks.
     Aligning,
+    /// Sentence boundary + SRT write.
     Exporting,
 }
 
 impl AsrStage {
     pub fn label(self) -> &'static str {
         match self {
-            Self::LoadingModel => "加载模型",
             Self::Converting => "转码音频",
+            Self::Planning => "分段规划",
+            Self::LoadingAsr => "加载 ASR",
             Self::Transcribing => "转写中",
+            Self::LoadingAligner => "加载 Aligner",
             Self::Aligning => "打轴中",
             Self::Exporting => "导出字幕",
         }
@@ -88,6 +104,126 @@ impl StageUpdate {
             _ => self.stage.label().to_string(),
         }
     }
+}
+
+/// Wall time spent in one pipeline stage (same [`AsrStage`] across chunk updates).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageTiming {
+    pub stage: AsrStage,
+    pub elapsed_ms: u64,
+}
+
+/// End-to-end processing timing for one task (UI hover breakdown).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskTiming {
+    pub stages: Vec<StageTiming>,
+    /// Wall-clock from job start to finish (may exceed sum of stages slightly).
+    pub total_ms: u64,
+}
+
+impl TaskTiming {
+    pub fn total_label(&self) -> String {
+        format_process_ms(self.total_ms)
+    }
+
+    /// No stage rows (failures before the first `on_stage`).
+    ///
+    /// `total_ms` alone is not enough to show a chip — stages drive the UI.
+    pub fn is_empty(&self) -> bool {
+        self.stages.is_empty()
+    }
+
+    /// Worth showing the 用时 chip + hover breakdown.
+    pub fn has_breakdown(&self) -> bool {
+        !self.is_empty()
+    }
+}
+
+/// Human-readable process duration: `ms` / `s` / `m:ss` / `h:mm:ss`.
+pub fn format_process_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 60_000 {
+        let s = ms as f64 / 1000.0;
+        if s < 10.0 {
+            format!("{s:.1} s")
+        } else {
+            format!("{} s", s.round() as u64)
+        }
+    } else {
+        let total_s = (ms + 500) / 1000;
+        let h = total_s / 3600;
+        let m = (total_s % 3600) / 60;
+        let s = total_s % 60;
+        if h > 0 {
+            format!("{h}:{m:02}:{s:02}")
+        } else {
+            format!("{m}:{s:02}")
+        }
+    }
+}
+
+/// Accumulates per-stage wall time from [`StageUpdate`]s on the ASR worker.
+///
+/// Same [`AsrStage`] across chunk progress stays one open interval; stage
+/// changes close the previous interval. Consecutive identical stages are merged.
+#[derive(Debug)]
+pub struct StageClock {
+    wall_start: Instant,
+    current: Option<(AsrStage, Instant)>,
+    stages: Vec<StageTiming>,
+}
+
+impl Default for StageClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StageClock {
+    pub fn new() -> Self {
+        Self {
+            wall_start: Instant::now(),
+            current: None,
+            stages: Vec::new(),
+        }
+    }
+
+    pub fn note(&mut self, update: &StageUpdate) {
+        let stage = update.stage;
+        match self.current {
+            Some((cur, _)) if cur == stage => {}
+            Some((cur, t0)) => {
+                let elapsed_ms = t0.elapsed().as_millis() as u64;
+                push_or_merge_stage(&mut self.stages, cur, elapsed_ms);
+                self.current = Some((stage, Instant::now()));
+            }
+            None => {
+                self.current = Some((stage, Instant::now()));
+            }
+        }
+    }
+
+    pub fn finish(mut self) -> TaskTiming {
+        if let Some((stage, t0)) = self.current.take() {
+            let elapsed_ms = t0.elapsed().as_millis() as u64;
+            push_or_merge_stage(&mut self.stages, stage, elapsed_ms);
+        }
+        TaskTiming {
+            stages: self.stages,
+            total_ms: self.wall_start.elapsed().as_millis() as u64,
+        }
+    }
+}
+
+fn push_or_merge_stage(stages: &mut Vec<StageTiming>, stage: AsrStage, elapsed_ms: u64) {
+    if let Some(last) = stages.last_mut() {
+        if last.stage == stage {
+            last.elapsed_ms = last.elapsed_ms.saturating_add(elapsed_ms);
+            return;
+        }
+    }
+    stages.push(StageTiming { stage, elapsed_ms });
 }
 
 pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
@@ -266,7 +402,8 @@ pub fn process_media_file_with_progress(
     let duration = wav_duration_sec(&wav).unwrap_or(0.0) as f32;
     let chunk_sec = settings.chunk_target_seconds_clamped() as f32;
 
-    // 2. VAD plan (ranges only — no chunk files yet)
+    // 2. VAD + chunk plan (own stage so convert timing stays pure)
+    on_stage(StageUpdate::new(AsrStage::Planning));
     let (chunks, vad_speech) = if duration > chunk_sec {
         let speech = vad::run_vad(&wav)?;
         let silences = vad::speech_to_silences(&speech, duration, MIN_SILENCE_FALLBACK);
@@ -302,7 +439,7 @@ pub fn process_media_file_with_progress(
     let chunk_tmp = work_dir.join("chunk_tmp.wav");
 
     // 3. Load ASR once → all chunks → drop
-    on_stage(StageUpdate::new(AsrStage::LoadingModel));
+    on_stage(StageUpdate::new(AsrStage::LoadingAsr));
     check_asr_model_dir(&settings.asr_model_dir)?;
     let compute = resolve_compute_backend(&settings.backend)?;
     #[cfg(debug_assertions)]
@@ -386,7 +523,7 @@ pub fn process_media_file_with_progress(
     }
 
     // 4. Load Aligner once → all chunks → drop (re-slice from master as needed)
-    on_stage(StageUpdate::new(AsrStage::LoadingModel));
+    on_stage(StageUpdate::new(AsrStage::LoadingAligner));
     check_aligner_model_dir(&settings.aligner_model_dir)?;
     let aligner = Qwen3ForcedAligner::load(
         &settings.aligner_model_dir,
@@ -526,5 +663,82 @@ mod tests {
         let err = check_asr_model_dir(&dir).unwrap_err().to_string();
         assert!(err.contains("不全") || err.contains("缺少") || err.contains("不存在"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn format_process_ms_buckets() {
+        assert_eq!(format_process_ms(420), "420 ms");
+        assert_eq!(format_process_ms(1500), "1.5 s");
+        assert_eq!(format_process_ms(12_400), "12 s");
+        assert_eq!(format_process_ms(68_000), "1:08");
+        assert_eq!(format_process_ms(3_725_000), "1:02:05");
+    }
+
+    #[test]
+    fn stage_clock_keeps_same_stage_across_chunks() {
+        let mut clock = StageClock::new();
+        clock.note(&StageUpdate::new(AsrStage::Converting));
+        clock.note(&StageUpdate::with_chunk(AsrStage::Transcribing, 1, 3));
+        clock.note(&StageUpdate::with_chunk(AsrStage::Transcribing, 2, 3));
+        clock.note(&StageUpdate::with_chunk(AsrStage::Transcribing, 3, 3));
+        clock.note(&StageUpdate::new(AsrStage::Exporting));
+        let timing = clock.finish();
+        assert_eq!(timing.stages.len(), 3);
+        assert_eq!(timing.stages[0].stage, AsrStage::Converting);
+        assert_eq!(timing.stages[1].stage, AsrStage::Transcribing);
+        assert_eq!(timing.stages[2].stage, AsrStage::Exporting);
+    }
+
+    #[test]
+    fn stage_clock_full_pipeline_order() {
+        let mut clock = StageClock::new();
+        for stage in [
+            AsrStage::Converting,
+            AsrStage::Planning,
+            AsrStage::LoadingAsr,
+            AsrStage::Transcribing,
+            AsrStage::LoadingAligner,
+            AsrStage::Aligning,
+            AsrStage::Exporting,
+        ] {
+            clock.note(&StageUpdate::new(stage));
+        }
+        // Multi-chunk progress must not split Transcribing.
+        // (already closed above — re-open path via a fresh clock below)
+        let timing = clock.finish();
+        let stages: Vec<_> = timing.stages.iter().map(|s| s.stage).collect();
+        assert_eq!(
+            stages,
+            vec![
+                AsrStage::Converting,
+                AsrStage::Planning,
+                AsrStage::LoadingAsr,
+                AsrStage::Transcribing,
+                AsrStage::LoadingAligner,
+                AsrStage::Aligning,
+                AsrStage::Exporting,
+            ]
+        );
+        assert_ne!(AsrStage::LoadingAsr.label(), AsrStage::LoadingAligner.label());
+        assert_eq!(AsrStage::Planning.label(), "分段规划");
+        assert!(timing.has_breakdown());
+    }
+
+    #[test]
+    fn finish_without_notes_is_empty_for_ui() {
+        let timing = StageClock::new().finish();
+        assert!(timing.stages.is_empty());
+        assert!(timing.is_empty());
+        assert!(!timing.has_breakdown());
+    }
+
+    #[test]
+    fn push_or_merge_combines_adjacent_same_stage() {
+        // Unit-level: defensive merge used when consecutive closes land on the same stage.
+        let mut stages = Vec::new();
+        push_or_merge_stage(&mut stages, AsrStage::Transcribing, 10);
+        push_or_merge_stage(&mut stages, AsrStage::Transcribing, 5);
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].elapsed_ms, 15);
     }
 }

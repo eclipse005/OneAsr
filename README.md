@@ -63,11 +63,11 @@ UI 图标/音效在编译期嵌入 exe，安装目录**无** `assets\`。
 
 ```text
 ffmpeg → 16k mono
-  → VAD 分段（~30–180s）
+  → VAD 分段规划（30–180s 可调）
   → load ASR 一次 → 各段转写 → drop ASR
   → load Aligner 一次 → 各段对齐 → drop Aligner
   → 标点还原 + normalize_word_tokens
-  → VoxTrans 断句（标点硬切 + 字幕长度 DP）
+  → 断句（标点硬切 + 字幕长度 DP）
   → output/{stem}.srt
 ```
 

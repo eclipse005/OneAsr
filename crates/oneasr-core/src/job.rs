@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::asr::TaskTiming;
 use crate::lang::normalize_source_language;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +65,8 @@ pub struct Task {
     pub queue_seq: Option<u64>,
     /// Output SRT path when done.
     pub output_srt: Option<PathBuf>,
+    /// Per-stage processing wall time (set when a run finishes or fails mid-way).
+    pub timing: Option<TaskTiming>,
 }
 
 impl Task {
@@ -91,6 +94,7 @@ impl Task {
             error: None,
             queue_seq: None,
             output_srt: None,
+            timing: None,
         }
     }
 

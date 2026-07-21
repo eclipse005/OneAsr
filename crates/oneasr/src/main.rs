@@ -1,7 +1,8 @@
 //! OneAsr — light-themed batch list for local Qwen ASR + align.
 
-// Release / installed builds: no console window (black cmd flash).
-// Debug keeps a console for logs (`cargo run`).
+// Release / portable: GUI PE subsystem (no black console on double-click).
+// Debug: keep the CONSOLE subsystem so `cargo run` logs work without stdio hacks.
+// Release is additionally forced in `build.rs` + verified by `pack-release.ps1`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod assets;
@@ -25,11 +26,12 @@ use gpui::{
 use oneasr_core::{
     accept_input_path, check_asr_model_dir, demote_current_thread, download_model,
     empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
-    init_native_library_path, init_runtime, is_cuda_runtime_ready, next_queue_seq,
-    normalize_source_language, process_media_file_with_progress, probe_duration_async,
-    resolve_app_root, source_language_by_id, AsrStage, DownloadHandle, DownloadProgress,
-    DownloadState, DurationState, ModelId, ModelKind, Settings, StageUpdate, Task, TaskStatus,
-    CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
+    format_process_ms, init_native_library_path, init_runtime, is_cuda_runtime_ready,
+    next_queue_seq, normalize_source_language, process_media_file_with_progress,
+    probe_duration_async, resolve_app_root, source_language_by_id, AsrStage, DownloadHandle,
+    DownloadProgress, DownloadState, DurationState, ModelId, ModelKind, Settings, StageClock,
+    StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC,
+    CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
 };
 
 actions!(oneasr, [DismissMenus]);
@@ -65,6 +67,8 @@ enum WorkerMsg {
     Finished {
         id: String,
         result: Result<PathBuf, String>,
+        /// Always produced by the worker; UI stores only when `has_breakdown()`.
+        timing: TaskTiming,
     },
     /// Model download progress / completion (background thread).
     ModelDownload(DownloadProgress),
@@ -130,6 +134,16 @@ struct OneAsrApp {
     settings_anim_t0: Instant,
     /// Row currently under the pointer (action highlight).
     hover_row: Option<String>,
+    /// Task id whose processing-time popover is open (hover).
+    timing_popover: Option<String>,
+    /// Hover candidate for open delay (id + first-hover Instant).
+    timing_hover_since: Option<(String, Instant)>,
+    /// Leave grace: close only if still left after TIMING_LEAVE_DELAY_MS.
+    timing_leave_since: Option<(String, Instant)>,
+    /// Popover open animation: progress source → target (0 hidden, 1 shown).
+    timing_pop_from: f32,
+    timing_pop_to: f32,
+    timing_pop_t0: Instant,
     /// Task id whose language dropdown is open (`None` = closed).
     lang_menu: Option<String>,
     /// Settings panel: default-language dropdown open.
@@ -202,13 +216,20 @@ impl OneAsrApp {
                         } => {
                             let id_for_progress = id.clone();
                             let ptx = worker_tx.clone();
-                            let result = run_task(&path, &name, &settings, move |update| {
+                            let mut clock = StageClock::new();
+                            let result = run_task(&path, &name, &settings, |update| {
+                                clock.note(&update);
                                 let _ = ptx.send(WorkerMsg::Progress {
                                     id: id_for_progress.clone(),
                                     stage: SharedString::from(update.label()),
                                 });
                             });
-                            let _ = worker_tx.send(WorkerMsg::Finished { id, result });
+                            let timing = clock.finish();
+                            let _ = worker_tx.send(WorkerMsg::Finished {
+                                id,
+                                result,
+                                timing,
+                            });
                         }
                     }
                 }
@@ -240,6 +261,12 @@ impl OneAsrApp {
             settings_to: 0.0,
             settings_anim_t0: Instant::now(),
             hover_row: None,
+            timing_popover: None,
+            timing_hover_since: None,
+            timing_leave_since: None,
+            timing_pop_from: 0.0,
+            timing_pop_to: 0.0,
+            timing_pop_t0: Instant::now(),
             lang_menu: None,
             settings_lang_open: false,
             empty_wave_hover: false,
@@ -604,7 +631,7 @@ impl OneAsrApp {
                     self.active_stage = Some((id, stage));
                     cx.notify();
                 }
-                Ok(WorkerMsg::Finished { id, result }) => {
+                Ok(WorkerMsg::Finished { id, result, timing }) => {
                     self.busy = false;
                     if self
                         .active_stage
@@ -615,6 +642,7 @@ impl OneAsrApp {
                     }
                     self.refresh_model_probe();
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                        t.timing = timing.has_breakdown().then_some(timing);
                         match result {
                             Ok(srt) => {
                                 t.status = TaskStatus::Done;
@@ -763,6 +791,123 @@ impl OneAsrApp {
         self.settings_lang_open = false;
     }
 
+    /// Language menus and the timing card share MENU_Z — only one floating surface.
+    fn close_floating_overlays(&mut self) {
+        self.close_lang_selects();
+        self.close_timing_popover();
+    }
+
+    /// Eased 0..=1 progress for the processing-time popover.
+    fn timing_popover_progress(&self) -> f32 {
+        let t = (self.timing_pop_t0.elapsed().as_secs_f32() / TIMING_POP_ANIM_SECS).min(1.0);
+        let e = ease_out_cubic(t);
+        self.timing_pop_from + (self.timing_pop_to - self.timing_pop_from) * e
+    }
+
+    /// Whether the popover still paints (open or closing animation).
+    fn timing_popover_visible(&self) -> bool {
+        self.timing_popover.is_some() && self.timing_popover_progress() > 0.01
+    }
+
+    fn open_timing_popover(&mut self, id: &str) {
+        if self.timing_popover.as_deref() == Some(id) && self.timing_pop_to >= 1.0 {
+            return;
+        }
+        let cur = self.timing_popover_progress();
+        self.timing_popover = Some(id.to_string());
+        self.timing_pop_from = cur;
+        self.timing_pop_to = 1.0;
+        self.timing_pop_t0 = Instant::now();
+    }
+
+    fn close_timing_popover(&mut self) {
+        self.timing_hover_since = None;
+        self.timing_leave_since = None;
+        if self.timing_popover.is_none() && self.timing_pop_to <= 0.0 {
+            return;
+        }
+        let cur = self.timing_popover_progress();
+        self.timing_pop_from = cur;
+        self.timing_pop_to = 0.0;
+        self.timing_pop_t0 = Instant::now();
+        // Keep id until anim finishes so exit still paints the right card.
+        if cur < 0.01 {
+            self.timing_popover = None;
+        }
+    }
+
+    /// Hover entered the timing chip / card for `id`.
+    fn timing_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
+        // Do not stack under an open language menu.
+        if self.lang_menu.is_some() || self.settings_lang_open {
+            return;
+        }
+        // Cancel pending leave.
+        self.timing_leave_since = None;
+        match &self.timing_hover_since {
+            Some((hid, _)) if hid == id => {}
+            _ => {
+                self.timing_hover_since = Some((id.to_string(), Instant::now()));
+            }
+        }
+        // Already open: keep to=1.
+        if self.timing_popover.as_deref() == Some(id) {
+            if self.timing_pop_to < 1.0 {
+                let cur = self.timing_popover_progress();
+                self.timing_pop_from = cur;
+                self.timing_pop_to = 1.0;
+                self.timing_pop_t0 = Instant::now();
+            }
+            cx.notify();
+            return;
+        }
+        // Open delay handled in `tick_timing_popover`.
+        cx.notify();
+    }
+
+    /// Hover left chip/card; schedule close after a short grace.
+    fn timing_hover_leave(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self
+            .timing_hover_since
+            .as_ref()
+            .is_some_and(|(hid, _)| hid == id)
+        {
+            self.timing_hover_since = None;
+        }
+        if self.timing_popover.as_deref() == Some(id) || self.timing_pop_to > 0.0 {
+            self.timing_leave_since = Some((id.to_string(), Instant::now()));
+        }
+        cx.notify();
+    }
+
+    /// Promote delayed hover → open; honor leave grace; clear id when closed.
+    fn tick_timing_popover(&mut self) {
+        if let Some((id, since)) = self.timing_hover_since.clone() {
+            if since.elapsed() >= Duration::from_millis(TIMING_HOVER_DELAY_MS)
+                && self.timing_popover.as_deref() != Some(id.as_str())
+            {
+                self.open_timing_popover(&id);
+            }
+        }
+        if let Some((id, since)) = self.timing_leave_since.clone() {
+            if since.elapsed() >= Duration::from_millis(TIMING_LEAVE_DELAY_MS)
+                && self.timing_hover_since.is_none()
+            {
+                if self.timing_popover.as_deref() == Some(id.as_str()) {
+                    self.close_timing_popover();
+                } else {
+                    self.timing_leave_since = None;
+                }
+            }
+        }
+        if self.timing_pop_to <= 0.0
+            && self.timing_popover.is_some()
+            && self.timing_popover_progress() < 0.01
+        {
+            self.timing_popover = None;
+        }
+    }
+
     /// Open / close the per-task language dropdown (closes the other select).
     fn toggle_lang_menu(&mut self, id: &str, cx: &mut Context<Self>) {
         let locked = self
@@ -771,12 +916,12 @@ impl OneAsrApp {
             .find(|t| t.id == id)
             .is_some_and(|t| t.status.locks_row_actions() || self.exiting.contains_key(id));
         if locked {
-            self.close_lang_selects();
+            self.close_floating_overlays();
             self.flash_hint("处理中的任务不能改语言", cx);
             return;
         }
         let was_open = self.lang_menu.as_deref() == Some(id);
-        self.close_lang_selects();
+        self.close_floating_overlays();
         if !was_open {
             self.lang_menu = Some(id.to_string());
         }
@@ -786,7 +931,7 @@ impl OneAsrApp {
     /// Open / close settings default-language dropdown (closes list select).
     fn toggle_settings_lang(&mut self, cx: &mut Context<Self>) {
         let was_open = self.settings_lang_open;
-        self.close_lang_selects();
+        self.close_floating_overlays();
         if !was_open {
             self.settings_lang_open = true;
         }
@@ -803,12 +948,12 @@ impl OneAsrApp {
         match target {
             LangSelectTarget::Task(id) => {
                 let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
-                    self.close_lang_selects();
+                    self.close_floating_overlays();
                     cx.notify();
                     return;
                 };
                 if task.status.locks_row_actions() {
-                    self.close_lang_selects();
+                    self.close_floating_overlays();
                     self.flash_hint("处理中的任务不能改语言", cx);
                     return;
                 }
@@ -820,11 +965,11 @@ impl OneAsrApp {
             }
         }
         // Single exit boundary: any successful (or abandoned) pick leaves no open select.
-        self.close_lang_selects();
+        self.close_floating_overlays();
         cx.notify();
     }
 
-    /// Close all language selects (Escape / click-outside scrim).
+    /// Close language selects (Escape / click-outside scrim). Timing is hover-only.
     fn dismiss_menus(&mut self, cx: &mut Context<Self>) {
         if self.lang_menu.is_none() && !self.settings_lang_open {
             return;
@@ -849,7 +994,8 @@ impl OneAsrApp {
         self.settings_to = if open { 1.0 } else { 0.0 };
         self.settings_anim_t0 = Instant::now();
         self.settings_open = open;
-        self.close_lang_selects();
+        // Drawer chrome shares the list surface — drop any floating overlays.
+        self.close_floating_overlays();
         if open {
             sfx::play(sfx::Sfx::Drawer);
         }
@@ -874,7 +1020,10 @@ impl OneAsrApp {
         // Keep RAF while amp eases out after mouse leaves (smooth collapse to flat).
         let empty_wave =
             self.tasks.is_empty() && (self.empty_wave_hover || self.empty_wave_amp > 0.008);
-        drawer || processing || row_anim || empty_wave
+        let timing_pop = (self.timing_popover_progress() - self.timing_pop_to).abs() > 0.002
+            || self.timing_hover_since.is_some()
+            || self.timing_leave_since.is_some();
+        drawer || processing || row_anim || empty_wave || timing_pop
     }
 
     /// Advance empty-wave smoothing (cursor follow + amp ease). Call once per frame while active.
@@ -1124,22 +1273,28 @@ impl OneAsrApp {
         task.status = TaskStatus::Processing;
         task.queue_seq = None;
         task.error = None;
-        // Processing locks row language edit — drop a live select on this row.
-        if self.lang_menu.as_deref() == Some(id) {
-            self.lang_menu = None;
-        }
-        self.busy = true;
-        self.active_stage = Some((
-            task.id.clone(),
-            SharedString::from(AsrStage::LoadingModel.label()),
-        ));
-
+        task.timing = None;
         let id = task.id.clone();
         let path = task.path.clone();
         let name = task.name.clone();
+        let task_lang = task.language.clone();
+        // Processing locks row language edit — drop a live select on this row.
+        if self.lang_menu.as_deref() == Some(id.as_str()) {
+            self.lang_menu = None;
+        }
+        if self.timing_popover.as_deref() == Some(id.as_str()) {
+            self.close_timing_popover();
+        }
+        self.busy = true;
+        // Match the pipeline's first real `on_stage` (Converting).
+        self.active_stage = Some((
+            id.clone(),
+            SharedString::from(AsrStage::Converting.label()),
+        ));
+
         // Per-task language overrides settings default for this run only.
         let mut settings = self.settings.clone();
-        settings.language = normalize_source_language(&task.language);
+        settings.language = normalize_source_language(&task_lang);
 
         // Hand off to the dedicated ASR worker — never block the UI thread.
         if self
@@ -1185,6 +1340,14 @@ impl OneAsrApp {
         if self.lang_menu.as_deref() == Some(id) {
             self.lang_menu = None;
         }
+        if self.timing_popover.as_deref() == Some(id)
+            || self
+                .timing_hover_since
+                .as_ref()
+                .is_some_and(|(hid, _)| hid == id)
+        {
+            self.close_timing_popover();
+        }
         cx.notify();
     }
 
@@ -1220,6 +1383,7 @@ impl OneAsrApp {
         self.hover_row = None;
         // List select targets a row; bulk clear invalidates any open chip menu.
         self.lang_menu = None;
+        self.close_timing_popover();
         if had_proc {
             self.flash_hint("已清空队列，当前任务继续处理", cx);
         }
@@ -1260,6 +1424,7 @@ impl Render for OneAsrApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Drop select state that can no longer paint (locked / deleted / drawer closed).
         self.sync_lang_select_state();
+        self.tick_timing_popover();
 
         // Drive drawer / row-hover fades at display refresh.
         if self.animations_active() {
@@ -1372,6 +1537,14 @@ const STATUS_COL_PX: f32 = 112.;
 const LANG_MENU_W: f32 = 168.;
 /// Floating language menu max height before it scrolls.
 const LANG_MENU_MAX_H: f32 = 280.;
+/// Processing-time popover enter/exit (seconds).
+const TIMING_POP_ANIM_SECS: f32 = 0.18;
+/// Hover delay before opening the timing card (ms).
+const TIMING_HOVER_DELAY_MS: u64 = 100;
+/// Leave grace so pointer can travel chip → card without flicker (ms).
+const TIMING_LEAVE_DELAY_MS: u64 = 120;
+/// Timing breakdown card width.
+const TIMING_POP_W: f32 = 220.;
 
 // ── Popover select layer model (GPUI has no built-in Select) ─────────────────
 // Two deferred layers, sorted by priority (higher paints + hit-tests on top):
@@ -1654,7 +1827,25 @@ impl OneAsrApp {
                     .map(|(_, s)| s.as_ref());
                 let (status_label, status_color, status_bg) =
                     status_pill_style(status, phase, qn, stage_for_row);
-                let meta_left = format!("{size_l}  ·  {dur}");
+                let timing_total = task
+                    .timing
+                    .as_ref()
+                    .filter(|t| t.has_breakdown())
+                    .map(|t| t.total_label());
+                let timing_for_card = task
+                    .timing
+                    .as_ref()
+                    .filter(|t| t.has_breakdown())
+                    .cloned();
+                let timing_open = self.timing_popover.as_ref() == Some(&task.id)
+                    && self.timing_popover_visible();
+                let timing_pop_p = if timing_open || self.timing_popover.as_ref() == Some(&task.id)
+                {
+                    self.timing_popover_progress()
+                } else {
+                    0.0
+                };
+                let meta_media = format!("{size_l}  ·  {dur}");
                 let accent = row_accent(status);
 
                 let row_bg = if is_hovered {
@@ -1687,8 +1878,8 @@ impl OneAsrApp {
                     .flex_col()
                     .w_full()
                     .min_w_0()
-                    // Allow floating language menu to paint outside the row box.
-                    .when(!lang_open, |el| el.overflow_hidden())
+                    // Allow floating language / timing menus to paint outside the row box.
+                    .when(!lang_open && !timing_open, |el| el.overflow_hidden())
                     .border_b_1()
                     .border_color(LINE_SOFT)
                     .bg(row_bg)
@@ -1733,7 +1924,8 @@ impl OneAsrApp {
                                             .flex()
                                             .flex_col()
                                             .gap_0p5()
-                                            .overflow_hidden()
+                                            // Keep overflow when timing card is closed so long names clip.
+                                            .when(!timing_open, |el| el.overflow_hidden())
                                             .pr_2()
                                             .child(
                                                 div()
@@ -1754,13 +1946,129 @@ impl OneAsrApp {
                                                         .into()
                                                     }),
                                             )
-                                            .child(
+                                            .child({
+                                                // Meta: size · media length · [用时 chip + hover card]
+                                                let id_timing = task.id.clone();
+                                                let id_timing_leave = task.id.clone();
                                                 div()
-                                                    .text_xs()
-                                                    .text_color(MUTED_SOFT)
-                                                    .whitespace_nowrap()
-                                                    .child(meta_left),
-                                            ),
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .min_w_0()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(MUTED_SOFT)
+                                                            .whitespace_nowrap()
+                                                            .child(meta_media),
+                                                    )
+                                                    .when_some(
+                                                        timing_total.zip(timing_for_card),
+                                                        |el, (total_label, timing)| {
+                                                            let id_card = id_timing.clone();
+                                                            let id_card_leave =
+                                                                id_timing_leave.clone();
+                                                            let show_card = timing_pop_p > 0.01;
+                                                            el.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(MUTED_SOFT)
+                                                                    .child("·"),
+                                                            )
+                                                            // Chip + card share one relative box so
+                                                            // the popover anchors under 用时, not the row.
+                                                            .child(
+                                                                div()
+                                                                    .relative()
+                                                                    .flex_shrink_0()
+                                                                    .child(
+                                                                        div()
+                                                                            .id(SharedString::from(
+                                                                                format!(
+                                                                                    "timing-chip-{id_timing}"
+                                                                                ),
+                                                                            ))
+                                                                            .px_1p5()
+                                                                            .py_0p5()
+                                                                            .rounded_md()
+                                                                            .cursor_default()
+                                                                            .bg(if timing_open {
+                                                                                ACCENT_SOFT
+                                                                            } else {
+                                                                                MEDIA_PLATE
+                                                                            })
+                                                                            .hover(|s| {
+                                                                                s.bg(ACCENT_SOFT)
+                                                                            })
+                                                                            .on_hover(cx.listener(
+                                                                                move |this,
+                                                                                      hovered: &bool,
+                                                                                      _,
+                                                                                      cx| {
+                                                                                    if *hovered {
+                                                                                        this.timing_hover_enter(
+                                                                                            &id_timing,
+                                                                                            cx,
+                                                                                        );
+                                                                                    } else {
+                                                                                        this.timing_hover_leave(
+                                                                                            &id_timing_leave,
+                                                                                            cx,
+                                                                                        );
+                                                                                    }
+                                                                                },
+                                                                            ))
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_xs()
+                                                                                    .text_color(
+                                                                                        if timing_open {
+                                                                                            ACCENT
+                                                                                        } else {
+                                                                                            MUTED
+                                                                                        },
+                                                                                    )
+                                                                                    .whitespace_nowrap()
+                                                                                    .child(format!(
+                                                                                        "用时 {total_label}"
+                                                                                    )),
+                                                                            ),
+                                                                    )
+                                                                    .when(show_card, |wrap| {
+                                                                        wrap.child(
+                                                                            timing_breakdown_popover(
+                                                                                SharedString::from(
+                                                                                    format!(
+                                                                                        "timing-pop-{id_card}"
+                                                                                    ),
+                                                                                ),
+                                                                                &timing,
+                                                                                timing_pop_p,
+                                                                                cx.listener(
+                                                                                    move |this,
+                                                                                          hovered: &bool,
+                                                                                          _,
+                                                                                          cx| {
+                                                                                        if *hovered {
+                                                                                            this.timing_hover_enter(
+                                                                                                &id_card,
+                                                                                                cx,
+                                                                                            );
+                                                                                        } else {
+                                                                                            this.timing_hover_leave(
+                                                                                                &id_card_leave,
+                                                                                                cx,
+                                                                                            );
+                                                                                        }
+                                                                                    },
+                                                                                ),
+                                                                            ),
+                                                                        )
+                                                                    }),
+                                                            )
+                                                        },
+                                                    )
+                                            }),
                                     )
                                     // Language select — fixed column so status length never shifts it.
                                     .child(
@@ -1889,7 +2197,7 @@ impl OneAsrApp {
                                                 primary_enabled,
                                                 is_hovered,
                                                 cx.listener(move |this, _, _, cx| {
-                                                    this.close_lang_selects();
+                                                    this.close_floating_overlays();
                                                     if this
                                                         .tasks
                                                         .iter()
@@ -1912,7 +2220,7 @@ impl OneAsrApp {
                                                 can_delete,
                                                 is_hovered,
                                                 cx.listener(move |this, _, _, cx| {
-                                                    this.close_lang_selects();
+                                                    this.close_floating_overlays();
                                                     this.delete_task(&id_del, cx);
                                                 }),
                                             )),
@@ -2158,7 +2466,7 @@ impl OneAsrApp {
                             .into_any_element()
                     }))
                     .child(section({
-                        // 分段时长：30–180s 预设（默认 120），短尾 <15s 运行时合并
+                        // 分段时长：30–180s 预设（默认 120）；短尾 <15s 运行时合并
                         div()
                             .flex()
                             .flex_col()
@@ -2209,9 +2517,21 @@ impl OneAsrApp {
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(MUTED)
-                                    .child("VAD 目标分段；末段不足 15 秒会并入上一段"),
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(MUTED)
+                                            .child("建议 4GB 显存使用 60 秒分段时长"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(MUTED)
+                                            .child("末段不足 15 秒会并入上一段"),
+                                    ),
                             )
                             .into_any_element()
                     }))
@@ -3421,6 +3741,108 @@ fn lang_menu_option(
                     )
                 }),
         )
+}
+
+/// Processing-time breakdown card under the **用时** chip (`MENU_Z`).
+///
+/// Parent must be a `relative` wrapper around the chip so `left_0` aligns to it.
+fn timing_breakdown_popover(
+    menu_id: SharedString,
+    timing: &TaskTiming,
+    progress: f32,
+    on_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let p = progress.clamp(0.0, 1.0);
+    let opacity = p;
+    // Rise from slightly below (dialog-ish, not full modal).
+    let y_offset = px(6.0 * (1.0 - p));
+    let total = timing.total_label();
+    let max_stage = timing.stages.iter().map(|s| s.elapsed_ms).max().unwrap_or(1);
+
+    let rows: Vec<gpui::AnyElement> = timing
+        .stages
+        .iter()
+        .map(|s| {
+            let is_hot = s.elapsed_ms == max_stage && max_stage > 0;
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .w_full()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(if is_hot { TEXT } else { MUTED })
+                        .font_weight(if is_hot {
+                            gpui::FontWeight::MEDIUM
+                        } else {
+                            gpui::FontWeight::NORMAL
+                        })
+                        .child(s.stage.label().to_string()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(if is_hot { ACCENT } else { MUTED })
+                        .whitespace_nowrap()
+                        .child(format_process_ms(s.elapsed_ms)),
+                )
+                .into_any_element()
+        })
+        .collect();
+
+    deferred(
+        div()
+            .id(menu_id)
+            .absolute()
+            // Sibling under the 用时 chip's relative wrapper.
+            .top(px(26.0))
+            .left_0()
+            .w(px(TIMING_POP_W))
+            .opacity(opacity)
+            .mt(y_offset)
+            .rounded_lg()
+            .border_1()
+            .border_color(LINE)
+            .bg(PANEL)
+            .shadow(popover_menu_shadow())
+            .px_3()
+            .py_2p5()
+            .occlude()
+            .on_hover(on_hover)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .mb_1p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(TEXT)
+                            .child("处理耗时"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(ACCENT)
+                            .child(total),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(LINE_SOFT)
+                    .mb_1p5(),
+            )
+            .child(div().flex().flex_col().gap_1().children(rows)),
+    )
+    .with_priority(MENU_Z)
 }
 
 /// Deferred floating language panel (`MENU_Z`, occludes dismiss scrim).

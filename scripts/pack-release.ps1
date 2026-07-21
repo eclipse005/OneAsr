@@ -3,13 +3,14 @@
   Build a single OneAsr release installer (one binary with CUDA engines + CPU fallback).
 
 .DESCRIPTION
-  One product package (no portable zip, no separate CPU/CUDA setups):
+  One product package (CUDA engines in binary + CPU fallback):
 
     release\OneAsr_<ver>_setup.exe
+    release\OneAsr_<ver>_portable.zip
 
-  Install layout:
+  Install / portable layout:
     OneAsr/
-      oneasr.exe          # UI assets embedded; CUDA engines in binary
+      oneasr.exe          # GUI subsystem (no black console); assets embedded
       bin/ffmpeg.exe
       dll/                # empty — Settings「安装组件」puts CUDA runtime here
       models/ output/ runs/
@@ -56,6 +57,34 @@ function Find-Iscc {
   return $null
 }
 
+# PE Optional Header Subsystem: 2 = IMAGE_SUBSYSTEM_WINDOWS_GUI, 3 = CONSOLE.
+function Get-PeSubsystem([string]$ExePath) {
+  $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $ExePath))
+  if ($bytes.Length -lt 0x40) {
+    throw "PE too small to parse: $ExePath"
+  }
+  if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+    throw "Not an MZ executable: $ExePath"
+  }
+  $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+  if ($pe -lt 0 -or ($pe + 0x5E) -ge $bytes.Length) {
+    throw "Invalid PE e_lfanew=$pe for $ExePath"
+  }
+  $sig = [BitConverter]::ToUInt32($bytes, $pe)
+  if ($sig -ne 0x00004550) {
+    throw "Missing PE signature at offset $pe for $ExePath"
+  }
+  return [BitConverter]::ToUInt16($bytes, $pe + 0x5C)
+}
+
+function Assert-GuiSubsystem([string]$ExePath) {
+  $sub = Get-PeSubsystem $ExePath
+  if ($sub -ne 2) {
+    throw "Refusing to pack console binary (subsystem=$sub, want 2/GUI): $ExePath. Build with cargo build -p oneasr --release."
+  }
+  Write-Host "    PE subsystem=GUI (2)  $ExePath"
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
   $Version = Get-WorkspaceVersion
 }
@@ -84,6 +113,7 @@ if (-not $SkipBuild) {
 if (-not (Test-Path -LiteralPath $exeSrc)) {
   throw "Release binary not found: $exeSrc"
 }
+Assert-GuiSubsystem $exeSrc
 
 # ── Stage ────────────────────────────────────────────────────────────
 $stage = Join-Path $Root "dist\OneAsr"
@@ -100,6 +130,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stage "runs") | Out-Null
 
 Copy-Item -LiteralPath $exeSrc -Destination (Join-Path $stage "oneasr.exe") -Force
 Copy-Item -LiteralPath $ffmpeg -Destination (Join-Path $stage "bin\ffmpeg.exe") -Force
+Assert-GuiSubsystem (Join-Path $stage "oneasr.exe")
 
 "" | Set-Content -Path (Join-Path $stage "dll\.keep") -Encoding ascii
 "" | Set-Content -Path (Join-Path $stage "models\.keep") -Encoding ascii
@@ -138,9 +169,25 @@ Get-ChildItem -Recurse $stage -File | ForEach-Object {
   Write-Host ("      {0,12:N0}  {1}" -f $_.Length, $rel)
 }
 
-# ── Installer ────────────────────────────────────────────────────────
+# ── Portable zip + Installer ─────────────────────────────────────────
 $releaseDir = Join-Path $Root "release"
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+$portableZip = Join-Path $releaseDir "OneAsr_${Version}_portable.zip"
+Write-Host "==> Portable zip $portableZip"
+if (Test-Path -LiteralPath $portableZip) {
+  Remove-Item -Force -LiteralPath $portableZip
+}
+# Zip folder contents so extract yields oneasr.exe at top level of the folder.
+$zipStage = Join-Path $Root "dist\OneAsr_portable_stage"
+if (Test-Path -LiteralPath $zipStage) {
+  Remove-Item -Recurse -Force -LiteralPath $zipStage
+}
+New-Item -ItemType Directory -Force -Path $zipStage | Out-Null
+Copy-Item -Recurse -Force -Path (Join-Path $stage "*") -Destination $zipStage
+Compress-Archive -Path (Join-Path $zipStage "*") -DestinationPath $portableZip -Force
+Remove-Item -Recurse -Force -LiteralPath $zipStage
+Write-Host "    portable: $portableZip  ($([math]::Round((Get-Item $portableZip).Length/1MB, 1)) MB)"
 
 if (-not $SkipInstaller) {
   $iscc = Find-Iscc
@@ -164,4 +211,5 @@ if (-not $SkipInstaller) {
 Write-Host ""
 Write-Host "==> Done."
 Write-Host "    Portable stage: dist\OneAsr\"
+Write-Host "    Portable zip:   release\OneAsr_${Version}_portable.zip"
 Write-Host "    Installer:      release\OneAsr_${Version}_setup.exe"
