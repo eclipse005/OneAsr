@@ -29,7 +29,7 @@ use oneasr_core::{
     normalize_source_language, process_media_file_with_progress, probe_duration_async,
     resolve_app_root, source_language_by_id, AsrStage, DownloadHandle, DownloadProgress,
     DownloadState, DurationState, ModelId, ModelKind, Settings, StageUpdate, Task, TaskStatus,
-    SOURCE_LANGUAGES,
+    CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
 };
 
 actions!(oneasr, [DismissMenus]);
@@ -1945,6 +1945,7 @@ impl OneAsrApp {
         let backend = self.settings.backend.clone();
         let language = self.settings.language.clone();
         let length_preset = self.settings.subtitle_length_preset.clone();
+        let chunk_target = self.settings.chunk_target_seconds_clamped();
         let asr_id = self.settings.selected_asr_id();
         let model = self.settings.asr_model_dir.display().to_string();
         let model_tip = model.clone();
@@ -2153,6 +2154,64 @@ impl OneAsrApp {
                                             }),
                                         ),
                                     ),
+                            )
+                            .into_any_element()
+                    }))
+                    .child(section({
+                        // 分段时长：30–180s 预设（默认 120），短尾 <15s 运行时合并
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("分段时长"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(MUTED)
+                                            .child(format!(
+                                                "{chunk_target} 秒 · {CHUNK_TARGET_MIN_SEC}–{CHUNK_TARGET_MAX_SEC}"
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                div().flex().gap_1p5().children(
+                                    CHUNK_TARGET_PRESETS.iter().copied().map(|(sec, label)| {
+                                        let active = chunk_target == sec;
+                                        btn(
+                                            label,
+                                            if active {
+                                                BtnKind::Primary
+                                            } else {
+                                                BtnKind::Secondary
+                                            },
+                                            true,
+                                            cx.listener(move |this, _, _, cx| {
+                                                if this.settings.chunk_target_seconds == sec {
+                                                    return;
+                                                }
+                                                this.settings.chunk_target_seconds = sec;
+                                                this.mark_settings_dirty(cx);
+                                            }),
+                                        )
+                                    }),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED)
+                                    .child("VAD 目标分段；末段不足 15 秒会并入上一段"),
                             )
                             .into_any_element()
                     }))

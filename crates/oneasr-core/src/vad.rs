@@ -2,9 +2,11 @@
 //!
 //! Uses FireRedVAD (embedded Rust library, no external exe) to locate speech
 //! segments, derives silence gaps, then plans continuous `[start, end)` chunks
-//! that align to silence midpoints near a target duration (~180 s).
+//! that align to silence midpoints near a target duration
+//! ([`crate::settings::CHUNK_TARGET_MIN_SEC`]..=[`crate::settings::CHUNK_TARGET_MAX_SEC`]).
 //!
-//! This mirrors the validated logic from the Python `asr.py` pipeline.
+//! Cut placement mirrors the validated Python `asr.py` pipeline; short-tail
+//! merge matches VoxTrans ([`MIN_TAIL_SEGMENT_SEC`]).
 
 use std::path::Path;
 
@@ -16,6 +18,10 @@ use crate::asr::AsrError;
 const SILENCE_LOOKBACK: f32 = 30.0;
 const MIN_SILENCE_PREFER: f32 = 0.5;
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
+/// Tail shorter than this is absorbed into the previous chunk so we avoid
+/// tiny ASR/align windows (e.g. 1–5 s remainder after ~chunk_target splits).
+/// Max merged length is `chunk_target + just under this value`.
+const MIN_TAIL_SEGMENT_SEC: f32 = 15.0;
 
 /// A planned continuous audio range `[start, end)` (seconds, global timeline).
 #[derive(Debug, Clone)]
@@ -111,6 +117,10 @@ fn abs_diff(a: f32, b: f32) -> f32 {
 /// 3) else hard-cut at the nominal boundary.
 /// Among matches, prefer the longest pause, then closest to the boundary.
 /// Cut at silence midpoint.
+///
+/// After cuts are built, if the final chunk is shorter than
+/// [`MIN_TAIL_SEGMENT_SEC`], it is merged into the previous chunk (same rule as
+/// VoxTrans). Coverage always remains continuous from `0` to `duration`.
 pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Vec<Chunk> {
     if duration <= chunk_sec + 1e-3 {
         return vec![Chunk {
@@ -162,13 +172,32 @@ pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Ve
         cuts.push(duration);
     }
 
-    cuts.windows(2)
+    let mut chunks: Vec<Chunk> = cuts
+        .windows(2)
         .map(|w| Chunk {
             start: (w[0] * 1000.0).round() / 1000.0,
             end: (w[1] * 1000.0).round() / 1000.0,
         })
         .filter(|c| c.end - c.start > 0.05)
-        .collect()
+        .collect();
+    merge_short_tail(&mut chunks);
+    chunks
+}
+
+/// If the last chunk is shorter than [`MIN_TAIL_SEGMENT_SEC`], fold it into
+/// the previous one (same rule as VoxTrans).
+fn merge_short_tail(chunks: &mut Vec<Chunk>) {
+    let n = chunks.len();
+    if n < 2 {
+        return;
+    }
+    let last_end = chunks[n - 1].end;
+    let last_start = chunks[n - 1].start;
+    if last_end - last_start >= MIN_TAIL_SEGMENT_SEC {
+        return;
+    }
+    chunks[n - 2].end = last_end;
+    chunks.pop();
 }
 
 #[cfg(test)]
@@ -209,5 +238,68 @@ mod tests {
         assert_eq!(sil.len(), 1);
         assert!((sil[0].0 - 5.0).abs() < 0.01);
         assert!((sil[0].1 - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn short_tail_under_15s_merges_into_previous() {
+        // hard cuts at 180 with 194.9 total → tail 14.9s merges
+        let chunks = plan_chunks(194.9, &[], 180.0);
+        assert_eq!(chunks.len(), 1);
+        assert!((chunks[0].start).abs() < 0.01);
+        assert!((chunks[0].end - 194.9).abs() < 0.1);
+    }
+
+    #[test]
+    fn tail_at_least_15s_stays_separate() {
+        let chunks = plan_chunks(195.0, &[], 180.0);
+        assert_eq!(chunks.len(), 2);
+        assert!((chunks[0].end - 180.0).abs() < 0.1);
+        assert!((chunks[1].end - 195.0).abs() < 0.1);
+        assert!((chunks[1].end - chunks[1].start - 15.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn merge_short_tail_direct() {
+        let mut chunks = vec![
+            Chunk {
+                start: 0.0,
+                end: 60.0,
+            },
+            Chunk {
+                start: 60.0,
+                end: 120.0,
+            },
+            Chunk {
+                start: 120.0,
+                end: 125.0,
+            },
+        ];
+        merge_short_tail(&mut chunks);
+        assert_eq!(chunks.len(), 2);
+        assert!((chunks[1].end - 125.0).abs() < 1e-6);
+        assert!((chunks[1].end - chunks[1].start - 65.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn silence_cut_then_short_tail_merges() {
+        // Silence midpoint ~170 → first cut there; duration 184 → tail 14s < 15.
+        let silences = vec![(169.0, 171.0)];
+        let chunks = plan_chunks(184.0, &silences, 180.0);
+        assert_eq!(chunks.len(), 1, "short tail after silence cut must merge");
+        assert!((chunks[0].start).abs() < 0.01);
+        assert!((chunks[0].end - 184.0).abs() < 0.1);
+        // Continuous full coverage.
+        assert!(chunks[0].end > chunks[0].start);
+    }
+
+    #[test]
+    fn silence_cut_tail_at_least_15s_stays() {
+        // Cut at ~170, duration 185 → tail 15s stays as its own chunk.
+        let silences = vec![(169.0, 171.0)];
+        let chunks = plan_chunks(185.0, &silences, 180.0);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].end > 168.0 && chunks[0].end < 172.0);
+        assert!((chunks[1].end - 185.0).abs() < 0.1);
+        assert!((chunks[1].end - chunks[1].start - 15.0).abs() < 0.15);
     }
 }

@@ -264,7 +264,7 @@ pub fn process_media_file_with_progress(
     convert_to_16k_mono_wav(input, &wav).map_err(|e| AsrError::Msg(e.to_string()))?;
 
     let duration = wav_duration_sec(&wav).unwrap_or(0.0) as f32;
-    let chunk_sec = settings.chunk_target_seconds.clamp(30, 180) as f32;
+    let chunk_sec = settings.chunk_target_seconds_clamped() as f32;
 
     // 2. VAD plan (ranges only — no chunk files yet)
     let (chunks, vad_speech) = if duration > chunk_sec {

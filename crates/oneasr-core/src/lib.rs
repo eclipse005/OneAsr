@@ -30,7 +30,10 @@ pub use model::{
     QWEN3_ASR_17B,
 };
 pub use runtime::{demote_current_thread, init_runtime};
-pub use settings::Settings;
+pub use settings::{
+    clamp_chunk_target_seconds, Settings, CHUNK_TARGET_DEFAULT_SEC, CHUNK_TARGET_MAX_SEC,
+    CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS,
+};
 pub use ui_labels::{
     empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
 };

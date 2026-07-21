@@ -8,6 +8,28 @@ use crate::model::{
     QWEN3_ASR_06B,
 };
 
+/// Inclusive lower bound for VAD ASR chunk target (seconds).
+pub const CHUNK_TARGET_MIN_SEC: u32 = 30;
+/// Inclusive upper bound for VAD ASR chunk target (seconds).
+pub const CHUNK_TARGET_MAX_SEC: u32 = 180;
+/// Product default when settings omit `chunk_target_seconds`.
+pub const CHUNK_TARGET_DEFAULT_SEC: u32 = 120;
+/// Settings UI preset values (seconds), all within
+/// [`CHUNK_TARGET_MIN_SEC`]..=[`CHUNK_TARGET_MAX_SEC`].
+pub const CHUNK_TARGET_PRESETS: &[(u32, &str)] = &[
+    (30, "30"),
+    (60, "60"),
+    (90, "90"),
+    (120, "120"),
+    (180, "180"),
+];
+
+/// Clamp a chunk target into the legal product range.
+#[inline]
+pub fn clamp_chunk_target_seconds(value: u32) -> u32 {
+    value.clamp(CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_MAX_SEC)
+}
+
 /// User-facing settings for the Qwen ASR + ForcedAligner pipeline.
 ///
 /// Persisted as `{app_root}/settings.json` when possible.
@@ -43,7 +65,9 @@ pub struct Settings {
     /// `short` | `standard` | `loose`
     #[serde(default = "default_subtitle_length_preset")]
     pub subtitle_length_preset: String,
-    /// VAD chunk target seconds (clamped 30–180 at runtime).
+    /// VAD ASR chunk target seconds
+    /// ([`CHUNK_TARGET_MIN_SEC`]..=[`CHUNK_TARGET_MAX_SEC`]; default
+    /// [`CHUNK_TARGET_DEFAULT_SEC`]).
     #[serde(default = "default_chunk_target_seconds")]
     pub chunk_target_seconds: u32,
 }
@@ -65,7 +89,7 @@ fn default_subtitle_length_preset() -> String {
 }
 
 fn default_chunk_target_seconds() -> u32 {
-    180
+    CHUNK_TARGET_DEFAULT_SEC
 }
 
 impl Default for Settings {
@@ -118,6 +142,7 @@ impl Settings {
     ///    for the size picker only (inference still uses the custom path).
     pub fn normalize(&mut self) {
         self.language = normalize_source_language(&self.language);
+        self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
 
         if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
             self.asr_model = id.as_str().into();
@@ -129,6 +154,12 @@ impl Settings {
         if self.asr_model_dir.as_os_str().is_empty() {
             self.asr_model_dir = resolve_model_dir(id.as_str());
         }
+    }
+
+    /// Chunk target used by the pipeline (always within product range).
+    #[inline]
+    pub fn chunk_target_seconds_clamped(&self) -> u32 {
+        clamp_chunk_target_seconds(self.chunk_target_seconds)
     }
 
     pub fn selected_asr_id(&self) -> ModelId {
@@ -144,7 +175,9 @@ impl Settings {
         self.asr_model_dir = resolve_model_dir(id.as_str());
     }
 
-    pub fn save(&self) -> Result<PathBuf, String> {
+    /// Normalize in place, then persist to `settings.json`.
+    pub fn save(&mut self) -> Result<PathBuf, String> {
+        self.normalize();
         let path = Self::config_path().ok_or_else(|| "找不到应用目录，无法保存设置".to_string())?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -241,5 +274,36 @@ mod tests {
             .asr_model_dir
             .to_string_lossy()
             .contains("Qwen3-ASR-1.7B"));
+    }
+
+    #[test]
+    fn default_chunk_target_is_product_default() {
+        assert_eq!(
+            Settings::default().chunk_target_seconds,
+            CHUNK_TARGET_DEFAULT_SEC
+        );
+        assert_eq!(CHUNK_TARGET_DEFAULT_SEC, 120);
+    }
+
+    #[test]
+    fn normalize_clamps_chunk_target_seconds() {
+        let mut s = Settings::default();
+        s.chunk_target_seconds = 10;
+        s.normalize();
+        assert_eq!(s.chunk_target_seconds, CHUNK_TARGET_MIN_SEC);
+        s.chunk_target_seconds = 200;
+        s.normalize();
+        assert_eq!(s.chunk_target_seconds, CHUNK_TARGET_MAX_SEC);
+        s.chunk_target_seconds = 90;
+        s.normalize();
+        assert_eq!(s.chunk_target_seconds, 90);
+    }
+
+    #[test]
+    fn presets_are_within_legal_range() {
+        for &(sec, label) in CHUNK_TARGET_PRESETS {
+            assert_eq!(label, sec.to_string());
+            assert_eq!(clamp_chunk_target_seconds(sec), sec);
+        }
     }
 }
