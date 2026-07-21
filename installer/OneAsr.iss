@@ -36,8 +36,9 @@ DisableDirPage=no
 SetupLogging=yes
 
 [Languages]
-; Chinese-first product UI; English available as secondary installer language.
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Chinese first (vendored — not in stock Inno "Languages" install).
+; English from the compiler install.
+Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

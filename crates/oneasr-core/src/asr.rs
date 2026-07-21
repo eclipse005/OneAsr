@@ -154,13 +154,6 @@ enum ComputeBackend {
 }
 
 impl ComputeBackend {
-    fn as_label(self) -> &'static str {
-        match self {
-            Self::Cpu => "cpu",
-            Self::Cuda => "cuda",
-        }
-    }
-
     fn to_asr(self) -> AsrBackend {
         match self {
             Self::Cpu => AsrBackend::Cpu,
@@ -313,12 +306,18 @@ pub fn process_media_file_with_progress(
     check_asr_model_dir(&settings.asr_model_dir)?;
     let compute = resolve_compute_backend(&settings.backend)?;
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[backend] setting={} resolved={} cuda_dlls={}",
-        settings.backend,
-        compute.as_label(),
-        crate::model::is_cuda_runtime_ready(),
-    );
+    {
+        let backend_label = match compute {
+            ComputeBackend::Cpu => "cpu",
+            ComputeBackend::Cuda => "cuda",
+        };
+        eprintln!(
+            "[backend] setting={} resolved={} cuda_dlls={}",
+            settings.backend,
+            backend_label,
+            crate::model::is_cuda_runtime_ready(),
+        );
+    }
     let asr = AsrInference::load(&settings.asr_model_dir, compute.to_asr())
         .map_err(|e| AsrError::Msg(format!("加载 ASR 失败: {e:#}")))?;
 
