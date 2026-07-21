@@ -734,52 +734,108 @@ impl OneAsrApp {
         cx.notify();
     }
 
-    /// Open / close the per-task language dropdown.
+    /// True when the task-row language panel can actually paint for `lang_menu`.
+    fn task_lang_menu_active(&self) -> bool {
+        let Some(id) = self.lang_menu.as_ref() else {
+            return false;
+        };
+        self.tasks.iter().any(|t| {
+            &t.id == id
+                && !t.status.locks_row_actions()
+                && !self.exiting.contains_key(&t.id)
+        })
+    }
+
+    /// Drop select flags that cannot render a panel (stale id / locked / exiting).
+    fn sync_lang_select_state(&mut self) {
+        if self.lang_menu.is_some() && !self.task_lang_menu_active() {
+            self.lang_menu = None;
+        }
+        // Settings select only while the drawer is open or animating.
+        if self.settings_lang_open && !self.settings_open && self.settings_progress() < 0.01 {
+            self.settings_lang_open = false;
+        }
+    }
+
+    /// Clear both language selects (no notify — caller owns the frame).
+    fn close_lang_selects(&mut self) {
+        self.lang_menu = None;
+        self.settings_lang_open = false;
+    }
+
+    /// Open / close the per-task language dropdown (closes the other select).
     fn toggle_lang_menu(&mut self, id: &str, cx: &mut Context<Self>) {
         let locked = self
             .tasks
             .iter()
             .find(|t| t.id == id)
-            .is_some_and(|t| t.status.locks_row_actions());
+            .is_some_and(|t| t.status.locks_row_actions() || self.exiting.contains_key(id));
         if locked {
+            self.close_lang_selects();
             self.flash_hint("处理中的任务不能改语言", cx);
             return;
         }
-        self.settings_lang_open = false;
-        if self.lang_menu.as_deref() == Some(id) {
-            self.lang_menu = None;
-        } else {
+        let was_open = self.lang_menu.as_deref() == Some(id);
+        self.close_lang_selects();
+        if !was_open {
             self.lang_menu = Some(id.to_string());
         }
         cx.notify();
     }
 
-    /// Set a task's source language and close the dropdown.
-    fn set_task_language(&mut self, id: &str, language: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
-            return;
-        };
-        if task.status.locks_row_actions() {
-            self.flash_hint("处理中的任务不能改语言", cx);
-            return;
+    /// Open / close settings default-language dropdown (closes list select).
+    fn toggle_settings_lang(&mut self, cx: &mut Context<Self>) {
+        let was_open = self.settings_lang_open;
+        self.close_lang_selects();
+        if !was_open {
+            self.settings_lang_open = true;
         }
-        task.set_language(language);
-        self.lang_menu = None;
         cx.notify();
     }
 
-    /// Close language dropdowns (Escape / click-outside).
+    /// Apply a source-language pick and close every language select.
+    fn pick_source_language(
+        &mut self,
+        target: LangSelectTarget,
+        language: &str,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            LangSelectTarget::Task(id) => {
+                let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+                    self.close_lang_selects();
+                    cx.notify();
+                    return;
+                };
+                if task.status.locks_row_actions() {
+                    self.close_lang_selects();
+                    self.flash_hint("处理中的任务不能改语言", cx);
+                    return;
+                }
+                task.set_language(language);
+            }
+            LangSelectTarget::Settings => {
+                self.settings.language = language.into();
+                self.mark_settings_dirty(cx);
+            }
+        }
+        // Single exit boundary: any successful (or abandoned) pick leaves no open select.
+        self.close_lang_selects();
+        cx.notify();
+    }
+
+    /// Close all language selects (Escape / click-outside scrim).
     fn dismiss_menus(&mut self, cx: &mut Context<Self>) {
         if self.lang_menu.is_none() && !self.settings_lang_open {
             return;
         }
-        self.lang_menu = None;
-        self.settings_lang_open = false;
+        self.close_lang_selects();
         cx.notify();
     }
 
+    /// Whether a language panel is live (scrim / Escape target).
     fn any_menu_open(&self) -> bool {
-        self.lang_menu.is_some() || self.settings_lang_open
+        self.task_lang_menu_active() || self.settings_lang_open
     }
 
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
@@ -793,8 +849,7 @@ impl OneAsrApp {
         self.settings_to = if open { 1.0 } else { 0.0 };
         self.settings_anim_t0 = Instant::now();
         self.settings_open = open;
-        self.lang_menu = None;
-        self.settings_lang_open = false;
+        self.close_lang_selects();
         if open {
             sfx::play(sfx::Sfx::Drawer);
         }
@@ -1069,6 +1124,10 @@ impl OneAsrApp {
         task.status = TaskStatus::Processing;
         task.queue_seq = None;
         task.error = None;
+        // Processing locks row language edit — drop a live select on this row.
+        if self.lang_menu.as_deref() == Some(id) {
+            self.lang_menu = None;
+        }
         self.busy = true;
         self.active_stage = Some((
             task.id.clone(),
@@ -1123,6 +1182,9 @@ impl OneAsrApp {
         if self.hover_row.as_ref().is_some_and(|h| h == id) {
             self.hover_row = None;
         }
+        if self.lang_menu.as_deref() == Some(id) {
+            self.lang_menu = None;
+        }
         cx.notify();
     }
 
@@ -1156,6 +1218,8 @@ impl OneAsrApp {
             self.batch_done = 0;
         }
         self.hover_row = None;
+        // List select targets a row; bulk clear invalidates any open chip menu.
+        self.lang_menu = None;
         if had_proc {
             self.flash_hint("已清空队列，当前任务继续处理", cx);
         }
@@ -1194,18 +1258,21 @@ fn run_task(
 
 impl Render for OneAsrApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Drop select state that can no longer paint (locked / deleted / drawer closed).
+        self.sync_lang_select_state();
+
         // Drive drawer / row-hover fades at display refresh.
         if self.animations_active() {
             window.request_animation_frame();
         }
 
         let drawer_p = self.settings_progress();
-
         let menu_open = self.any_menu_open();
 
         div()
             .id("oneasr-root")
             .track_focus(&self.focus_handle)
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -1224,27 +1291,6 @@ impl Render for OneAsrApp {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    // Click-outside layer under floating menus (priority 5 < menu 10).
-                    .when(menu_open, |el| {
-                        el.child(
-                            deferred(
-                                div()
-                                    .id("menu-dismiss-layer")
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .size_full()
-                                    .cursor_default()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.dismiss_menus(cx);
-                                        }),
-                                    ),
-                            )
-                            .with_priority(5),
-                        )
-                    })
                     .child(
                         div()
                             .id("task-drop-zone")
@@ -1304,6 +1350,8 @@ impl Render for OneAsrApp {
                     }),
             )
             .child(self.render_status_bar())
+            // Full-window dismiss above toolbar / list / status; menus paint at MENU_Z.
+            .when(menu_open, |el| el.child(popover_dismiss_layer(cx)))
     }
 }
 
@@ -1320,6 +1368,28 @@ const ACTIONS_COL_PX: f32 = 120.;
 const LANG_COL_PX: f32 = 64.;
 /// Status pill column — wide enough for「转写中 99/99」「导出字幕」「排队#99」.
 const STATUS_COL_PX: f32 = 112.;
+/// List language menu width (absolute panel under the chip).
+const LANG_MENU_W: f32 = 168.;
+/// Floating language menu max height before it scrolls.
+const LANG_MENU_MAX_H: f32 = 280.;
+
+// ── Popover select layer model (GPUI has no built-in Select) ─────────────────
+// Two deferred layers, sorted by priority (higher paints + hit-tests on top):
+//
+//   MENU_DISMISS_Z  full-window scrim on the app root, `occlude`
+//                   → click-outside closes (toolbar / list / status bar)
+//   MENU_Z          floating panel, `occlude`
+//                   → owns hits above the scrim so option `on_click` completes
+//
+// Deferred escapes the list's overflow stack. `occlude` is required so the
+// scrim is not also "hovered" under the panel (GPUI hit-test walks every
+// Normal hitbox under the cursor until it hits BlockMouse).
+//
+// Invariant: `lang_menu` / `settings_lang_open` only count as "open" when a
+// panel can actually render (`task_lang_menu_active` / settings drawer). Scrim
+// visibility follows that derived state, never a stale flag alone.
+const MENU_DISMISS_Z: usize = 5;
+const MENU_Z: usize = 10;
 
 /// Smooth deceleration (approx cubic-bezier ease-out).
 fn ease_out_cubic(t: f32) -> f32 {
@@ -1595,92 +1665,21 @@ impl OneAsrApp {
                     PANEL
                 };
 
-                // Floating menu options (attached under the language chip — GPUI has no Select widget).
-                let lang_menu_float: Option<gpui::AnyElement> =
-                    if lang_open && can_edit_lang {
-                        let menu_task = id_lang_pick.clone();
-                        let menu_cur = lang_current.clone();
-                        let opts: Vec<gpui::AnyElement> = SOURCE_LANGUAGES
-                            .iter()
-                            .map(|lang| {
-                                let tid = menu_task.clone();
-                                let lid = lang.id;
-                                let label = lang.label;
-                                let active = menu_cur == lid;
-                                div()
-                                    .id(SharedString::from(format!("lang-opt-{tid}-{lid}")))
-                                    .px_2p5()
-                                    .py_1p5()
-                                    .cursor_pointer()
-                                    .bg(if active { ACCENT_SOFT } else { PANEL })
-                                    .hover(|s| s.bg(if active { ACCENT_SOFT } else { BG }))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.set_task_language(&tid, lid, cx);
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(if active { ACCENT } else { TEXT })
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .child(label.to_string()),
-                                            )
-                                            .when(active, |el| {
-                                                el.child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(ACCENT)
-                                                        .child("✓"),
-                                                )
-                                            }),
-                                    )
-                                    .into_any_element()
-                            })
-                            .collect();
-                        Some(
-                            deferred(
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "lang-menu-{id_lang_pick}"
-                                    )))
-                                    .absolute()
-                                    .top(px(30.))
-                                    .right_0()
-                                    .w(px(168.))
-                                    .max_h(px(280.))
-                                    .overflow_y_scroll()
-                                    .rounded_lg()
-                                    .border_1()
-                                    .border_color(LINE)
-                                    .bg(PANEL)
-                                    .shadow(vec![
-                                        BoxShadow {
-                                            color: hsla(0., 0., 0., 0.08),
-                                            offset: point(px(0.), px(2.)),
-                                            blur_radius: px(4.),
-                                            spread_radius: px(0.),
-                                        },
-                                        BoxShadow {
-                                            color: hsla(0., 0., 0., 0.14),
-                                            offset: point(px(0.), px(8.)),
-                                            blur_radius: px(20.),
-                                            spread_radius: px(0.),
-                                        },
-                                    ])
-                                    .py_1()
-                                    .children(opts),
-                            )
-                            .with_priority(10)
-                            .into_any_element(),
+                let lang_menu_float: Option<gpui::AnyElement> = if lang_open && can_edit_lang {
+                    Some(
+                        floating_lang_menu(
+                            SharedString::from(format!("lang-menu-{id_lang_pick}")),
+                            &lang_current,
+                            &format!("lang-opt-{id_lang_pick}"),
+                            LangSelectTarget::Task(id_lang_pick.clone()),
+                            LangMenuLayout::Chip,
+                            cx,
                         )
-                    } else {
-                        None
-                    };
+                        .into_any_element(),
+                    )
+                } else {
+                    None
+                };
 
                 div()
                     .id(SharedString::from(format!("task-{row_id}")))
@@ -1890,7 +1889,7 @@ impl OneAsrApp {
                                                 primary_enabled,
                                                 is_hovered,
                                                 cx.listener(move |this, _, _, cx| {
-                                                    this.lang_menu = None;
+                                                    this.close_lang_selects();
                                                     if this
                                                         .tasks
                                                         .iter()
@@ -1913,7 +1912,7 @@ impl OneAsrApp {
                                                 can_delete,
                                                 is_hovered,
                                                 cx.listener(move |this, _, _, cx| {
-                                                    this.lang_menu = None;
+                                                    this.close_lang_selects();
                                                     this.delete_task(&id_del, cx);
                                                 }),
                                             )),
@@ -2027,62 +2026,6 @@ impl OneAsrApp {
                         let cur_label = source_language_by_id(&language)
                             .map(|l| l.label)
                             .unwrap_or("中文普通话");
-                        let menu_cur = language.clone();
-                        let opts: Vec<gpui::AnyElement> = if open {
-                            SOURCE_LANGUAGES
-                                .iter()
-                                .map(|lang| {
-                                    let lid = lang.id;
-                                    let label = lang.label;
-                                    let active = menu_cur == lid;
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "settings-lang-opt-{lid}"
-                                        )))
-                                        .px_2p5()
-                                        .py_1p5()
-                                        .cursor_pointer()
-                                        .bg(if active { ACCENT_SOFT } else { PANEL })
-                                        .hover(|s| {
-                                            s.bg(if active { ACCENT_SOFT } else { BG })
-                                        })
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.settings.language = lid.into();
-                                            this.settings_lang_open = false;
-                                            this.mark_settings_dirty(cx);
-                                        }))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .gap_2()
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(if active {
-                                                            ACCENT
-                                                        } else {
-                                                            TEXT
-                                                        })
-                                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                                        .child(label.to_string()),
-                                                )
-                                                .when(active, |el| {
-                                                    el.child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(ACCENT)
-                                                            .child("✓"),
-                                                    )
-                                                }),
-                                        )
-                                        .into_any_element()
-                                })
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
 
                         // 语言 | 字幕长度 并排平分
                         div()
@@ -2126,10 +2069,7 @@ impl OneAsrApp {
                                                         s.bg(ACCENT_SOFT).border_color(ACCENT)
                                                     })
                                                     .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.lang_menu = None;
-                                                        this.settings_lang_open =
-                                                            !this.settings_lang_open;
-                                                        cx.notify();
+                                                        this.toggle_settings_lang(cx);
                                                     }))
                                                     .child(
                                                         div()
@@ -2156,45 +2096,14 @@ impl OneAsrApp {
                                                     ),
                                             )
                                             .when(open, |el| {
-                                                el.child(
-                                                    deferred(
-                                                        div()
-                                                            .id("settings-lang-menu")
-                                                            .absolute()
-                                                            .top(px(38.))
-                                                            .left_0()
-                                                            .right_0()
-                                                            .max_h(px(280.))
-                                                            .overflow_y_scroll()
-                                                            .rounded_lg()
-                                                            .border_1()
-                                                            .border_color(LINE)
-                                                            .bg(PANEL)
-                                                            .shadow(vec![
-                                                                BoxShadow {
-                                                                    color: hsla(0., 0., 0., 0.08),
-                                                                    offset: point(
-                                                                        px(0.),
-                                                                        px(2.),
-                                                                    ),
-                                                                    blur_radius: px(4.),
-                                                                    spread_radius: px(0.),
-                                                                },
-                                                                BoxShadow {
-                                                                    color: hsla(0., 0., 0., 0.14),
-                                                                    offset: point(
-                                                                        px(0.),
-                                                                        px(8.),
-                                                                    ),
-                                                                    blur_radius: px(20.),
-                                                                    spread_radius: px(0.),
-                                                                },
-                                                            ])
-                                                            .py_1()
-                                                            .children(opts),
-                                                    )
-                                                    .with_priority(10),
-                                                )
+                                                el.child(floating_lang_menu(
+                                                    "settings-lang-menu".into(),
+                                                    &language,
+                                                    "settings-lang-opt",
+                                                    LangSelectTarget::Settings,
+                                                    LangMenuLayout::FullWidth,
+                                                    cx,
+                                                ))
                                             }),
                                     ),
                             )
@@ -3353,4 +3262,158 @@ fn icon_svg_path(kind: IconKind) -> &'static str {
         IconKind::Trash => "icons/trash.svg",
         IconKind::Folder => "icons/folder.svg",
     }
+}
+
+// ── Language select (shared list chip + settings field) ──────────────────────
+
+/// Where a language pick should be written.
+#[derive(Clone)]
+enum LangSelectTarget {
+    Task(String),
+    Settings,
+}
+
+/// Floating menu geometry under the trigger.
+#[derive(Clone, Copy)]
+enum LangMenuLayout {
+    /// Compact chip under the task-row language control.
+    Chip,
+    /// Stretch to the settings field width.
+    FullWidth,
+}
+
+/// Full-window click-outside scrim under open floating menus (`MENU_DISMISS_Z`).
+/// Mounted on the app root so toolbar / list / status bar are all outside-click targets.
+fn popover_dismiss_layer(cx: &mut Context<OneAsrApp>) -> impl IntoElement {
+    deferred(
+        div()
+            .id("menu-dismiss-layer")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .cursor_default()
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.dismiss_menus(cx);
+                }),
+            ),
+    )
+    .with_priority(MENU_DISMISS_Z)
+}
+
+fn popover_menu_shadow() -> Vec<BoxShadow> {
+    vec![
+        BoxShadow {
+            color: hsla(0., 0., 0., 0.08),
+            offset: point(px(0.), px(2.)),
+            blur_radius: px(4.),
+            spread_radius: px(0.),
+        },
+        BoxShadow {
+            color: hsla(0., 0., 0., 0.14),
+            offset: point(px(0.), px(8.)),
+            blur_radius: px(20.),
+            spread_radius: px(0.),
+        },
+    ]
+}
+
+/// One row inside the language menu.
+fn lang_menu_option(
+    option_id: SharedString,
+    label: &str,
+    active: bool,
+    target: LangSelectTarget,
+    lang_id: &'static str,
+    cx: &mut Context<OneAsrApp>,
+) -> impl IntoElement {
+    div()
+        .id(option_id)
+        .px_2p5()
+        .py_1p5()
+        .cursor_pointer()
+        .bg(if active { ACCENT_SOFT } else { PANEL })
+        .hover(|s| s.bg(if active { ACCENT_SOFT } else { BG }))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.pick_source_language(target.clone(), lang_id, cx);
+        }))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(if active { ACCENT } else { TEXT })
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
+                .when(active, |el| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(ACCENT)
+                            .child("✓"),
+                    )
+                }),
+        )
+}
+
+/// Deferred floating language panel (`MENU_Z`, occludes dismiss scrim).
+fn floating_lang_menu(
+    menu_id: SharedString,
+    current: &str,
+    option_id_prefix: &str,
+    target: LangSelectTarget,
+    layout: LangMenuLayout,
+    cx: &mut Context<OneAsrApp>,
+) -> impl IntoElement {
+    let opts: Vec<gpui::AnyElement> = SOURCE_LANGUAGES
+        .iter()
+        .map(|lang| {
+            let active = current == lang.id;
+            lang_menu_option(
+                SharedString::from(format!("{option_id_prefix}-{}", lang.id)),
+                lang.label,
+                active,
+                target.clone(),
+                lang.id,
+                cx,
+            )
+            .into_any_element()
+        })
+        .collect();
+
+    let (top, chip_width) = match layout {
+        LangMenuLayout::Chip => (px(30.), Some(px(LANG_MENU_W))),
+        LangMenuLayout::FullWidth => (px(38.), None),
+    };
+
+    deferred(
+        div()
+            .id(menu_id)
+            .absolute()
+            .top(top)
+            .right_0()
+            .when_some(chip_width, |el, w| el.w(w))
+            .when(matches!(layout, LangMenuLayout::FullWidth), |el| {
+                el.left_0()
+            })
+            .max_h(px(LANG_MENU_MAX_H))
+            .overflow_y_scroll()
+            .rounded_lg()
+            .border_1()
+            .border_color(LINE)
+            .bg(PANEL)
+            .shadow(popover_menu_shadow())
+            .py_1()
+            .occlude()
+            .children(opts),
+    )
+    .with_priority(MENU_Z)
 }
