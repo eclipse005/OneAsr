@@ -2466,7 +2466,7 @@ impl OneAsrApp {
                             .into_any_element()
                     }))
                     .child(section({
-                        // 分段时长：30–180s 预设（默认 120）；短尾 <15s 运行时合并
+                        // 分段时长：30–180s 预设（默认 60）；短尾 <15s 运行时合并
                         div()
                             .flex()
                             .flex_col()

@@ -13,7 +13,7 @@ pub const CHUNK_TARGET_MIN_SEC: u32 = 30;
 /// Inclusive upper bound for VAD ASR chunk target (seconds).
 pub const CHUNK_TARGET_MAX_SEC: u32 = 180;
 /// Product default when settings omit `chunk_target_seconds`.
-pub const CHUNK_TARGET_DEFAULT_SEC: u32 = 120;
+pub const CHUNK_TARGET_DEFAULT_SEC: u32 = 60;
 /// Settings UI preset values (seconds), all within
 /// [`CHUNK_TARGET_MIN_SEC`]..=[`CHUNK_TARGET_MAX_SEC`].
 pub const CHUNK_TARGET_PRESETS: &[(u32, &str)] = &[
@@ -282,7 +282,7 @@ mod tests {
             Settings::default().chunk_target_seconds,
             CHUNK_TARGET_DEFAULT_SEC
         );
-        assert_eq!(CHUNK_TARGET_DEFAULT_SEC, 120);
+        assert_eq!(CHUNK_TARGET_DEFAULT_SEC, 60);
     }
 
     #[test]
