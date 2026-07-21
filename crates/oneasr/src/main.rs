@@ -23,12 +23,13 @@ use gpui::{
     Timer, Transformation, Window, WindowBounds, WindowOptions,
 };
 use oneasr_core::{
-    accept_input_path, check_model_dir, demote_current_thread, download_model, empty_state_subtitle,
-    empty_state_title, format_batch_progress, format_queue_status, init_native_library_path,
-    init_runtime, is_cuda_runtime_ready, next_queue_seq, normalize_source_language,
-    process_media_file_with_progress, probe_duration_sec, resolve_app_root, source_language_by_id,
-    unload_session, AsrStage, DownloadHandle, DownloadProgress, DownloadState, DurationState,
-    ModelId, ModelKind, Settings, StageUpdate, Task, TaskStatus, SOURCE_LANGUAGES,
+    accept_input_path, check_asr_model_dir, demote_current_thread, download_model,
+    empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
+    init_native_library_path, init_runtime, is_cuda_runtime_ready, next_queue_seq,
+    normalize_source_language, process_media_file_with_progress, probe_duration_async,
+    resolve_app_root, source_language_by_id, AsrStage, DownloadHandle, DownloadProgress,
+    DownloadState, DurationState, ModelId, ModelKind, Settings, StageUpdate, Task, TaskStatus,
+    SOURCE_LANGUAGES,
 };
 
 actions!(oneasr, [DismissMenus]);
@@ -432,18 +433,15 @@ impl OneAsrApp {
 
     /// Fast FS check for status bar. Does not touch GPU / weights.
     fn refresh_model_probe(&mut self) {
-        self.model_status = if check_model_dir(&self.settings.asr_model_dir).is_ok()
-            && oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok()
-        {
+        self.model_status = if self.settings.can_start().is_ok() {
             ModelStatus::Ready
         } else {
             ModelStatus::NotReady
         };
     }
 
-    /// Drop any in-memory session and re-probe the configured folder.
+    /// Re-probe the configured model folders after a path change.
     fn reset_model_config(&mut self, cx: &mut Context<Self>) {
-        unload_session();
         self.refresh_model_probe();
         cx.notify();
     }
@@ -718,8 +716,8 @@ impl OneAsrApp {
             let id = task.id.clone();
             let p = task.path.clone();
             let tx = self.tx.clone();
-            thread::spawn(move || {
-                let dur = probe_duration_sec(&p);
+            // Bounded process-wide probe pool (not one thread per file).
+            probe_duration_async(p, move |dur| {
                 let _ = tx.send(WorkerMsg::Probed {
                     id,
                     duration_sec: dur,
@@ -936,15 +934,17 @@ impl OneAsrApp {
         self.flash_hint_for(msg, Duration::from_secs(6), cx);
     }
 
-    /// Soft gate before enqueue. Queue/start buttons also check model files.
+    /// Soft gate before enqueue. Single source: [`Settings::can_start`].
     fn ensure_can_start(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.model_status != ModelStatus::Ready {
-            self.flash_hint("模型未就绪，请在设置中下载或选择模型目录", cx);
+        if let Err(msg) = self.settings.can_start() {
+            self.model_status = ModelStatus::NotReady;
+            self.flash_hint(msg, cx);
             if !self.settings_open {
                 self.toggle_settings(cx);
             }
             return false;
         }
+        self.model_status = ModelStatus::Ready;
         true
     }
 
@@ -1952,7 +1952,7 @@ impl OneAsrApp {
         let aligner = self.settings.aligner_model_dir.display().to_string();
         let aligner_tip = aligner.clone();
         let dirty = self.is_settings_dirty(cx);
-        let asr_ready = check_model_dir(&self.settings.asr_model_dir).is_ok();
+        let asr_ready = check_asr_model_dir(&self.settings.asr_model_dir).is_ok();
         let align_ready =
             oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
         // Progress is keyed by model id — never show another size’s snapshot here.
@@ -2297,7 +2297,6 @@ impl OneAsrApp {
                                                 }
                                                 this.settings.select_asr_model(id);
                                                 this.clear_stale_asr_progress();
-                                                unload_session();
                                                 this.refresh_model_probe();
                                                 this.mark_settings_dirty(cx);
                                             }),
@@ -2507,7 +2506,6 @@ impl OneAsrApp {
                                                     return;
                                                 }
                                                 this.settings.backend = id.into();
-                                                unload_session();
                                                 this.refresh_model_probe();
                                                 this.mark_settings_dirty(cx);
                                             }),

@@ -2,9 +2,8 @@
 
 /// Cap the global rayon pool **before** any model load / transcribe.
 ///
-/// MOSS CPU kernels (and parts of weight load) use rayon's global pool. Leaving
-/// every logical core to rayon makes the GPUI event loop feel frozen even though
-/// work runs on other threads. We always keep at least one core free for UI/OS.
+/// Model CPU kernels use rayon's global pool. Leaving every logical core to
+/// rayon freezes the GPUI event loop. Always keep at least one core for UI/OS.
 pub fn init_runtime() {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())

@@ -47,14 +47,9 @@ pub fn default_aligner_model_dir() -> PathBuf {
     resolve_model_dir(QWEN_ALIGN_06B)
 }
 
-/// Dedicated folder for native runtime DLLs: `{exe_dir}/dll`.
+/// Dedicated folder for native runtime DLLs (CUDA user-mode libs): `{exe_dir}/dll`.
 pub fn resolve_dll_dir() -> PathBuf {
     resolve_exe_dir().join("dll")
-}
-
-/// CUDA user-mode libraries live under [`resolve_dll_dir`].
-pub fn resolve_cuda_runtime_dir() -> PathBuf {
-    resolve_dll_dir()
 }
 
 /// Register `{exe}/dll` as the process native library directory (Windows).
@@ -79,6 +74,7 @@ pub fn init_native_library_path() {
         // SAFETY: process-wide DLL search path; intended only at single-threaded startup.
         let ok = unsafe { SetDllDirectoryW(wide.as_ptr()) };
         if ok == 0 {
+            #[cfg(debug_assertions)]
             eprintln!(
                 "oneasr: SetDllDirectoryW failed for {} — GPU DLL load may fail",
                 dll_dir.display()

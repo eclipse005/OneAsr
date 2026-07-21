@@ -26,7 +26,7 @@ pub struct Settings {
     #[serde(default = "default_asr_model")]
     pub asr_model: String,
     /// Directory loaded for inference (install layout or user-picked).
-    #[serde(default = "default_asr_model_dir", alias = "model_dir")]
+    #[serde(default = "default_asr_model_dir")]
     pub asr_model_dir: PathBuf,
     /// Qwen3-ForcedAligner directory.
     #[serde(default = "default_aligner_model_dir")]
@@ -112,8 +112,7 @@ impl Settings {
     /// Reconcile language, ASR catalog id, and model path after load / edit.
     ///
     /// Authority:
-    /// 1. If `asr_model_dir` is a known catalog folder → that name **is** `asr_model`
-    ///    (covers legacy `model_dir` pointing at 1.7B with default 0.6B field).
+    /// 1. If `asr_model_dir` is a known catalog folder → that name **is** `asr_model`.
     /// 2. Else if path empty → install-layout for `asr_model`.
     /// 3. Else custom path → keep path; clamp `asr_model` to a valid catalog id
     ///    for the size picker only (inference still uses the custom path).
@@ -155,7 +154,10 @@ impl Settings {
         Ok(path)
     }
 
+    /// True when ASR + Aligner model dirs look complete enough to load.
     pub fn can_start(&self) -> Result<(), String> {
+        crate::asr::check_asr_model_dir(&self.asr_model_dir).map_err(|e| e.to_string())?;
+        crate::asr::check_aligner_model_dir(&self.aligner_model_dir).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -182,10 +184,6 @@ impl Settings {
         }
     }
 
-    #[cfg(test)]
-    pub fn config_path_for(root: &std::path::Path) -> PathBuf {
-        root.join("settings.json")
-    }
 }
 
 #[cfg(test)]
@@ -194,23 +192,17 @@ mod tests {
     use crate::model::QWEN3_ASR_17B;
 
     #[test]
-    fn default_can_start() {
-        assert!(Settings::default().can_start().is_ok());
+    fn default_language_and_asr_id() {
         assert_eq!(Settings::default().language, "zh");
         assert_eq!(Settings::default().selected_asr_id(), ModelId::Qwen3Asr06B);
     }
 
     #[test]
-    fn loads_legacy_model_dir_alias() {
-        let json = r#"{
-            "model_dir": "D:\\legacy\\asr",
-            "backend": "cuda"
-        }"#;
-        let mut s: Settings = serde_json::from_str(json).unwrap();
-        s.normalize();
-        assert_eq!(s.asr_model_dir, PathBuf::from(r"D:\legacy\asr"));
-        assert_eq!(s.backend, "cuda");
-        assert_eq!(s.language, "zh");
+    fn can_start_rejects_missing_model_dirs() {
+        let mut s = Settings::default();
+        s.asr_model_dir = PathBuf::from(r"D:\__oneasr_no_such_asr__");
+        s.aligner_model_dir = PathBuf::from(r"D:\__oneasr_no_such_align__");
+        assert!(s.can_start().is_err());
     }
 
     #[test]

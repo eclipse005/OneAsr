@@ -213,14 +213,6 @@ fn is_single_letter_dotted(token: &str) -> bool {
     chars.len() == 2 && chars[0].is_ascii_alphabetic() && chars[1] == '.'
 }
 
-#[cfg(test)]
-pub(super) fn build_deterministic_split_points(
-    words: &[WordTokenDto],
-) -> Vec<(usize, SplitReason)> {
-    use super::language::profile_for_lang;
-    build_split_points_from_hard_boundaries(words, &*profile_for_lang("en"))
-}
-
 fn push_split_point(
     split_points: &mut Vec<(usize, SplitReason)>,
     index: usize,

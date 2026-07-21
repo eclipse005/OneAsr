@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::path::{resolve_cuda_runtime_dir, resolve_model_dir};
+use super::path::{resolve_dll_dir, resolve_model_dir};
 
 pub const QWEN3_ASR_06B: &str = "Qwen3-ASR-0.6B";
 pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B";
@@ -122,7 +122,7 @@ pub fn model_definition(id: ModelId) -> ModelDefinition {
         ModelId::QwenAlign06B => model_def(id, resolve_model_dir(QWEN_ALIGN_06B), qwen_align_files(), modelscope_model_url),
         ModelId::CudaRuntime => model_def(
             id,
-            resolve_cuda_runtime_dir(),
+            resolve_dll_dir(),
             cuda_runtime_files(),
             cuda_runtime_url,
         ),

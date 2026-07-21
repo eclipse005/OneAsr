@@ -14,6 +14,5 @@ pub use download::{
 };
 pub use path::{
     default_aligner_model_dir, default_asr_model_dir, init_native_library_path,
-    resolve_app_root_dir, resolve_cuda_runtime_dir, resolve_dll_dir, resolve_exe_dir,
-    resolve_model_dir, resolve_models_root,
+    resolve_app_root_dir, resolve_dll_dir, resolve_exe_dir, resolve_model_dir, resolve_models_root,
 };

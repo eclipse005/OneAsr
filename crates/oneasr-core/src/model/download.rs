@@ -148,12 +148,6 @@ pub enum DownloadOutcome {
     },
 }
 
-impl DownloadOutcome {
-    pub fn is_success(&self) -> bool {
-        matches!(self, Self::Completed { .. })
-    }
-}
-
 /// Cancel handle for one download job (share with UI).
 #[derive(Clone)]
 pub struct DownloadHandle {
@@ -174,14 +168,6 @@ impl DownloadHandle {
 
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed)
-    }
-
-    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
-        self.cancel.clone()
     }
 }
 
@@ -223,7 +209,7 @@ pub fn download_model(
     let id = handle.model_id;
     let definition = model_definition(id);
     let model_dir = definition.model_dir.clone();
-    let cancel = handle.cancel_flag();
+    let cancel = Arc::clone(&handle.cancel);
 
     if let Err(e) = std::fs::create_dir_all(&model_dir) {
         return DownloadOutcome::Failed {
@@ -339,8 +325,8 @@ pub fn download_model(
         let mut buf = [0_u8; 64 * 1024];
         loop {
             if cancel.load(Ordering::Relaxed) {
+                // Keep `.part` so the next download resumes (same as failure path).
                 drop(output);
-                let _ = std::fs::remove_file(&part_path);
                 return DownloadOutcome::Cancelled {
                     downloaded_bytes,
                     total_bytes,

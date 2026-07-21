@@ -1,4 +1,4 @@
-//! Qwen3-ASR + ForcedAligner pipeline (VoxTrans-compatible schedule).
+//! Qwen3-ASR + ForcedAligner pipeline.
 //!
 //! ```text
 //! load ASR once → all VAD chunks transcribed → unload ASR
@@ -7,6 +7,10 @@
 //! ```
 //!
 //! Never keeps ASR and Aligner in VRAM at the same time.
+//!
+//! **Scratch lifecycle**: `runs/{stem}_{ts}/` holds only the full 16 kHz WAV
+//! plus at most one temporary chunk file. Product output is solely
+//! `output/{stem}.srt` (atomic write). On success the scratch dir is removed.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +21,9 @@ use qwen_forced_aligner_rs::{
 use thiserror::Error;
 
 use crate::lang::{to_lang_key, to_qwen_language_label};
-use crate::media::{convert_to_16k_mono_wav, probe_duration_sec, slice_wav};
+use crate::media::{
+    convert_to_16k_mono_wav, slice_wav, wav_duration_sec, write_atomic,
+};
 use crate::paths::{media_stem, output_srt_path};
 use crate::sentence_boundary::{
     build_source_sentences_from_words, source_sentences_to_srt, SentenceBoundaryRequest,
@@ -84,16 +90,6 @@ impl StageUpdate {
     }
 }
 
-/// Drop any cached sessions (no-op for per-job load/unload; kept for UI).
-pub fn unload_session() {
-    // Models are owned by the worker job and dropped at stage boundaries.
-}
-
-/// Fast filesystem probe for ASR model dir.
-pub fn check_model_dir(model_dir: &Path) -> Result<(), AsrError> {
-    check_asr_model_dir(model_dir)
-}
-
 pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     if !model_dir.is_dir() {
         return Err(AsrError::Msg(format!(
@@ -150,16 +146,46 @@ pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     Ok(())
 }
 
+/// Resolved compute target for both ASR and Aligner (one policy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComputeBackend {
+    Cpu,
+    Cuda,
+}
+
+impl ComputeBackend {
+    fn as_label(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+        }
+    }
+
+    fn to_asr(self) -> AsrBackend {
+        match self {
+            Self::Cpu => AsrBackend::Cpu,
+            Self::Cuda => AsrBackend::Cuda,
+        }
+    }
+
+    fn to_align_device(self) -> DeviceRequest {
+        match self {
+            Self::Cpu => DeviceRequest::Cpu,
+            Self::Cuda => DeviceRequest::Cuda(0),
+        }
+    }
+}
+
 /// Resolve inference backend from settings.
 ///
 /// Product rule (single installer + optional Settings「安装组件」):
 /// - **cpu** → always CPU
 /// - **cuda** → require app `dll/` CUDA runtime; error if missing
-/// - **auto** → CUDA only when app `dll/` is ready; otherwise CPU  
+/// - **auto** → CUDA only when app `dll/` is ready; otherwise CPU
 ///   (do **not** fall through to system CUDA — that bypasses the install gate)
-fn resolve_asr_backend(backend: &str) -> Result<AsrBackend, AsrError> {
+fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
     match backend.trim().to_ascii_lowercase().as_str() {
-        "cpu" => Ok(AsrBackend::Cpu),
+        "cpu" => Ok(ComputeBackend::Cpu),
         "cuda" => {
             #[cfg(feature = "cuda")]
             {
@@ -168,7 +194,7 @@ fn resolve_asr_backend(backend: &str) -> Result<AsrBackend, AsrError> {
                         "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
                     ));
                 }
-                Ok(AsrBackend::Cuda)
+                Ok(ComputeBackend::Cuda)
             }
             #[cfg(not(feature = "cuda"))]
             {
@@ -182,52 +208,14 @@ fn resolve_asr_backend(backend: &str) -> Result<AsrBackend, AsrError> {
             #[cfg(feature = "cuda")]
             {
                 if crate::model::is_cuda_runtime_ready() {
-                    Ok(AsrBackend::Cuda)
+                    Ok(ComputeBackend::Cuda)
                 } else {
-                    Ok(AsrBackend::Cpu)
+                    Ok(ComputeBackend::Cpu)
                 }
             }
             #[cfg(not(feature = "cuda"))]
             {
-                Ok(AsrBackend::Cpu)
-            }
-        }
-    }
-}
-
-fn resolve_align_device(backend: &str) -> Result<DeviceRequest, AsrError> {
-    match backend.trim().to_ascii_lowercase().as_str() {
-        "cpu" => Ok(DeviceRequest::Cpu),
-        "cuda" => {
-            #[cfg(feature = "cuda")]
-            {
-                if !crate::model::is_cuda_runtime_ready() {
-                    return Err(AsrError::Msg(
-                        "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
-                    ));
-                }
-                Ok(DeviceRequest::Cuda(0))
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                Err(AsrError::Msg(
-                    "此构建未启用 CUDA，请使用 backend=cpu".into(),
-                ))
-            }
-        }
-        // auto — same gate as ASR
-        _ => {
-            #[cfg(feature = "cuda")]
-            {
-                if crate::model::is_cuda_runtime_ready() {
-                    Ok(DeviceRequest::Cuda(0))
-                } else {
-                    Ok(DeviceRequest::Cpu)
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                Ok(DeviceRequest::Cpu)
+                Ok(ComputeBackend::Cpu)
             }
         }
     }
@@ -247,23 +235,16 @@ fn round_millis(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
 }
 
+/// One non-empty ASR segment; times are on the global timeline (seconds).
+/// Audio is re-sliced from the master 16 kHz WAV on demand — no persistent chunk files.
 struct ChunkTranscript {
     start_sec: f64,
-    chunk_wav: PathBuf,
+    end_sec: f64,
     text: String,
     language: String,
 }
 
-/// Full pipeline: convert → VAD chunks → ASR all → unload → align all → SRT.
-pub fn process_media_file(
-    input: &Path,
-    media_name: &str,
-    settings: &Settings,
-    app_root: &Path,
-) -> Result<PathBuf, AsrError> {
-    process_media_file_with_progress(input, media_name, settings, app_root, |_| {})
-}
-
+/// Full pipeline: convert → VAD plan → ASR all → unload → align all → SRT.
 pub fn process_media_file_with_progress(
     input: &Path,
     media_name: &str,
@@ -284,19 +265,20 @@ pub fn process_media_file_with_progress(
         std::fs::create_dir_all(parent).map_err(|e| AsrError::Msg(e.to_string()))?;
     }
 
-    // 1. Convert
+    // 1. Convert → single master PCM under work_dir
     on_stage(StageUpdate::new(AsrStage::Converting));
     let wav = work_dir.join("input_16k.wav");
     convert_to_16k_mono_wav(input, &wav).map_err(|e| AsrError::Msg(e.to_string()))?;
 
-    let duration = probe_duration_sec(&wav).unwrap_or(0.0) as f32;
+    let duration = wav_duration_sec(&wav).unwrap_or(0.0) as f32;
     let chunk_sec = settings.chunk_target_seconds.clamp(30, 180) as f32;
 
-    // 2. VAD plan
+    // 2. VAD plan (ranges only — no chunk files yet)
     let (chunks, vad_speech) = if duration > chunk_sec {
         let speech = vad::run_vad(&wav)?;
         let silences = vad::speech_to_silences(&speech, duration, MIN_SILENCE_FALLBACK);
         let planned = vad::plan_chunks(duration, &silences, chunk_sec);
+        #[cfg(debug_assertions)]
         eprintln!(
             "[vad] duration={duration:.1}s speech={} silence_gaps={} chunks={}",
             speech.len(),
@@ -318,91 +300,84 @@ pub fn process_media_file_with_progress(
         )
     };
 
-    // Materialize chunk wavs once (reused by align stage).
-    let mut chunk_paths: Vec<(vad::Chunk, PathBuf)> = Vec::with_capacity(chunks.len());
-    for (i, chunk) in chunks.iter().enumerate() {
-        let chunk_wav = if chunks.len() == 1 {
-            wav.clone()
-        } else {
-            let p = work_dir.join(format!("chunk_{i:03}.wav"));
-            slice_wav(&wav, chunk.start, chunk.end, &p).map_err(|e| AsrError::Msg(e.to_string()))?;
-            p
-        };
-        chunk_paths.push((chunk.clone(), chunk_wav));
-    }
-
-    // Explicit source language (settings); no auto-detect — aligner needs a fixed code.
+    let multi_chunk = chunks.len() > 1;
     let force_lang = to_qwen_language_label(&settings.language);
     let source_lang_key = to_lang_key(&settings.language);
-    let total_chunks = chunk_paths.len().max(1);
+    let total_chunks = chunks.len().max(1);
 
-    // 3. Load ASR once → all chunks → drop (unload)
+    // Scratch path for the one active slice (deleted after each use when multi).
+    let chunk_tmp = work_dir.join("chunk_tmp.wav");
+
+    // 3. Load ASR once → all chunks → drop
     on_stage(StageUpdate::new(AsrStage::LoadingModel));
     check_asr_model_dir(&settings.asr_model_dir)?;
-    let asr_backend = resolve_asr_backend(&settings.backend)?;
-    let asr_backend_label = match &asr_backend {
-        AsrBackend::Cpu => "cpu",
-        AsrBackend::Cuda => "cuda",
-        #[allow(unreachable_patterns)]
-        _ => "other",
-    };
+    let compute = resolve_compute_backend(&settings.backend)?;
+    #[cfg(debug_assertions)]
     eprintln!(
-        "[backend] setting={} resolved_asr={} cuda_dlls={}",
+        "[backend] setting={} resolved={} cuda_dlls={}",
         settings.backend,
-        asr_backend_label,
+        compute.as_label(),
         crate::model::is_cuda_runtime_ready(),
     );
-    let asr = AsrInference::load(&settings.asr_model_dir, asr_backend)
+    let asr = AsrInference::load(&settings.asr_model_dir, compute.to_asr())
         .map_err(|e| AsrError::Msg(format!("加载 ASR 失败: {e:#}")))?;
 
     let mut transcripts: Vec<ChunkTranscript> = Vec::new();
+    #[cfg(debug_assertions)]
     let mut empty_chunks: Vec<usize> = Vec::new();
 
-    for (i, (chunk, chunk_wav)) in chunk_paths.iter().enumerate() {
+    for (i, chunk) in chunks.iter().enumerate() {
         on_stage(StageUpdate::with_chunk(
             AsrStage::Transcribing,
             i + 1,
             total_chunks,
         ));
+
+        let chunk_path = if multi_chunk {
+            slice_wav(&wav, chunk.start, chunk.end, &chunk_tmp)
+                .map_err(|e| AsrError::Msg(e.to_string()))?;
+            chunk_tmp.as_path()
+        } else {
+            wav.as_path()
+        };
+
         let opts = TranscribeOptions::default()
             .with_max_new_tokens(settings.max_new_tokens)
             .with_language(force_lang.clone());
 
-        let path_str = chunk_wav
+        let path_str = chunk_path
             .to_str()
             .ok_or_else(|| AsrError::Msg("路径非 UTF-8".into()))?;
         let report = asr
             .transcribe(path_str, opts)
             .map_err(|e| AsrError::Msg(format!("转写失败 chunk {}: {e:#}", i + 1)))?;
         let text = clean_asr_text(&report.text);
+
+        if multi_chunk {
+            let _ = std::fs::remove_file(&chunk_tmp);
+        }
+
         if text.is_empty() {
+            #[cfg(debug_assertions)]
             empty_chunks.push(i);
-            let _ = std::fs::write(
-                work_dir.join(format!("chunk_{i:03}.txt")),
-                format!("language={force_lang}\n# empty transcript\n"),
-            );
             continue;
         }
 
-        let _ = std::fs::write(
-            work_dir.join(format!("chunk_{i:03}.txt")),
-            format!("language={force_lang}\n{text}\n"),
-        );
-
         transcripts.push(ChunkTranscript {
             start_sec: chunk.start as f64,
-            chunk_wav: chunk_wav.clone(),
+            end_sec: chunk.end as f64,
             text,
             language: force_lang.clone(),
         });
     }
-    drop(asr); // unload ASR before loading aligner
+    drop(asr);
 
     if transcripts.is_empty() {
         return Err(AsrError::Msg(format!(
             "ASR 未产生任何有效文本（{total_chunks} 段全部为空）"
         )));
     }
+    #[cfg(debug_assertions)]
     if !empty_chunks.is_empty() {
         eprintln!(
             "[asr] skipped empty chunks: {}/{} indices={empty_chunks:?}",
@@ -411,14 +386,13 @@ pub fn process_media_file_with_progress(
         );
     }
 
-    // 4. Load Aligner once → all chunks → drop
+    // 4. Load Aligner once → all chunks → drop (re-slice from master as needed)
     on_stage(StageUpdate::new(AsrStage::LoadingModel));
     check_aligner_model_dir(&settings.aligner_model_dir)?;
-    let align_device = resolve_align_device(&settings.backend)?;
     let aligner = Qwen3ForcedAligner::load(
         &settings.aligner_model_dir,
         ModelOptions {
-            device: align_device,
+            device: compute.to_align_device(),
         },
     )
     .map_err(|e| AsrError::Msg(format!("加载 Aligner 失败: {e:#}")))?;
@@ -431,13 +405,31 @@ pub fn process_media_file_with_progress(
             i + 1,
             align_total,
         ));
+
+        let chunk_path = if multi_chunk {
+            slice_wav(
+                &wav,
+                seg.start_sec as f32,
+                seg.end_sec as f32,
+                &chunk_tmp,
+            )
+            .map_err(|e| AsrError::Msg(e.to_string()))?;
+            chunk_tmp.as_path()
+        } else {
+            wav.as_path()
+        };
+
         let result = aligner
             .align(AlignRequest::new(
-                AudioInput::Path(seg.chunk_wav.clone()),
+                AudioInput::Path(chunk_path.to_path_buf()),
                 TextInput::Text(seg.text.clone()),
                 seg.language.clone(),
             ))
             .map_err(|e| AsrError::Msg(format!("对齐失败 chunk {}: {e:#}", i + 1)))?;
+
+        if multi_chunk {
+            let _ = std::fs::remove_file(&chunk_tmp);
+        }
 
         let mut segment_words = Vec::new();
         for item in result.items {
@@ -454,34 +446,16 @@ pub fn process_media_file_with_progress(
 
         // Qwen aligner strips punctuation — restore from ASR transcript.
         let restored = attach_transcript_punctuation(&seg.text, &segment_words);
-        let _ = std::fs::write(
-            work_dir.join(format!("chunk_{i:03}.align.json")),
-            serde_json::to_string_pretty(
-                &restored
-                    .iter()
-                    .map(|w| {
-                        serde_json::json!({
-                            "text": w.word,
-                            "start": w.start,
-                            "end": w.end,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_default(),
-        );
         all_words.extend(restored);
     }
     drop(aligner);
 
-    // 5. Normalize + sentence boundary → SRT
+    // 5. Normalize + sentence boundary → atomic SRT → drop scratch
     on_stage(StageUpdate::new(AsrStage::Exporting));
     let words = normalize_word_tokens(all_words);
     if words.is_empty() {
         return Err(AsrError::Msg("对齐后词列表为空".into()));
     }
-
-    let source_lang = source_lang_key;
 
     let word_dtos: Vec<WordTokenDto> = words
         .into_iter()
@@ -495,7 +469,7 @@ pub fn process_media_file_with_progress(
     let step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
         task_id: stem.clone(),
         media_path: media_name.to_string(),
-        source_lang: source_lang.clone(),
+        source_lang: source_lang_key,
         subtitle_length_preset: settings.subtitle_length_preset.clone(),
         words: word_dtos,
         vad_speech_segments: vad_speech,
@@ -507,37 +481,10 @@ pub fn process_media_file_with_progress(
         return Err(AsrError::Msg("断句后字幕为空".into()));
     }
 
-    std::fs::write(&srt_path, &srt_body).map_err(|e| AsrError::Msg(e.to_string()))?;
-    let _ = std::fs::write(work_dir.join(format!("{stem}.srt")), &srt_body);
+    write_atomic(&srt_path, &srt_body).map_err(|e| AsrError::Msg(e.to_string()))?;
 
-    let plain: String = step2
-        .translation_sentences
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let _ = std::fs::write(work_dir.join(format!("{stem}.txt")), plain);
-    let _ = std::fs::write(
-        work_dir.join("raw_transcript.txt"),
-        transcripts
-            .iter()
-            .map(|t| t.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
-    let _ = std::fs::write(
-        work_dir.join("meta.txt"),
-        format!(
-            "source={media_name}\nbackend_setting={}\nbackend_resolved={asr_backend_label}\ncuda_dlls={}\nasr={}\naligner={}\nlang={source_lang}\nchunks_total={total_chunks}\nchunks_ok={}\nchunks_empty={}\nempty_indices={empty_chunks:?}\noutput={}\n",
-            settings.backend,
-            crate::model::is_cuda_runtime_ready(),
-            settings.asr_model_dir.display(),
-            settings.aligner_model_dir.display(),
-            transcripts.len(),
-            empty_chunks.len(),
-            srt_path.display()
-        ),
-    );
+    // Product is only output/*.srt — scratch is ephemeral.
+    let _ = std::fs::remove_dir_all(&work_dir);
 
     Ok(srt_path)
 }
@@ -554,33 +501,30 @@ fn attach_transcript_punctuation(transcript_text: &str, aligned_words: &[WordTok
     }
 }
 
-pub fn planned_output_path(app_root: &Path, input: &Path) -> PathBuf {
-    output_srt_path(app_root, &media_stem(input))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::output_srt_path;
 
     #[test]
-    fn planned_output_path_uses_stem() {
+    fn output_path_uses_stem() {
         let root = PathBuf::from(r"C:\Install\OneAsr");
         let input = PathBuf::from(r"D:\clips\lecture_01.mp4");
         assert_eq!(
-            planned_output_path(&root, &input),
+            output_srt_path(&root, &media_stem(&input)),
             PathBuf::from(r"C:\Install\OneAsr\output\lecture_01.srt")
         );
     }
 
     #[test]
-    fn check_model_dir_rejects_missing() {
+    fn check_asr_model_dir_rejects_missing() {
         let dir = std::env::temp_dir().join(format!(
             "oneasr_empty_model_probe_{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let err = check_model_dir(&dir).unwrap_err().to_string();
+        let err = check_asr_model_dir(&dir).unwrap_err().to_string();
         assert!(err.contains("不全") || err.contains("缺少") || err.contains("不存在"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

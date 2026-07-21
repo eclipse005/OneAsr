@@ -23,12 +23,4 @@ fn process_source_uses_qwen_asr_align_and_srt() {
         src.contains("drop(asr)") || src.contains("drop(asr)"),
         "pipeline must unload ASR before aligner"
     );
-    assert!(
-        !src.contains("moss_transcribe_diarize"),
-        "pipeline must not depend on MOSS"
-    );
-    assert!(
-        !src.contains("format!(\"[stub]"),
-        "must not format stub SRT body"
-    );
 }

@@ -1,8 +1,6 @@
 /target
 /runs
 /output
-/terminals
-/mcps
 # Bundled ffmpeg is large; place bin/ffmpeg.exe locally for dev/run
 /bin/*.exe
 # Downloaded ASR/aligner weights (multi-GB; never commit)

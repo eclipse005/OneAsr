@@ -1,7 +1,6 @@
 //! OneAsr core: Qwen ASR + ForcedAligner pipeline, sentence boundary, jobs.
 
 pub mod asr;
-pub mod engine;
 pub mod job;
 pub mod lang;
 pub mod media;
@@ -16,14 +15,14 @@ pub mod ui_labels;
 pub mod vad;
 
 pub use asr::{
-    check_aligner_model_dir, check_asr_model_dir, check_model_dir, planned_output_path,
-    process_media_file, process_media_file_with_progress, unload_session, AsrStage, StageUpdate,
+    check_aligner_model_dir, check_asr_model_dir, process_media_file_with_progress, AsrStage,
+    StageUpdate,
 };
 pub use job::{accept_input_path, next_queue_seq, DurationState, Task, TaskStatus};
 pub use lang::{
     normalize_source_language, source_language_by_id, SOURCE_LANGUAGES, SourceLanguage,
 };
-pub use media::{ffmpeg_available, probe_duration_sec, resolve_app_root};
+pub use media::{probe_duration_async, probe_duration_sec, resolve_app_root};
 pub use model::{
     default_aligner_model_dir, default_asr_model_dir, download_model, init_native_library_path,
     is_cuda_runtime_ready, is_model_ready, resolve_dll_dir, resolve_models_root, DownloadHandle,

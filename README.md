@@ -57,7 +57,7 @@ UI 图标/音效在编译期嵌入 exe，安装目录**无** `assets\`。
 {app_root}/output/{视频名}.srt
 ```
 
-中间产物在 `runs/`（chunk wav、转写 txt、align json 等）。
+`runs/` 为任务 scratch：运行时临时目录，**成功后自动删除**；失败时可能残留便于排查。
 
 ## 流程
 
