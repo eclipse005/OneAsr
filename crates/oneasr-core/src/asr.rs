@@ -43,6 +43,20 @@ pub enum AsrError {
 
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
 
+/// Opt-in pipeline diagnostics (`ONEASR_PIPELINE_TRACE=1`).
+fn pipeline_trace() -> bool {
+    matches!(
+        std::env::var("ONEASR_PIPELINE_TRACE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+    )
+}
+
+fn trace_log(msg: impl AsRef<str>) {
+    if pipeline_trace() {
+        eprintln!("[pipeline] {}", msg.as_ref());
+    }
+}
+
 /// Fine-grained pipeline stage for live UI status and timing breakdown.
 ///
 /// Order in a successful run:
@@ -435,6 +449,20 @@ pub fn process_media_file_with_progress(
     let source_lang_key = to_lang_key(&settings.language);
     let total_chunks = chunks.len().max(1);
 
+    if pipeline_trace() {
+        eprintln!(
+            "[pipeline] duration={duration:.1}s chunk_target={chunk_sec} chunks={total_chunks} lang={force_lang}"
+        );
+        for (i, c) in chunks.iter().enumerate() {
+            eprintln!(
+                "[pipeline] plan#{i} {:.3}-{:.3} ({:.1}s)",
+                c.start,
+                c.end,
+                c.end - c.start
+            );
+        }
+    }
+
     // Scratch path for the one active slice (deleted after each use when multi).
     let chunk_tmp = work_dir.join("chunk_tmp.wav");
 
@@ -442,18 +470,26 @@ pub fn process_media_file_with_progress(
     on_stage(StageUpdate::new(AsrStage::LoadingAsr));
     check_asr_model_dir(&settings.asr_model_dir)?;
     let compute = resolve_compute_backend(&settings.backend)?;
-    #[cfg(debug_assertions)]
     {
         let backend_label = match compute {
             ComputeBackend::Cpu => "cpu",
             ComputeBackend::Cuda => "cuda",
         };
-        eprintln!(
-            "[backend] setting={} resolved={} cuda_dlls={}",
+        trace_log(format!(
+            "backend setting={} resolved={} cuda_dlls={}",
             settings.backend,
             backend_label,
             crate::model::is_cuda_runtime_ready(),
-        );
+        ));
+        #[cfg(debug_assertions)]
+        if !pipeline_trace() {
+            eprintln!(
+                "[backend] setting={} resolved={} cuda_dlls={}",
+                settings.backend,
+                backend_label,
+                crate::model::is_cuda_runtime_ready(),
+            );
+        }
     }
     let asr = AsrInference::load(&settings.asr_model_dir, compute.to_asr())
         .map_err(|e| AsrError::Msg(format!("加载 ASR 失败: {e:#}")))?;
@@ -499,6 +535,12 @@ pub fn process_media_file_with_progress(
             continue;
         }
 
+        trace_log(format!(
+            "asr#{} {:.1}s chars={}",
+            i + 1,
+            chunk.end - chunk.start,
+            text.chars().count()
+        ));
         transcripts.push(ChunkTranscript {
             start_sec: chunk.start as f64,
             end_sec: chunk.end as f64,
@@ -507,6 +549,7 @@ pub fn process_media_file_with_progress(
         });
     }
     drop(asr);
+    trace_log("asr dropped");
 
     if transcripts.is_empty() {
         return Err(AsrError::Msg(format!(
@@ -542,6 +585,17 @@ pub fn process_media_file_with_progress(
             align_total,
         ));
 
+        let seg_dur = (seg.end_sec - seg.start_sec) as f32;
+        let seg_chars = seg.text.chars().count();
+        trace_log(format!(
+            "align#{} begin {:.3}-{:.3} ({:.1}s) chars={}",
+            i + 1,
+            seg.start_sec,
+            seg.end_sec,
+            seg_dur,
+            seg_chars
+        ));
+
         let chunk_path = if multi_chunk {
             slice_wav(
                 &wav,
@@ -561,7 +615,19 @@ pub fn process_media_file_with_progress(
                 TextInput::Text(seg.text.clone()),
                 seg.language.clone(),
             ))
-            .map_err(|e| AsrError::Msg(format!("对齐失败 chunk {}: {e:#}", i + 1)))?;
+            .map_err(|e| {
+                AsrError::Msg(format!(
+                    "对齐失败 chunk {} ({:.1}s, {} chars): {e:#}",
+                    i + 1,
+                    seg_dur,
+                    seg_chars
+                ))
+            })?;
+        trace_log(format!(
+            "align#{} ok words={}",
+            i + 1,
+            result.items.len()
+        ));
 
         if multi_chunk {
             let _ = std::fs::remove_file(&chunk_tmp);

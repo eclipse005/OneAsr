@@ -25,7 +25,8 @@ pub use lang::{
 pub use media::{probe_duration_async, probe_duration_sec, resolve_app_root};
 pub use model::{
     default_aligner_model_dir, default_asr_model_dir, download_model, init_native_library_path,
-    is_cuda_runtime_ready, is_model_ready, resolve_dll_dir, resolve_models_root, DownloadHandle,
+    is_cuda_runtime_ready, is_model_ready, resolve_cuda_runtime_dir, resolve_dll_dir,
+    resolve_models_root, DownloadHandle,
     DownloadOutcome, DownloadProgress, DownloadState, ModelId, ModelKind, QWEN3_ASR_06B,
     QWEN3_ASR_17B,
 };

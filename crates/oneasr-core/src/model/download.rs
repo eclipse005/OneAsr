@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::catalog::{model_definition, ModelDefinition, ModelId};
+use super::path::{resolve_dll_dir, resolve_exe_dir};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadState {
@@ -183,9 +184,53 @@ pub fn is_model_ready(id: ModelId) -> bool {
     })
 }
 
-/// CUDA runtime DLLs under `{exe}/dll/` with plausible sizes (for GPU backend).
+/// CUDA runtime DLLs for the GPU backend.
+///
+/// Searches common layout roots so GPU works for:
+/// - install: `{exe}/dll/`
+/// - `cargo run -p oneasr`: `{target/release}/dll/`
+/// - `cargo run --example …`: walk up from `target/*/examples/` to `target/*/dll/`
+/// - project root: `{app_root}/dll/` when it contains `bin/ffmpeg`
 pub fn is_cuda_runtime_ready() -> bool {
-    is_model_ready(ModelId::CudaRuntime)
+    cuda_runtime_search_dirs()
+        .into_iter()
+        .any(|dir| cuda_runtime_ready_in(&dir))
+}
+
+/// First directory that has a complete CUDA runtime set (for `SetDllDirectory`).
+pub fn resolve_cuda_runtime_dir() -> Option<PathBuf> {
+    cuda_runtime_search_dirs()
+        .into_iter()
+        .find(|dir| cuda_runtime_ready_in(dir))
+}
+
+fn cuda_runtime_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let push_unique = |dirs: &mut Vec<PathBuf>, p: PathBuf| {
+        if !dirs.iter().any(|d| d == &p) {
+            dirs.push(p);
+        }
+    };
+    push_unique(&mut dirs, resolve_dll_dir());
+    // Walk up from the exe (covers target/release/examples → target/release).
+    let mut cur = resolve_exe_dir();
+    for _ in 0..6 {
+        push_unique(&mut dirs, cur.join("dll"));
+        if !cur.pop() {
+            break;
+        }
+    }
+    if let Some(root) = crate::media::resolve_app_root() {
+        push_unique(&mut dirs, root.join("dll"));
+    }
+    dirs
+}
+
+fn cuda_runtime_ready_in(dir: &Path) -> bool {
+    let def = model_definition(ModelId::CudaRuntime);
+    def.download_files.iter().all(|file| {
+        file_meets_catalog_size(&dir.join(&file.file_name), file.expected_size)
+    })
 }
 
 /// File exists and is large enough vs catalog expected size (not empty/truncated).

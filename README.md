@@ -24,11 +24,31 @@
 
 准备：将 `ffmpeg.exe` 放到 `bin/ffmpeg.exe`。
 
+### GUI
+
 ```powershell
 cd D:\OneAsr
-cargo run -p oneasr
+cargo run -p oneasr --release
 ```
 
+### CLI（无界面，便于回归 / 脚本）
+
+```powershell
+# 全流程 → output/{stem}.srt
+cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
+  transcribe --input "C:\path\to\video.mp4" --app-root "D:\OneAsr" `
+  --language zh --chunk-seconds 60 --backend cuda
+
+# 单段 ASR 文本（排查循环 / 过长）
+cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
+  asr-chunk --wav "D:\OneAsr\runs\...\input_16k.wav" `
+  --start 722.75 --end 842.75 --language zh
+
+# 详细分块日志
+$env:ONEASR_PIPELINE_TRACE = "1"
+```
+
+产物二进制：`target\release\oneasr-cli.exe`。  
 `oneasr-core` 默认启用 `cuda` feature。
 
 ## 打包（单一安装包）

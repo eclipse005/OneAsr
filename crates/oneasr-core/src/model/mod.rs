@@ -9,8 +9,8 @@ pub use catalog::{
     QWEN3_ASR_17B, QWEN_ALIGN_06B,
 };
 pub use download::{
-    download_model, is_cuda_runtime_ready, is_model_ready, DownloadHandle, DownloadOutcome,
-    DownloadProgress, DownloadState,
+    download_model, is_cuda_runtime_ready, is_model_ready, resolve_cuda_runtime_dir, DownloadHandle,
+    DownloadOutcome, DownloadProgress, DownloadState,
 };
 pub use path::{
     default_aligner_model_dir, default_asr_model_dir, init_native_library_path,
