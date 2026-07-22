@@ -9,8 +9,9 @@
 //! Never keeps ASR and Aligner in VRAM at the same time.
 //!
 //! **Scratch lifecycle**: `runs/{stem}_{ts}/` holds only the full 16 kHz WAV
-//! plus at most one temporary chunk file. Product output is solely
-//! `output/{stem}.srt` (atomic write). On success the scratch dir is removed.
+//! plus at most one temporary chunk file. Product output is
+//! `{settings.output_dir}/{stem}.srt` (default `{app}/output`, atomic write).
+//! On success the scratch dir is removed.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -495,16 +496,47 @@ struct ChunkTranscript {
     language: String,
 }
 
+/// Optional side exports from the pipeline (CLI / eval harness).
+///
+/// Product GUI only needs the SRT under `settings.output_dir`. Eval harnesses
+/// may also request ForcedAligner word/char tokens with timestamps (written
+/// **after** a successful SRT; failure is non-fatal).
+#[derive(Debug, Clone, Default)]
+pub struct ProcessExportOptions {
+    /// Write normalized aligner tokens as JSON (`words: [{text,start,end}, …]`).
+    /// Best-effort: errors are logged and do not fail the pipeline after SRT.
+    pub words_json: Option<PathBuf>,
+}
+
 /// Full pipeline: convert → VAD plan → ASR all → unload → align all → SRT.
 pub fn process_media_file_with_progress(
     input: &Path,
     media_name: &str,
     settings: &Settings,
     app_root: &Path,
+    on_stage: impl FnMut(StageUpdate),
+) -> Result<PathBuf, AsrError> {
+    process_media_file_with_export(
+        input,
+        media_name,
+        settings,
+        app_root,
+        on_stage,
+        ProcessExportOptions::default(),
+    )
+}
+
+/// Same as [`process_media_file_with_progress`] plus optional word-timestamp dump.
+pub fn process_media_file_with_export(
+    input: &Path,
+    media_name: &str,
+    settings: &Settings,
+    app_root: &Path,
     mut on_stage: impl FnMut(StageUpdate),
+    export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
     let stem = media_stem(input);
-    let srt_path = output_srt_path(app_root, &stem);
+    let srt_path = output_srt_path(&settings.resolved_output_dir(), &stem);
 
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -803,18 +835,18 @@ pub fn process_media_file_with_progress(
     }
 
     let word_dtos: Vec<WordTokenDto> = words
-        .into_iter()
+        .iter()
         .map(|w| WordTokenDto {
             start: w.start,
             end: w.end,
-            word: w.word,
+            word: w.word.clone(),
         })
         .collect();
 
     let step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
         task_id: stem.clone(),
         media_path: media_name.to_string(),
-        source_lang: source_lang_key,
+        source_lang: source_lang_key.clone(),
         subtitle_length_preset: settings.subtitle_length_preset.clone(),
         words: word_dtos,
         vad_speech_segments: vad_speech,
@@ -826,12 +858,65 @@ pub fn process_media_file_with_progress(
         return Err(AsrError::Msg("断句后字幕为空".into()));
     }
 
+    // Primary deliverable first — side exports must not block it.
     write_atomic(&srt_path, &srt_body).map_err(|e| AsrError::Msg(e.to_string()))?;
 
-    // Product is only output/*.srt — scratch is ephemeral.
+    if let Some(words_path) = export.words_json.as_ref() {
+        match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {
+            Ok(()) => trace_log(format!("words_json={}", words_path.display())),
+            Err(e) => {
+                // CLI / eval only; product GUI leaves `words_json` unset.
+                eprintln!(
+                    "warning: words-json write failed (SRT still OK): {} — {e}",
+                    words_path.display()
+                );
+                trace_log(format!(
+                    "words_json failed (non-fatal): {} — {e}",
+                    words_path.display()
+                ));
+            }
+        }
+    }
+
+    // Scratch is ephemeral after a successful SRT write.
     let _ = std::fs::remove_dir_all(&work_dir);
 
     Ok(srt_path)
+}
+
+/// Word/char tokens after ForcedAligner + punct restore + normalize (pre-sentence-boundary).
+fn write_words_json(
+    path: &Path,
+    stem: &str,
+    media_name: &str,
+    lang: &str,
+    words: &[WordToken],
+) -> Result<(), AsrError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| AsrError::Msg(e.to_string()))?;
+    }
+    let items: Vec<serde_json::Value> = words
+        .iter()
+        .map(|w| {
+            serde_json::json!({
+                "text": w.word,
+                "start": w.start,
+                "end": w.end,
+            })
+        })
+        .collect();
+    let body = serde_json::json!({
+        "id": stem,
+        "media": media_name,
+        "lang": lang,
+        "unit": "aligner_token",
+        "note": "ForcedAligner tokens after punctuation restore + normalize_word_tokens; not sentence cues",
+        "word_count": items.len(),
+        "words": items,
+    });
+    let text = serde_json::to_string_pretty(&body)
+        .map_err(|e| AsrError::Msg(format!("words json: {e}")))?;
+    write_atomic(path, &text).map_err(|e| AsrError::Msg(e.to_string()))
 }
 
 /// Chunks shorter than this have no usable mel frames to align against.
@@ -864,10 +949,10 @@ mod tests {
 
     #[test]
     fn output_path_uses_stem() {
-        let root = PathBuf::from(r"C:\Install\OneAsr");
+        let out = PathBuf::from(r"C:\Install\OneAsr\output");
         let input = PathBuf::from(r"D:\clips\lecture_01.mp4");
         assert_eq!(
-            output_srt_path(&root, &media_stem(&input)),
+            output_srt_path(&out, &media_stem(&input)),
             PathBuf::from(r"C:\Install\OneAsr\output\lecture_01.srt")
         );
     }

@@ -17,3 +17,11 @@ assets/icons/_t*.png
 **/*.rs.bk
 .DS_Store
 *.pdb
+# Local evaluation audio (large; keep manifest/README in git if desired)
+/testdata/clips/
+/testdata/refs/
+/testdata/gold/
+/testdata/hyps/
+/testdata/baselines/
+/testdata/_cache/
+/testdata/_compare*/

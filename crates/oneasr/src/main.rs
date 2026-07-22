@@ -55,6 +55,7 @@ enum WorkerMsg {
     PickCancelled,
     ModelDirPicked(PathBuf),
     AlignerDirPicked(PathBuf),
+    OutputDirPicked(PathBuf),
     Probed {
         id: String,
         duration_sec: Option<f64>,
@@ -567,6 +568,15 @@ impl OneAsrApp {
                         );
                     }
                 }
+                Ok(WorkerMsg::OutputDirPicked(dir)) => {
+                    self.settings.output_dir = dir;
+                    self.settings_dirty = false;
+                    if let Err(e) = self.settings.save() {
+                        self.flash_hint(format!("输出目录已更新，但保存失败: {e}"), cx);
+                    } else {
+                        self.flash_hint("字幕输出目录已更新", cx);
+                    }
+                }
                 Ok(WorkerMsg::ModelDownload(progress)) => {
                     let id = progress.model_id;
                     let terminal = matches!(
@@ -724,6 +734,21 @@ impl OneAsrApp {
             }
             if let Some(dir) = dlg.pick_folder() {
                 let _ = tx.send(WorkerMsg::AlignerDirPicked(dir));
+            }
+        });
+        cx.notify();
+    }
+
+    fn pick_output_dir(&mut self, cx: &mut Context<Self>) {
+        let tx = self.tx.clone();
+        let start = self.settings.resolved_output_dir();
+        thread::spawn(move || {
+            let mut dlg = rfd::FileDialog::new().set_title("选择字幕输出目录");
+            if start.is_dir() {
+                dlg = dlg.set_directory(&start);
+            }
+            if let Some(dir) = dlg.pick_folder() {
+                let _ = tx.send(WorkerMsg::OutputDirPicked(dir));
             }
         });
         cx.notify();
@@ -1414,7 +1439,7 @@ fn run_task(
 ) -> Result<PathBuf, String> {
     let app_root =
         resolve_app_root().ok_or_else(|| "找不到应用目录（需含 bin/ffmpeg.exe）".to_string())?;
-    // Primary deliverable: {app_root}/output/{stem}.srt (real ASR, no stubs).
+    // Primary deliverable: {settings.output_dir}/{stem}.srt (real ASR, no stubs).
     // Runs only on the dedicated ASR worker thread.
     process_media_file_with_progress(path, name, settings, &app_root, on_stage)
         .map_err(|e| e.to_string())
@@ -2259,6 +2284,8 @@ impl OneAsrApp {
         let model_tip = model.clone();
         let aligner = self.settings.aligner_model_dir.display().to_string();
         let aligner_tip = aligner.clone();
+        let output_dir = self.settings.resolved_output_dir().display().to_string();
+        let output_dir_tip = output_dir.clone();
         let dirty = self.is_settings_dirty(cx);
         let asr_ready = check_asr_model_dir(&self.settings.asr_model_dir).is_ok();
         let align_ready =
@@ -2529,6 +2556,77 @@ impl OneAsrApp {
                             )
                             .into_any_element()
                     }))
+                    .child(section(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(TEXT)
+                                    .child("字幕输出目录"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED)
+                                    .child("完成后的 .srt 保存位置（默认安装目录下 output）"),
+                            )
+                            .child(
+                                div()
+                                    .id("output-dir")
+                                    .flex()
+                                    .items_center()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(LINE)
+                                    .bg(PANEL)
+                                    .overflow_hidden()
+                                    .hover(|s| s.border_color(ACCENT))
+                                    .child(
+                                        div()
+                                            .id("output-dir-path")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .px_2p5()
+                                            .py_1p5()
+                                            .text_xs()
+                                            .text_color(TEXT)
+                                            .whitespace_normal()
+                                            .line_clamp(2)
+                                            .child(output_dir)
+                                            .tooltip(move |_, cx| {
+                                                cx.new(|_| NameTooltip {
+                                                    text: output_dir_tip.clone().into(),
+                                                })
+                                                .into()
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("output-dir-browse")
+                                            .flex_shrink_0()
+                                            .px_2p5()
+                                            .py_1p5()
+                                            .border_l_1()
+                                            .border_color(LINE_SOFT)
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(ACCENT_SOFT))
+                                            .child(
+                                                svg()
+                                                    .size(px(15.))
+                                                    .path("icons/folder.svg")
+                                                    .text_color(MUTED),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.pick_output_dir(cx)
+                                            })),
+                                    ),
+                            )
+                            .into_any_element(),
+                    ))
                     .child(section(
                         div()
                             .flex()

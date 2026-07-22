@@ -10,14 +10,19 @@ pub fn media_stem(path: &Path) -> String {
         .unwrap_or_else(|| "out".into())
 }
 
-/// User-facing deliverable: `{app_root}/output/{media_stem}.srt`.
-pub fn output_srt_path(app_root: &Path, media_stem: &str) -> PathBuf {
+/// Default SRT folder under the install / portable root: `{app_root}/output`.
+pub fn default_output_dir_for(app_root: &Path) -> PathBuf {
+    app_root.join("output")
+}
+
+/// User-facing deliverable: `{output_dir}/{media_stem}.srt`.
+pub fn output_srt_path(output_dir: &Path, media_stem: &str) -> PathBuf {
     let stem = if media_stem.is_empty() {
         "out"
     } else {
         media_stem
     };
-    app_root.join("output").join(format!("{stem}.srt"))
+    output_dir.join(format!("{stem}.srt"))
 }
 
 #[cfg(test)]
@@ -32,15 +37,24 @@ mod tests {
     }
 
     #[test]
-    fn output_srt_under_install_output() {
-        let root = PathBuf::from(r"D:\OneAsr");
-        let p = output_srt_path(&root, "my_video");
+    fn output_srt_under_chosen_dir() {
+        let dir = PathBuf::from(r"D:\OneAsr\output");
+        let p = output_srt_path(&dir, "my_video");
         assert_eq!(p, PathBuf::from(r"D:\OneAsr\output\my_video.srt"));
     }
 
     #[test]
     fn empty_stem_falls_back() {
-        let root = PathBuf::from("/app");
-        assert_eq!(output_srt_path(&root, ""), PathBuf::from("/app/output/out.srt"));
+        let dir = PathBuf::from("/app/output");
+        assert_eq!(output_srt_path(&dir, ""), PathBuf::from("/app/output/out.srt"));
+    }
+
+    #[test]
+    fn default_output_dir_is_app_output() {
+        let root = PathBuf::from(r"D:\OneAsr");
+        assert_eq!(
+            default_output_dir_for(&root),
+            PathBuf::from(r"D:\OneAsr\output")
+        );
     }
 }

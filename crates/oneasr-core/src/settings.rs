@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::media::resolve_app_root;
 use crate::model::{
-    default_aligner_model_dir, default_asr_model_dir, resolve_model_dir, ModelId, ModelKind,
-    QWEN3_ASR_06B,
+    default_aligner_model_dir, default_asr_model_dir, resolve_app_root_dir, resolve_model_dir,
+    ModelId, ModelKind, QWEN3_ASR_06B,
 };
+use crate::paths::default_output_dir_for;
 
 /// Inclusive lower bound for VAD ASR chunk target (seconds).
 pub const CHUNK_TARGET_MIN_SEC: u32 = 30;
@@ -70,6 +71,9 @@ pub struct Settings {
     /// [`CHUNK_TARGET_DEFAULT_SEC`]).
     #[serde(default = "default_chunk_target_seconds")]
     pub chunk_target_seconds: u32,
+    /// Directory for finished `.srt` files. Default: `{app_root}/output`.
+    #[serde(default = "default_output_dir")]
+    pub output_dir: PathBuf,
 }
 
 fn default_asr_model() -> String {
@@ -92,6 +96,10 @@ fn default_chunk_target_seconds() -> u32 {
     CHUNK_TARGET_DEFAULT_SEC
 }
 
+fn default_output_dir() -> PathBuf {
+    default_output_dir_for(&resolve_app_root_dir())
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -103,6 +111,7 @@ impl Default for Settings {
             language: default_source_language(),
             subtitle_length_preset: default_subtitle_length_preset(),
             chunk_target_seconds: default_chunk_target_seconds(),
+            output_dir: default_output_dir(),
         }
     }
 }
@@ -143,6 +152,7 @@ impl Settings {
     pub fn normalize(&mut self) {
         self.language = normalize_source_language(&self.language);
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
+        self.normalize_output_dir();
 
         if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
             self.asr_model = id.as_str().into();
@@ -154,6 +164,28 @@ impl Settings {
         if self.asr_model_dir.as_os_str().is_empty() {
             self.asr_model_dir = resolve_model_dir(id.as_str());
         }
+    }
+
+    /// Default empty → `{app}/output`; relative → join app root (stable vs CWD).
+    fn normalize_output_dir(&mut self) {
+        if self.output_dir.as_os_str().is_empty() {
+            self.output_dir = default_output_dir();
+            return;
+        }
+        if self.output_dir.is_relative() {
+            self.output_dir = resolve_app_root_dir().join(&self.output_dir);
+        }
+    }
+
+    /// Folder used for finished `.srt` (always non-empty after [`Self::normalize`]).
+    pub fn resolved_output_dir(&self) -> PathBuf {
+        if self.output_dir.as_os_str().is_empty() {
+            return default_output_dir();
+        }
+        if self.output_dir.is_relative() {
+            return resolve_app_root_dir().join(&self.output_dir);
+        }
+        self.output_dir.clone()
     }
 
     /// Chunk target used by the pipeline (always within product range).
@@ -305,5 +337,46 @@ mod tests {
             assert_eq!(label, sec.to_string());
             assert_eq!(clamp_chunk_target_seconds(sec), sec);
         }
+    }
+
+    #[test]
+    fn default_output_dir_ends_with_output() {
+        let s = Settings::default();
+        assert!(
+            s.output_dir
+                .file_name()
+                .is_some_and(|n| n == "output"),
+            "default output_dir should be …/output, got {}",
+            s.output_dir.display()
+        );
+    }
+
+    #[test]
+    fn normalize_fills_empty_output_dir() {
+        let mut s = Settings::default();
+        s.output_dir = PathBuf::new();
+        s.normalize();
+        assert!(!s.output_dir.as_os_str().is_empty());
+        assert_eq!(s.resolved_output_dir(), s.output_dir);
+    }
+
+    #[test]
+    fn normalize_absolutizes_relative_output_dir() {
+        let mut s = Settings::default();
+        s.output_dir = PathBuf::from("output");
+        s.normalize();
+        assert!(
+            s.output_dir.is_absolute(),
+            "expected absolute, got {}",
+            s.output_dir.display()
+        );
+        assert!(
+            s.output_dir
+                .file_name()
+                .is_some_and(|n| n == "output"),
+            "expected …/output, got {}",
+            s.output_dir.display()
+        );
+        assert_eq!(s.resolved_output_dir(), s.output_dir);
     }
 }

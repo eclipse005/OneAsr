@@ -21,8 +21,8 @@ use std::time::Instant;
 
 use oneasr_core::media::slice_wav;
 use oneasr_core::{
-    init_native_library_path, process_media_file_with_progress, resolve_cuda_runtime_dir,
-    StageClock, StageUpdate, Settings,
+    init_native_library_path, process_media_file_with_export, resolve_cuda_runtime_dir,
+    ProcessExportOptions, StageClock, StageUpdate, Settings,
 };
 use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
@@ -74,7 +74,7 @@ Usage:
   oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
 
 Commands:
-  transcribe   Full pipeline → {{app-root}}/output/{{stem}}.srt  (alias: run, pipeline)
+  transcribe   Full pipeline → {{app-root}}/output/{{stem}}.srt by default  (alias: run, pipeline)
   asr-chunk    ASR only for one time range (hallucination / length debug)
 
 transcribe options:
@@ -85,6 +85,7 @@ transcribe options:
   --backend <cuda|cpu|auto>
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy resulting SRT to this path after success
+  --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
 
 asr-chunk options:
   --wav <path>             16 kHz mono wav (required)
@@ -121,6 +122,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let backend = arg(args, "--backend").unwrap_or_else(|| "cuda".into());
     let max_new_tokens = arg(args, "--max-new-tokens").and_then(|s| s.parse().ok());
     let output_copy = arg(args, "--output").map(PathBuf::from);
+    let words_json = arg(args, "--words-json").map(PathBuf::from);
 
     let input_path = PathBuf::from(&input);
     if !input_path.is_file() {
@@ -137,7 +139,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
-    apply_model_dirs(&mut settings, &app_root);
+    apply_app_root_paths(&mut settings, &app_root);
     settings.normalize();
 
     eprintln!("=== OneAsr CLI · transcribe ===");
@@ -145,6 +147,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     eprintln!("app:     {}", app_root.display());
     eprintln!("asr:     {}", settings.asr_model_dir.display());
     eprintln!("align:   {}", settings.aligner_model_dir.display());
+    eprintln!("output:  {}", settings.resolved_output_dir().display());
     eprintln!(
         "lang={} chunk={}s backend={} max_new_tokens={}",
         settings.language, settings.chunk_target_seconds, settings.backend, settings.max_new_tokens
@@ -157,7 +160,10 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
 
     let mut clock = StageClock::new();
     let t0 = Instant::now();
-    let result = process_media_file_with_progress(
+    let export = ProcessExportOptions {
+        words_json: words_json.clone(),
+    };
+    let result = process_media_file_with_export(
         &input_path,
         &media_name,
         &settings,
@@ -166,6 +172,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
             clock.note(&update);
             eprintln!("[stage] {}", update.label());
         },
+        export,
     );
     let timing = clock.finish();
     let wall = t0.elapsed();
@@ -182,6 +189,9 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
                     1
                 })?;
                 eprintln!("copied → {}", dst.display());
+            }
+            if let Some(wj) = words_json {
+                eprintln!("words → {}", wj.display());
             }
             eprintln!(
                 "wall={:.1}s total_ms={} stages={}",
@@ -253,7 +263,7 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
-    apply_model_dirs(&mut settings, &app_root);
+    apply_app_root_paths(&mut settings, &app_root);
     settings.normalize();
 
     let tmp = env::temp_dir().join(format!(
@@ -323,7 +333,11 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
 
 // ─── shared ───────────────────────────────────────────────────────
 
-fn apply_model_dirs(settings: &mut Settings, app_root: &Path) {
+/// Bind model dirs + SRT output folder to the CLI `--app-root` layout.
+///
+/// SRT path is driven by `settings.output_dir` (not the pipeline `app_root`
+/// argument alone), so headless runs must pin it here.
+fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
     let asr_06 = app_root.join("models").join("Qwen3-ASR-0.6B");
     let align = app_root.join("models").join("Qwen3-ForcedAligner-0.6B");
     if asr_06.is_dir() {
@@ -332,6 +346,7 @@ fn apply_model_dirs(settings: &mut Settings, app_root: &Path) {
     if align.is_dir() {
         settings.aligner_model_dir = align;
     }
+    settings.output_dir = app_root.join("output");
 }
 
 fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
