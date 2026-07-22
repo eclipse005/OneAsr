@@ -4312,6 +4312,7 @@ name = "oneasr-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cudarc",
  "fireredvad",
  "hound",
  "jieba-rs",

@@ -5,8 +5,9 @@
 //! that align to silence midpoints near a target duration
 //! ([`crate::settings::CHUNK_TARGET_MIN_SEC`]..=[`crate::settings::CHUNK_TARGET_MAX_SEC`]).
 //!
-//! Cut placement mirrors the validated Python `asr.py` pipeline; short-tail
-//! merge matches VoxTrans ([`MIN_TAIL_SEGMENT_SEC`]).
+//! Cut placement mirrors the validated Python `asr.py` pipeline; any chunk
+//! shorter than [`MIN_TAIL_SEGMENT_SEC`] is merged into a neighbor (VoxTrans
+//! merges only the tail — see [`merge_short_segments`]).
 
 use std::path::Path;
 
@@ -18,8 +19,10 @@ use crate::asr::AsrError;
 const SILENCE_LOOKBACK: f32 = 30.0;
 const MIN_SILENCE_PREFER: f32 = 0.5;
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
-/// Tail shorter than this is absorbed into the previous chunk so we avoid
-/// tiny ASR/align windows (e.g. 1–5 s remainder after ~chunk_target splits).
+/// Any chunk shorter than this is absorbed into a neighbor so we avoid
+/// tiny ASR/align windows (e.g. 1–5 s remainder after ~chunk_target splits,
+/// or a sub-second sliver when the longest silence in the lookback window
+/// sits right after the previous cut).
 /// Max merged length is `chunk_target + just under this value`.
 const MIN_TAIL_SEGMENT_SEC: f32 = 15.0;
 
@@ -118,9 +121,10 @@ fn abs_diff(a: f32, b: f32) -> f32 {
 /// Among matches, prefer the longest pause, then closest to the boundary.
 /// Cut at silence midpoint.
 ///
-/// After cuts are built, if the final chunk is shorter than
-/// [`MIN_TAIL_SEGMENT_SEC`], it is merged into the previous chunk (same rule as
-/// VoxTrans). Coverage always remains continuous from `0` to `duration`.
+/// After cuts are built, any chunk shorter than [`MIN_TAIL_SEGMENT_SEC`] is
+/// merged into a neighbor (any position, not just the tail — the
+/// longest-silence rule can otherwise cut a sub-second sliver mid-stream).
+/// Coverage always remains continuous from `0` to `duration`.
 pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Vec<Chunk> {
     if duration <= chunk_sec + 1e-3 {
         return vec![Chunk {
@@ -180,24 +184,35 @@ pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Ve
         })
         .filter(|c| c.end - c.start > 0.05)
         .collect();
-    merge_short_tail(&mut chunks);
+    merge_short_segments(&mut chunks);
     chunks
 }
 
-/// If the last chunk is shorter than [`MIN_TAIL_SEGMENT_SEC`], fold it into
-/// the previous one (same rule as VoxTrans).
-fn merge_short_tail(chunks: &mut Vec<Chunk>) {
-    let n = chunks.len();
-    if n < 2 {
-        return;
+/// Fold every chunk shorter than [`MIN_TAIL_SEGMENT_SEC`] into a neighbor.
+///
+/// VoxTrans only merges the *tail*; we generalize to any position because
+/// mid-stream micro-chunks are real: `pick_silence_cut` takes the *longest*
+/// silence in the lookback window, and when that silence sits right after
+/// the previous cut, the span between the two cuts can be well under a
+/// second. Merging into the previous chunk (or the next one for a leading
+/// micro-chunk) keeps all cuts on silence boundaries while guaranteeing no
+/// tiny segment ever reaches ASR/alignment.
+fn merge_short_segments(chunks: &mut Vec<Chunk>) {
+    let mut i = 0;
+    while i < chunks.len() && chunks.len() > 1 {
+        if chunks[i].end - chunks[i].start >= MIN_TAIL_SEGMENT_SEC {
+            i += 1;
+            continue;
+        }
+        if i == 0 {
+            chunks[1].start = chunks[0].start;
+            chunks.remove(0);
+        } else {
+            chunks[i - 1].end = chunks[i].end;
+            chunks.remove(i);
+            i -= 1; // re-check: the merged chunk may still be short
+        }
     }
-    let last_end = chunks[n - 1].end;
-    let last_start = chunks[n - 1].start;
-    if last_end - last_start >= MIN_TAIL_SEGMENT_SEC {
-        return;
-    }
-    chunks[n - 2].end = last_end;
-    chunks.pop();
 }
 
 #[cfg(test)]
@@ -274,10 +289,80 @@ mod tests {
                 end: 125.0,
             },
         ];
-        merge_short_tail(&mut chunks);
+        merge_short_segments(&mut chunks);
         assert_eq!(chunks.len(), 2);
         assert!((chunks[1].end - 125.0).abs() < 1e-6);
         assert!((chunks[1].end - chunks[1].start - 65.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn merge_midstream_micro_chunk_into_previous() {
+        // Real case (Trump/Zelensky video, 30s target): cuts at 84.25 and
+        // 84.46 — the longest silence in the lookback window sat right after
+        // the previous cut, producing a 0.21s sliver mid-stream.
+        let mut chunks = vec![
+            Chunk {
+                start: 60.0,
+                end: 84.25,
+            },
+            Chunk {
+                start: 84.25,
+                end: 84.46,
+            },
+            Chunk {
+                start: 84.46,
+                end: 114.46,
+            },
+        ];
+        merge_short_segments(&mut chunks);
+        assert_eq!(chunks.len(), 2);
+        assert!((chunks[0].start - 60.0).abs() < 1e-6);
+        assert!((chunks[0].end - 84.46).abs() < 1e-6);
+        assert!((chunks[1].start - 84.46).abs() < 1e-6);
+        assert!((chunks[1].end - 114.46).abs() < 1e-6);
+    }
+
+    #[test]
+    fn merge_leading_micro_chunk_into_next() {
+        let mut chunks = vec![
+            Chunk {
+                start: 0.0,
+                end: 0.3,
+            },
+            Chunk {
+                start: 0.3,
+                end: 30.0,
+            },
+        ];
+        merge_short_segments(&mut chunks);
+        assert_eq!(chunks.len(), 1);
+        assert!((chunks[0].start).abs() < 1e-6);
+        assert!((chunks[0].end - 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn plan_chunks_never_emits_micro_chunks() {
+        // Long silence right after a cut + shorter silence near the target:
+        // the longest-silence rule picks the early one, but the merge pass
+        // must absorb the sliver. Chunk lengths (except single-chunk audio)
+        // stay >= MIN_TAIL_SEGMENT_SEC.
+        let silences = vec![(84.3, 86.0), (113.5, 114.0), (143.6, 144.2)];
+        let chunks = plan_chunks(160.0, &silences, 30.0);
+        assert!(chunks.len() >= 2);
+        for c in &chunks {
+            assert!(
+                c.end - c.start >= MIN_TAIL_SEGMENT_SEC - 0.01,
+                "micro chunk slipped through: {:.2}-{:.2}",
+                c.start,
+                c.end
+            );
+        }
+        // Continuous full coverage.
+        assert!((chunks[0].start).abs() < 0.01);
+        assert!((chunks.last().unwrap().end - 160.0).abs() < 0.01);
+        for w in chunks.windows(2) {
+            assert!((w[0].end - w[1].start).abs() < 1e-6);
+        }
     }
 
     #[test]

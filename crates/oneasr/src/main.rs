@@ -2525,12 +2525,6 @@ impl OneAsrApp {
                                             .text_xs()
                                             .text_color(MUTED)
                                             .child("建议 4GB 显存使用 60 秒分段时长"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(MUTED)
-                                            .child("末段不足 15 秒会并入上一段"),
                                     ),
                             )
                             .into_any_element()
@@ -2831,7 +2825,7 @@ impl OneAsrApp {
                                 div()
                                     .text_xs()
                                     .text_color(MUTED)
-                                    .child("CUDA 加速需要"),
+                                    .child("需要 N 卡（NVIDIA 显卡），显存 4GB 起"),
                             )
                             .child(component_install_row(
                                 "cuda-dl-btn",

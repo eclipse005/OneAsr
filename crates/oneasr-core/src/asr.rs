@@ -303,6 +303,58 @@ enum ComputeBackend {
     Cuda,
 }
 
+/// Engines ship prebuilt PTX for sm_61+ (see qwen3-asr `prebuilt_ptx`).
+/// Older cards physically cannot run the kernels, so this stays a hard gate
+/// (VRAM size is only a settings-page hint, not a gate — small-VRAM GPUs
+/// degrade gracefully via WDDM paging and the user may still prefer GPU).
+#[cfg(feature = "cuda")]
+const MIN_CUDA_CC: (i32, i32) = (6, 1);
+
+/// Live GPU facts from a real device probe (cached — probe cost is ~0.5s).
+#[cfg(feature = "cuda")]
+struct CudaProbe {
+    name: String,
+    total_vram: usize,
+    cc: (i32, i32),
+}
+
+/// Probe the real GPU once per process. DLL presence (`is_cuda_runtime_ready`)
+/// only proves files exist; this proves a usable NVIDIA device + driver.
+#[cfg(feature = "cuda")]
+fn probe_cuda_device() -> &'static Result<CudaProbe, String> {
+    static PROBE: std::sync::OnceLock<Result<CudaProbe, String>> = std::sync::OnceLock::new();
+    PROBE.get_or_init(|| {
+        let ctx = cudarc::driver::CudaContext::new(0)
+            .map_err(|e| format!("CUDA 初始化失败（无可用 NVIDIA 显卡或驱动异常）: {e:?}"))?;
+        let name = ctx.name().map_err(|e| format!("读取显卡名称失败: {e:?}"))?;
+        let cc = ctx
+            .compute_capability()
+            .map_err(|e| format!("读取 compute capability 失败: {e:?}"))?;
+        let total_vram = ctx
+            .total_mem()
+            .map_err(|e| format!("读取显存大小失败: {e:?}"))?;
+        Ok(CudaProbe {
+            name,
+            total_vram,
+            cc,
+        })
+    })
+}
+
+/// Why a probed GPU is still unsuitable for the CUDA engine.
+#[cfg(feature = "cuda")]
+fn cuda_probe_reject_reason(p: &CudaProbe) -> Option<String> {
+    if p.cc < MIN_CUDA_CC {
+        return Some(format!(
+            "显卡 {name} 过旧（sm_{maj}{min}），GPU 加速最低需要 sm_61（GTX 10 系）",
+            name = p.name,
+            maj = p.cc.0,
+            min = p.cc.1
+        ));
+    }
+    None
+}
+
 impl ComputeBackend {
     fn to_asr(self) -> AsrBackend {
         match self {
@@ -323,9 +375,10 @@ impl ComputeBackend {
 ///
 /// Product rule (single installer + optional Settings「安装组件」):
 /// - **cpu** → always CPU
-/// - **cuda** → require app `dll/` CUDA runtime; error if missing
-/// - **auto** → CUDA only when app `dll/` is ready; otherwise CPU
-///   (do **not** fall through to system CUDA — that bypasses the install gate)
+/// - **cuda** → require app `dll/` CUDA runtime **and** a live probe of a
+///   usable NVIDIA GPU (≥ sm_61); error with guidance otherwise
+/// - **auto** → CUDA only when DLLs are ready *and* the probe passes;
+///   otherwise CPU with a trace log (never hard-fail auto on GPU issues)
 fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
     match backend.trim().to_ascii_lowercase().as_str() {
         "cpu" => Ok(ComputeBackend::Cpu),
@@ -337,7 +390,20 @@ fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
                         "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
                     ));
                 }
-                Ok(ComputeBackend::Cuda)
+                match probe_cuda_device() {
+                    Ok(p) => {
+                        if let Some(reason) = cuda_probe_reject_reason(p) {
+                            return Err(AsrError::Msg(format!(
+                                "{reason}，请在设置中改用 CPU 或自动"
+                            )));
+                        }
+                        Ok(ComputeBackend::Cuda)
+                    }
+                    Err(e) => Err(AsrError::Msg(format!(
+                        "{e}。GPU 加速需要 NVIDIA 显卡（显存 4GB 起）并更新驱动；\
+                         或在设置中改用 CPU"
+                    ))),
+                }
             }
             #[cfg(not(feature = "cuda"))]
             {
@@ -350,10 +416,29 @@ fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
         _ => {
             #[cfg(feature = "cuda")]
             {
-                if crate::model::is_cuda_runtime_ready() {
-                    Ok(ComputeBackend::Cuda)
-                } else {
-                    Ok(ComputeBackend::Cpu)
+                if !crate::model::is_cuda_runtime_ready() {
+                    return Ok(ComputeBackend::Cpu);
+                }
+                match probe_cuda_device() {
+                    Ok(p) => {
+                        if let Some(reason) = cuda_probe_reject_reason(p) {
+                            trace_log(format!("auto backend → cpu: {reason}"));
+                            Ok(ComputeBackend::Cpu)
+                        } else {
+                            trace_log(format!(
+                                "auto backend → cuda: {} sm_{}{} vram={:.1}GB",
+                                p.name,
+                                p.cc.0,
+                                p.cc.1,
+                                p.total_vram as f64 / 1e9
+                            ));
+                            Ok(ComputeBackend::Cuda)
+                        }
+                    }
+                    Err(e) => {
+                        trace_log(format!("auto backend → cpu: {e}"));
+                        Ok(ComputeBackend::Cpu)
+                    }
                 }
             }
             #[cfg(not(feature = "cuda"))]
@@ -362,6 +447,29 @@ fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
             }
         }
     }
+}
+
+/// Settings explicitly pinned to GPU (vs auto/cpu) — no silent CPU fallback.
+fn is_forced_cuda(backend: &str) -> bool {
+    backend.trim().eq_ignore_ascii_case("cuda")
+}
+
+/// Append actionable guidance to a CUDA engine load failure.
+#[cfg(feature = "cuda")]
+fn cuda_load_failure_msg(e: &impl std::fmt::Display) -> String {
+    let probe_hint = match probe_cuda_device() {
+        Ok(p) => format!(
+            "（显卡 {}，显存 {:.1}GB）",
+            p.name,
+            p.total_vram as f64 / 1e9
+        ),
+        Err(_) => String::new(),
+    };
+    format!(
+        "加载 ASR 失败: {e:#}{probe_hint}\n\
+         请检查：1) 显存 ≥ 4GB 且未被其他程序占满；2) NVIDIA 驱动已更新；\
+         3) 关闭占用 GPU 的程序后重试。或在设置中将后端改为 CPU"
+    )
 }
 
 fn clean_asr_text(raw: &str) -> String {
@@ -469,7 +577,7 @@ pub fn process_media_file_with_progress(
     // 3. Load ASR once → all chunks → drop
     on_stage(StageUpdate::new(AsrStage::LoadingAsr));
     check_asr_model_dir(&settings.asr_model_dir)?;
-    let compute = resolve_compute_backend(&settings.backend)?;
+    let mut compute = resolve_compute_backend(&settings.backend)?;
     {
         let backend_label = match compute {
             ComputeBackend::Cpu => "cpu",
@@ -491,6 +599,24 @@ pub fn process_media_file_with_progress(
             );
         }
     }
+    // Auto mode only: a CUDA load that still fails (OOM, driver hiccup, …)
+    // degrades to CPU instead of killing the job. Forced `cuda` gets the
+    // guided error from `cuda_load_failure_msg` instead.
+    #[cfg(feature = "cuda")]
+    let asr = match AsrInference::load(&settings.asr_model_dir, compute.to_asr()) {
+        Ok(asr) => asr,
+        Err(e) if compute == ComputeBackend::Cuda && !is_forced_cuda(&settings.backend) => {
+            trace_log(format!("cuda load failed, falling back to cpu: {e:#}"));
+            compute = ComputeBackend::Cpu;
+            AsrInference::load(&settings.asr_model_dir, ComputeBackend::Cpu.to_asr())
+                .map_err(|e2| AsrError::Msg(format!("加载 ASR 失败: {e2:#}")))?
+        }
+        Err(e) if compute == ComputeBackend::Cuda => {
+            return Err(AsrError::Msg(cuda_load_failure_msg(&e)));
+        }
+        Err(e) => return Err(AsrError::Msg(format!("加载 ASR 失败: {e:#}"))),
+    };
+    #[cfg(not(feature = "cuda"))]
     let asr = AsrInference::load(&settings.asr_model_dir, compute.to_asr())
         .map_err(|e| AsrError::Msg(format!("加载 ASR 失败: {e:#}")))?;
 
@@ -596,54 +722,71 @@ pub fn process_media_file_with_progress(
             seg_chars
         ));
 
-        let chunk_path = if multi_chunk {
-            slice_wav(
-                &wav,
-                seg.start_sec as f32,
-                seg.end_sec as f32,
-                &chunk_tmp,
-            )
-            .map_err(|e| AsrError::Msg(e.to_string()))?;
-            chunk_tmp.as_path()
-        } else {
-            wav.as_path()
-        };
-
-        let result = aligner
-            .align(AlignRequest::new(
-                AudioInput::Path(chunk_path.to_path_buf()),
-                TextInput::Text(seg.text.clone()),
-                seg.language.clone(),
-            ))
-            .map_err(|e| {
-                AsrError::Msg(format!(
-                    "对齐失败 chunk {} ({:.1}s, {} chars): {e:#}",
-                    i + 1,
-                    seg_dur,
-                    seg_chars
-                ))
-            })?;
-        trace_log(format!(
-            "align#{} ok words={}",
-            i + 1,
-            result.items.len()
-        ));
-
-        if multi_chunk {
-            let _ = std::fs::remove_file(&chunk_tmp);
-        }
-
         let mut segment_words = Vec::new();
-        for item in result.items {
-            let word = item.text.trim();
-            if word.is_empty() {
-                continue;
+        if seg_dur < MIN_ALIGN_SEC || !has_alignable_word(&seg.text) {
+            // Degenerate chunk (pure punctuation / too short for mel frames):
+            // no model call — pin the text to the whole chunk span instead.
+            trace_log(format!(
+                "align#{} degenerate chunk → whole-span fallback",
+                i + 1
+            ));
+            let word = seg.text.trim();
+            if !word.is_empty() {
+                segment_words.push(WordToken {
+                    start: round_millis(seg.start_sec),
+                    end: round_millis(seg.end_sec.max(seg.start_sec)),
+                    word: word.to_string(),
+                });
             }
-            segment_words.push(WordToken {
-                start: round_millis(seg.start_sec + item.start_time.max(0.0)),
-                end: round_millis(seg.start_sec + item.end_time.max(item.start_time)),
-                word: word.to_string(),
-            });
+        } else {
+            let chunk_path = if multi_chunk {
+                slice_wav(
+                    &wav,
+                    seg.start_sec as f32,
+                    seg.end_sec as f32,
+                    &chunk_tmp,
+                )
+                .map_err(|e| AsrError::Msg(e.to_string()))?;
+                chunk_tmp.as_path()
+            } else {
+                wav.as_path()
+            };
+
+            let result = aligner
+                .align(AlignRequest::new(
+                    AudioInput::Path(chunk_path.to_path_buf()),
+                    TextInput::Text(seg.text.clone()),
+                    seg.language.clone(),
+                ))
+                .map_err(|e| {
+                    AsrError::Msg(format!(
+                        "对齐失败 chunk {} ({:.1}s, {} chars): {e:#}",
+                        i + 1,
+                        seg_dur,
+                        seg_chars
+                    ))
+                })?;
+            trace_log(format!(
+                "align#{} ok words={}",
+                i + 1,
+                result.items.len()
+            ));
+
+            if multi_chunk {
+                let _ = std::fs::remove_file(&chunk_tmp);
+            }
+
+            for item in result.items {
+                let word = item.text.trim();
+                if word.is_empty() {
+                    continue;
+                }
+                segment_words.push(WordToken {
+                    start: round_millis(seg.start_sec + item.start_time.max(0.0)),
+                    end: round_millis(seg.start_sec + item.end_time.max(item.start_time)),
+                    word: word.to_string(),
+                });
+            }
         }
 
         // Qwen aligner strips punctuation — restore from ASR transcript.
@@ -691,6 +834,17 @@ pub fn process_media_file_with_progress(
     Ok(srt_path)
 }
 
+/// Chunks shorter than this have no usable mel frames to align against.
+const MIN_ALIGN_SEC: f32 = 0.1;
+
+/// The Qwen aligner strips punctuation before tokenizing, so a chunk whose
+/// text is punctuation-only yields zero words → zero `<timestamp>` slots →
+/// the CUDA timestamp gather launches with a 0-sized grid and dies with
+/// `CUDA_ERROR_INVALID_VALUE`. Detect such chunks and skip the model call.
+fn has_alignable_word(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
+}
+
 fn attach_transcript_punctuation(transcript_text: &str, aligned_words: &[WordToken]) -> Vec<WordToken> {
     if transcript_text.trim().is_empty() || aligned_words.is_empty() {
         return aligned_words.to_vec();
@@ -729,6 +883,28 @@ mod tests {
         let err = check_asr_model_dir(&dir).unwrap_err().to_string();
         assert!(err.contains("不全") || err.contains("缺少") || err.contains("不存在"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GPU smoke: exercise the real device probe used by backend resolution.
+    /// Skips gracefully on machines without a CUDA device/driver.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn probe_cuda_device_smoke() {
+        match probe_cuda_device() {
+            Ok(p) => {
+                eprintln!(
+                    "probe: {} sm_{}{} vram={:.1}GB reject={:?}",
+                    p.name,
+                    p.cc.0,
+                    p.cc.1,
+                    p.total_vram as f64 / 1e9,
+                    cuda_probe_reject_reason(p)
+                );
+                assert!(p.total_vram > 0);
+                assert!(!p.name.is_empty());
+            }
+            Err(e) => eprintln!("skip probe smoke (no CUDA device): {e}"),
+        }
     }
 
     #[test]
