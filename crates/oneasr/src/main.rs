@@ -21,7 +21,7 @@ use gpui::{
     actions, canvas, deferred, div, hsla, linear, percentage, point, prelude::*, px, size, svg,
     Animation, AnimationExt as _, App, Application, Bounds, BoxShadow, ClickEvent, Context,
     ExternalPaths, FocusHandle, KeyBinding, MouseButton, MouseMoveEvent, Pixels, SharedString,
-    Timer, Transformation, Window, WindowBounds, WindowOptions,
+    Timer, Transformation, Window, WindowBounds, WindowControlArea, WindowOptions,
 };
 use oneasr_core::{
     accept_input_path, check_asr_model_dir, demote_current_thread, download_model,
@@ -98,12 +98,17 @@ fn main() {
             cx.bind_keys([KeyBinding::new("escape", DismissMenus, None)]);
             // Compact default: list + toolbar, not a full-HD empty canvas.
             let bounds = Bounds::centered(None, size(px(860.), px(560.)), cx);
-            // Title bar promo (same style as VoxTrans).
+            // Custom-drawn title bar (`appears_transparent`): GPUI never sets WS_CAPTION,
+            // so the native caption is only a DWM fallback — broken on some Win10 machines
+            // (no drag / min / max / close). We draw our own and route hits through
+            // `WindowControlArea`, which works regardless of DWM state. The `title` string
+            // still feeds the taskbar / Alt-Tab label.
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(gpui::TitlebarOptions {
                         title: Some("OneAsr - dabao005 - www.52pojie.cn".into()),
+                        appears_transparent: true,
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -1472,6 +1477,7 @@ impl Render for OneAsrApp {
             .on_action(cx.listener(|this, _: &DismissMenus, _, cx| {
                 this.dismiss_menus(cx);
             }))
+            .child(self.render_titlebar())
             .child(self.render_toolbar(cx))
             .child(
                 // Relative shell: list fills; settings drawer overlays from the right.
@@ -1596,6 +1602,64 @@ fn ease_out_cubic(t: f32) -> f32 {
 }
 
 impl OneAsrApp {
+    /// Custom title bar. GPUI never sets `WS_CAPTION`, so the "native" caption is only
+    /// a DWM fallback — missing or dead on some Win10 machines (the user report:
+    /// click grays out, no drag / min / max / close). Drawing our own + routing hits
+    /// through `WindowControlArea` works regardless of DWM state.
+    ///
+    /// Windows-only contract (same as gpui-component's TitleBar): **no `on_click` here** —
+    /// GPUI maps the areas to HTCAPTION / HTMINBUTTON / HTMAXBUTTON / HTCLOSE in
+    /// `WM_NCHITTEST` and the OS performs the action. Double-click on the drag strip
+    /// also toggles maximize for free (DefWindowProc on HTCAPTION).
+    fn render_titlebar(&mut self) -> impl IntoElement {
+        div()
+            .h(px(32.))
+            .w_full()
+            .flex()
+            .items_center()
+            .bg(PANEL)
+            .border_b_1()
+            .border_color(LINE)
+            .child(
+                // Drag strip: everything left of the buttons moves the window.
+                div()
+                    .id("titlebar-drag")
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .pl_3()
+                    .overflow_hidden()
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(MUTED_SOFT)
+                            .whitespace_nowrap()
+                            .child("OneAsr - dabao005 - www.52pojie.cn"),
+                    ),
+            )
+            .child(caption_btn(
+                "titlebar-min",
+                "icons/win-min.svg",
+                WindowControlArea::Min,
+                false,
+            ))
+            .child(caption_btn(
+                "titlebar-max",
+                "icons/win-max.svg",
+                WindowControlArea::Max,
+                false,
+            ))
+            .child(caption_btn(
+                "titlebar-close",
+                "icons/win-close.svg",
+                WindowControlArea::Close,
+                true,
+            ))
+    }
+
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let settings_open = self.settings_open;
         let dl_busy = self.any_download_busy();
@@ -3301,6 +3365,43 @@ fn app_logo() -> impl IntoElement {
                 .path("icons/logo.svg")
                 .text_color(gpui::rgb(0xffffff)),
         )
+}
+
+/// One caption button (min / max / close) for the custom title bar.
+/// Hit routing is via `WindowControlArea` only — no `on_click` (see `render_titlebar`).
+/// `close` gets the Windows-style red hover with a white glyph.
+fn caption_btn(
+    id: &'static str,
+    icon: &'static str,
+    area: WindowControlArea,
+    close: bool,
+) -> impl IntoElement {
+    let group: SharedString = format!("{id}-hover").into();
+    let icon_el = svg()
+        .size(px(14.))
+        .path(icon)
+        .text_color(MUTED)
+        .when(close, |el| {
+            el.group_hover(group.clone(), |s| s.text_color(PANEL))
+        });
+    div()
+        .id(id)
+        .w(px(46.))
+        .h_full()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .window_control_area(area)
+        .when(close, |el| el.group(group))
+        .hover(move |s| {
+            if close {
+                s.bg(DANGER)
+            } else {
+                s.bg(LINE_SOFT)
+            }
+        })
+        .child(icon_el)
 }
 
 #[derive(Clone, Copy)]

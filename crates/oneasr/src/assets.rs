@@ -34,6 +34,18 @@ fn table() -> &'static HashMap<&'static str, &'static [u8]> {
                 include_bytes!("../../../assets/icons/gear.svg").as_slice(),
             ),
             (
+                "icons/win-min.svg",
+                include_bytes!("../../../assets/icons/win-min.svg").as_slice(),
+            ),
+            (
+                "icons/win-max.svg",
+                include_bytes!("../../../assets/icons/win-max.svg").as_slice(),
+            ),
+            (
+                "icons/win-close.svg",
+                include_bytes!("../../../assets/icons/win-close.svg").as_slice(),
+            ),
+            (
                 "icons/folder.svg",
                 include_bytes!("../../../assets/icons/folder.svg").as_slice(),
             ),

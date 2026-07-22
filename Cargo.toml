@@ -16,3 +16,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 anyhow = "1"
+
+# Vendored gpui 0.2.2 with the Windows NC-button fix (upstream Zed PR #48330:
+# `default_prevented` must not make GPUI swallow WM_NCLBUTTONDOWN — otherwise
+# custom-titlebar drag / min / max / close are all dead). Revert to crates.io
+# once a released gpui includes the fix.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
