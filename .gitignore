@@ -12,6 +12,9 @@
 # Release packaging output
 /dist
 /release
+# Local-only: packing scripts + forum draft (not for public repo)
+/scripts/
+/forum-post.md
 # Icon gen intermediates
 assets/icons/_t*.png
 **/*.rs.bk
