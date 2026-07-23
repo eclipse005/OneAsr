@@ -18,15 +18,28 @@
   No assets/ folder — SVG/WAV are compile-time embedded.
 
 .PARAMETER Version
-  Default: workspace Cargo.toml version.
+  Release version (e.g. 0.1.4). Positional arg works:
+
+    .\scripts\pack-release.ps1 0.1.4
+    .\scripts\pack-release.ps1 -Version 0.1.4
+
+  Default (no arg): read [workspace.package] version from root Cargo.toml.
+  When you pass a version, Cargo.toml is updated to match before build so
+  artifact names and workspace version stay in sync.
 
 .PARAMETER SkipBuild
   Re-use existing target\release\oneasr.exe.
 
 .PARAMETER SkipInstaller
   Only stage dist\OneAsr (no Inno).
+
+.EXAMPLE
+  .\scripts\pack-release.ps1 0.1.4
+.EXAMPLE
+  .\scripts\pack-release.ps1 -Version 0.1.4 -SkipBuild
 #>
 param(
+  [Parameter(Position = 0)]
   [string]$Version = "",
   [switch]$SkipBuild,
   [switch]$SkipInstaller
@@ -41,6 +54,21 @@ function Get-WorkspaceVersion {
   $m = Select-String -Path $toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1
   if ($m) { return $m.Matches[0].Groups[1].Value }
   return "0.1.0"
+}
+
+function Set-WorkspaceVersion([string]$NewVersion) {
+  $toml = Join-Path $Root "Cargo.toml"
+  $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+  $content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $toml), $utf8NoBom)
+  $pattern = '(?m)^(\s*version\s*=\s*")[^"]+(")'
+  if (-not [regex]::IsMatch($content, $pattern)) {
+    throw "version field not found in Cargo.toml"
+  }
+  $updated = [regex]::Replace($content, $pattern, '${1}' + $NewVersion + '${2}', 1)
+  if ($updated -ne $content) {
+    [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $toml), $updated, $utf8NoBom)
+    Write-Host "    Cargo.toml version -> $NewVersion"
+  }
 }
 
 function Find-Iscc {
@@ -85,10 +113,21 @@ function Assert-GuiSubsystem([string]$ExePath) {
   Write-Host "    PE subsystem=GUI (2)  $ExePath"
 }
 
-if ([string]::IsNullOrWhiteSpace($Version)) {
+$versionFromArg = -not [string]::IsNullOrWhiteSpace($Version)
+if (-not $versionFromArg) {
   $Version = Get-WorkspaceVersion
 }
 $Version = $Version.Trim()
+# Strip a leading "v" if the user typed v0.1.4
+if ($Version -match '^[vV](.+)$') {
+  $Version = $Matches[1]
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+([\-+][0-9A-Za-z\.-]+)?$') {
+  throw "Invalid version: '$Version'  (expected e.g. 0.1.4 or 1.0.0-beta.1)"
+}
+if ($versionFromArg) {
+  Set-WorkspaceVersion $Version
+}
 Write-Host "==> OneAsr pack-release  version=$Version  (single installer)"
 
 $ffmpeg = Join-Path $Root "bin\ffmpeg.exe"
