@@ -3910,7 +3910,7 @@ dependencies = [
 [[package]]
 name = "nagisa_rs"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/nagisa-rs.git?branch=master#57d5f5fa1897ea40ee55f509cd3c36f149f9d23a"
+source = "git+https://github.com/eclipse005/nagisa-rs.git?rev=cd7726e78ede8451c72cc0fabfd55d2c4ed62442#cd7726e78ede8451c72cc0fabfd55d2c4ed62442"
 dependencies = [
  "anyhow",
  "ndarray",
@@ -5045,7 +5045,7 @@ dependencies = [
 [[package]]
 name = "qwen-forced-aligner-rs"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/qwen-aligner-rs.git?rev=a8d77031daaf4a216f07f53e72c803814afd3680#a8d77031daaf4a216f07f53e72c803814afd3680"
+source = "git+https://github.com/eclipse005/qwen-aligner-rs.git?rev=bb8c73ba670d65b3f5fddc5f5b8791bc07d4392a#bb8c73ba670d65b3f5fddc5f5b8791bc07d4392a"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7539,7 +7539,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

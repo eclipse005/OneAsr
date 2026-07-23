@@ -13,7 +13,7 @@
 
 - ASR: `{app}/models/Qwen3-ASR-0.6B`（可切换 **1.7B**）
 - Aligner: `{app}/models/Qwen3-ForcedAligner-0.6B`
-- 日语对齐额外需要：`{app}/models/Qwen3-ForcedAligner-0.6B/nagisa/`（nagisa 分词权重）
+- 日语对齐使用内嵌 nagisa 分词，**无需**额外 `nagisa/` 模型目录
 
 **识别语言**需在设置中指定（与 VoxTrans 一致，对齐模型支持 11 种）：  
 中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский。  

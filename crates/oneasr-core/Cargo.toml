@@ -22,7 +22,7 @@ hound = "3.5"
 punkt = { git = "https://github.com/eclipse005/rust-punkt.git" }
 # Pin same revs as VoxTrans for a known-good Qwen stack.
 qwen3-asr = { git = "https://github.com/eclipse005/qwen3-asr-rs.git", rev = "c6c98e2eb69d9892c43e650ebda297b1472443c7", default-features = false }
-qwen-forced-aligner-rs = { git = "https://github.com/eclipse005/qwen-aligner-rs.git", rev = "a8d77031daaf4a216f07f53e72c803814afd3680", default-features = false, features = ["cpu"] }
+qwen-forced-aligner-rs = { git = "https://github.com/eclipse005/qwen-aligner-rs.git", rev = "bb8c73ba670d65b3f5fddc5f5b8791bc07d4392a", default-features = false, features = ["cpu"] }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
 # Same cudarc build as qwen3-asr (feature-unified) — used only for the
 # lightweight GPU probe (name / VRAM / compute capability) in auto mode.
