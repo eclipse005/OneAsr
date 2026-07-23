@@ -1,108 +1,161 @@
 # OneAsr
 
-本地音视频批量转字幕。亮色列表 UI + **Qwen3-ASR** + **Qwen3-ForcedAligner**（与 VoxTrans 同款流水线与断句逻辑）。
+**本地 · 离线 · 批量音视频 → SRT 字幕**
 
-## 依赖
+Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 与 ForcedAligner，从音视频直接产出带时间轴的字幕文件。
 
-| 组件 | Git |
-|------|-----|
-| ASR | https://github.com/eclipse005/qwen3-asr-rs.git |
-| Aligner | https://github.com/eclipse005/qwen-aligner-rs.git |
-
-默认模型路径（安装/开发布局）：
-
-- ASR: `{app}/models/Qwen3-ASR-0.6B`（可切换 **1.7B**）
-- Aligner: `{app}/models/Qwen3-ForcedAligner-0.6B`
-- 日语对齐使用内嵌 nagisa 分词，**无需**额外 `nagisa/` 模型目录
-
-**识别语言**需在设置中指定（与 VoxTrans 一致，对齐模型支持 11 种）：  
-中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский。  
-**无自动识别**——对齐阶段需要固定语种。
-
-设置面板可一键从 ModelScope 下载到 `{app}/models/`（逻辑同 VoxTrans），也可手动选已有目录。  
-字幕默认写到 `{app}/output/`，可在 **设置 → 字幕输出目录** 改到任意文件夹。
-
-## 运行
-
-准备：将 `ffmpeg.exe` 放到 `bin/ffmpeg.exe`。
-
-### GUI
-
-```powershell
-cd D:\OneAsr
-cargo run -p oneasr --release
+```text
+音视频  →  VAD 分段  →  识别  →  对齐打轴  →  智能断句  →  *.srt
 ```
 
-### CLI（无界面，便于回归 / 脚本）
+任意时刻显存中只驻留 **一个** 大模型（先 ASR，再 Aligner），4GB 级显卡也能跑通 0.6B 组合。
 
-```powershell
-# 全流程 → {app-root}/output/{stem}.srt
-cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
-  transcribe --input "C:\path\to\video.mp4" --app-root "D:\OneAsr" `
-  --language zh --chunk-seconds 60 --backend cuda
+---
 
-# 单段 ASR 文本（排查循环 / 过长）
-cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
-  asr-chunk --wav "D:\OneAsr\runs\...\input_16k.wav" `
-  --start 722.75 --end 842.75 --language zh
+## 为什么选 OneAsr
 
-# 详细分块日志
-$env:ONEASR_PIPELINE_TRACE = "1"
+| | |
+|---|---|
+| **完全本地** | 识别与对齐均在本机完成，素材不出机 |
+| **批量友好** | 列表队列一次丢多个文件，进度与阶段一目了然 |
+| **时间轴可靠** | ForcedAligner 词级对齐 + 字幕长度预设，不是“整段瞎估时间” |
+| **一安装包两后端** | 同一二进制含 CUDA 引擎；无 N 卡自动走 CPU |
+| **轻量界面** | 原生 GPUI 亮色列表，无 Electron 臃肿壳 |
+
+---
+
+## 功能
+
+- **11 种源语言**：中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский  
+  （与对齐模型能力对齐；**需手动指定语种**，不做自动语种检测）
+- **双规格 ASR**：Qwen3-ASR **0.6B**（更快 / 省显存）· **1.7B**（更准 / 更吃资源）
+- **词级时间轴**：Qwen3-ForcedAligner 对齐；日语分词已内嵌，无需额外模型目录
+- **VAD 智能分段**：目标段长 **30–180 秒**（默认 60），长音频更稳
+- **字幕长度预设**：短 / 标准 / 松，控制单行信息量
+- **处理明细**：各阶段耗时可看，方便对比机器与参数
+- **自定义输出目录**：默认 `{安装目录}/output/`，设置里可改到任意文件夹
+- **无卡可用**：无 NVIDIA 时走 CPU（更慢，但功能完整）
+
+---
+
+## 下载与安装
+
+> 源码仓库不含模型与安装包。请从 **[Releases](../../releases)** 获取 `setup` / 便携包（推送 GitHub 后即有正式链接）。
+
+| 包类型 | 说明 |
+|--------|------|
+| **安装包** `OneAsr_*_setup.exe` | 按向导安装 |
+| **便携包** `OneAsr_*_portable.zip` | 解压后运行 `oneasr.exe` |
+
+**首次使用：**
+
+1. 运行 `oneasr.exe`
+2. **设置** → 下载 **ASR**（建议先 0.6B）+ **ForcedAligner**（必下）
+3. 有 N 卡 → 再装 **CUDA 运行库**（约 820MB，仅需较新显卡驱动，**不必**装 CUDA Toolkit）
+4. 选好源语言 → 添加音视频 → 开始
+5. 完成后在输出目录查看同名 `.srt`
+
+---
+
+## 模型与磁盘
+
+安装包 **不含** 权重，需在设置中从 ModelScope 下载（可断点续传）。
+
+| 组件 | 名称 | 约体积 | 说明 |
+|------|------|--------|------|
+| ASR（二选一） | Qwen3-ASR-0.6B | ~1.8 GB | 默认推荐 |
+| | Qwen3-ASR-1.7B | ~4.4 GB | 更高精度 |
+| 对齐（必需） | Qwen3-ForcedAligner-0.6B | ~1.7 GB | 所有 ASR 共用 |
+| GPU（可选） | CUDA 12.x 运行库 | ~820 MB | cudart / cublas 等 |
+
+常用组合约 **3.5～6.9 GB**，另建议预留任务临时空间。
+
+路径约定：
+
+```text
+{app}/
+  oneasr.exe
+  bin/ffmpeg.exe      # 安装包已带；源码开发需自行放置
+  dll/                # CUDA 运行库（设置内下载）
+  models/             # ASR / Aligner 权重
+  output/             # 默认字幕输出
+  runs/               # 中间文件（成功后会清理）
 ```
 
-产物二进制：`target\release\oneasr-cli.exe`。  
-`oneasr-core` 默认启用 `cuda` feature。
+---
 
-## 打包（单一安装包）
+## 配置要求
 
-**一个 setup**，二进制含 CUDA 引擎；无卡/无 DLL 时仍可用 CPU。  
-GPU 用户在 **设置 → 下载 CUDA 运行库**（与 VoxTrans 相同的 ModelScope DLL：cudart/cublas/cublasLt/curand）。
-
-需要：Rust、`bin/ffmpeg.exe`、[Inno Setup 6](https://jrsoftware.org/isinfo.php)。
-
-```powershell
-.\scripts\pack-release.ps1
-# 产物：release\OneAsr_<ver>_setup.exe
-```
-
-| 路径 | 说明 |
+| 项目 | 说明 |
 |------|------|
-| `dist\OneAsr\` | 暂存安装内容 |
-| `release\OneAsr_<ver>_setup.exe` | 安装包 |
+| 系统 | Windows 10 / 11（64 位） |
+| 显卡 | 推荐 NVIDIA，**4GB+** 显存（0.6B）；1.7B 建议 **6GB+** |
+| 无独显 | 可用 CPU，速度明显更慢 |
+| 驱动 | 保持较新即可（能正常玩游戏一般够用） |
+| 网络 | 仅首次下模型 / CUDA 库需要；识别过程可离线 |
 
-安装后：`models\` 下 ASR/Aligner，默认 `output\` 出 SRT，`runs\` 中间产物；CUDA 运行库下载到 `{app}\dll\`（与 exe 同级的 dll 目录）。  
-UI 图标/音效在编译期嵌入 exe，安装目录**无** `assets\`。
+---
 
-## 输出
+## 使用提示
 
-默认：
+- **语种选错**是时间轴/识别异常的最常见原因；粤语用「粤语」，其它中文方言一般选「中文普通话」
+- 同一时刻只加载一个大模型，内存友好，但长队列会按文件串行处理
+- 速度慢：检查是否已装 CUDA 运行库、后端是否为 Auto/GPU、驱动是否过旧
+- 失败任务可在列表中重试；`runs/` 在失败时可能残留，便于排查
 
-```text
-{app_root}/output/{视频名}.srt
-```
+---
 
-GUI：**设置 → 字幕输出目录** 可改到其它路径（仍为 `{所选目录}/{视频名}.srt`）。  
-CLI：与 `--app-root` 对齐，写到 `{app-root}/output/{stem}.srt`（可用 `--output` 再复制一份）。
-
-`runs/` 为任务 scratch：运行时临时目录，**成功后自动删除**；失败时可能残留便于排查。
-
-## 流程
+## 流水线（技术）
 
 ```text
-ffmpeg → 16k mono
-  → VAD 分段规划（30–180s 可调）
-  → load ASR 一次 → 各段转写 → drop ASR
-  → load Aligner 一次 → 各段对齐 → drop Aligner
-  → 标点还原 + normalize_word_tokens
-  → 断句（标点硬切 + 字幕长度 DP）
-  → {output_dir}/{stem}.srt
+ffmpeg → 16 kHz mono
+  → VAD 分段（30–180s）
+  → 加载 ASR → 逐段转写 → 释放 ASR
+  → 加载 Aligner → 逐段对齐 → 释放 Aligner
+  → 标点还原 + 词元规范化
+  → 断句（标点硬切 + 长度 DP）
+  → {output}/{stem}.srt
 ```
 
-任意时刻显存中只有一个大模型。
+引擎仓库（Rust，与产品共用）：
 
-## 测试
+| 组件 | 仓库 |
+|------|------|
+| ASR | [qwen3-asr-rs](https://github.com/eclipse005/qwen3-asr-rs) |
+| Aligner | [qwen-aligner-rs](https://github.com/eclipse005/qwen-aligner-rs) |
+
+---
+
+## 从源码构建
+
+**环境：** Rust（edition 2024）· [VS 2022 C++ 生成工具](https://visualstudio.microsoft.com/downloads/) · 可选 CUDA Toolkit 12.x（仅本机编 CUDA 特性时）
+
+```powershell
+# 将 ffmpeg.exe 放到 bin\ffmpeg.exe
+cargo run -p oneasr --release
+
+# 无界面 CLI（脚本 / 回归）
+cargo run -p oneasr-core --release --bin oneasr-cli -- `
+  transcribe --input "C:\path\to\video.mp4" --app-root "." `
+  --language zh --chunk-seconds 60 --backend auto
+```
 
 ```powershell
 cargo test -p oneasr-core
-cargo build -p oneasr
+cargo build -p oneasr --release
 ```
+
+默认 feature 含 CUDA 引擎；运行时无 DLL / 无 GPU 时仍可走 CPU。
+
+---
+
+## 许可
+
+- 本项目代码：**MIT**
+- 识别 / 对齐模型权重与协议以 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 及对应模型托管方为准（Apache-2.0 等）
+
+---
+
+<p align="center">
+  <sub>Made for offline subtitling · 问题反馈请附系统版本、显卡与显存、所用模型（0.6B / 1.7B）与报错信息</sub>
+</p>
