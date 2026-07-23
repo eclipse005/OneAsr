@@ -40,7 +40,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 ## 下载与安装
 
-> 源码仓库不含模型与安装包。请从 **[Releases](../../releases)** 获取 `setup` / 便携包（推送 GitHub 后即有正式链接）。
+> 源码仓库不含模型与安装包。请从 **[Releases](https://github.com/eclipse005/OneAsr/releases)** 获取 `setup` / 便携包。
 
 | 包类型 | 说明 |
 |--------|------|
