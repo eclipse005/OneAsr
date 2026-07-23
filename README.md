@@ -130,8 +130,26 @@ ffmpeg → 16 kHz mono
 
 **环境：** Rust（edition 2024）· [VS 2022 C++ 生成工具](https://visualstudio.microsoft.com/downloads/) · 可选 CUDA Toolkit 12.x（仅本机编 CUDA 特性时）
 
+### 1. 准备 ffmpeg（必需）
+
+源码仓库**不含** `ffmpeg.exe`（体积约 56MB）。请从 **[构建工具 Release](https://github.com/eclipse005/OneAsr/releases/tag/tools)** 下载后放到：
+
+```text
+OneAsr/bin/ffmpeg.exe
+```
+
+PowerShell 一键下载示例：
+
 ```powershell
-# 将 ffmpeg.exe 放到 bin\ffmpeg.exe
+New-Item -ItemType Directory -Force -Path bin | Out-Null
+Invoke-WebRequest -Uri "https://github.com/eclipse005/OneAsr/releases/download/tools/ffmpeg.exe" -OutFile "bin\ffmpeg.exe"
+```
+
+> 安装包 / 便携包已自带 ffmpeg，**普通用户无需**这一步。
+
+### 2. 运行
+
+```powershell
 cargo run -p oneasr --release
 
 # 无界面 CLI（脚本 / 回归）
