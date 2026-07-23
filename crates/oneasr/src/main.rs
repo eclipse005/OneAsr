@@ -156,6 +156,8 @@ struct OneAsrApp {
     settings_lang_open: bool,
     /// Empty-state wave: pointer currently over the strip.
     empty_wave_hover: bool,
+    /// Brand logo: pointer currently over the mark (wiggle animation).
+    logo_hover: bool,
     /// Last layout bounds of the wave hit area (window coords).
     empty_wave_bounds: Option<Bounds<Pixels>>,
     /// Target cursor X along the strip (0..=1).
@@ -276,6 +278,7 @@ impl OneAsrApp {
             lang_menu: None,
             settings_lang_open: false,
             empty_wave_hover: false,
+            logo_hover: false,
             empty_wave_bounds: None,
             empty_wave_cursor_x: 0.5,
             empty_wave_smooth_x: 0.5,
@@ -1681,7 +1684,18 @@ impl OneAsrApp {
                     .flex()
                     .items_center()
                     .gap_2p5()
-                    .child(app_logo())
+                    .child(
+                        div()
+                            .id("app-logo-hit")
+                            .cursor_pointer()
+                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                if this.logo_hover != *hovered {
+                                    this.logo_hover = *hovered;
+                                    cx.notify();
+                                }
+                            }))
+                            .child(app_logo(self.logo_hover)),
+                    )
                     .child(
                         div()
                             .flex()
@@ -3345,26 +3359,62 @@ fn download_action_row(
 }
 
 /// Brand mark: teal tile + SVG waveform → subtitle (matches app-icon.ico).
-fn app_logo() -> impl IntoElement {
+/// On hover, the waveform does a light left-right wiggle (repeat while hovered).
+fn app_logo(hovered: bool) -> impl IntoElement {
+    let icon = svg()
+        .size(px(22.))
+        .path("icons/logo.svg")
+        .text_color(gpui::rgb(0xffffff));
+
+    // Distinct element ids so GPUI remounts cleanly when hover starts/stops.
+    let icon_el = if hovered {
+        icon.with_animation(
+            "logo-wiggle",
+            Animation::new(Duration::from_millis(480))
+                .repeat()
+                .with_easing(linear),
+            |svg, delta| {
+                // ~3 half-swings per cycle → lively but not frantic.
+                let phase = delta * TAU * 3.0;
+                let wiggle = phase.sin();
+                // ±12° rotation (fraction of a full turn).
+                let turn = (12.0 / 360.0) * wiggle;
+                // Tiny scale pulse so it feels springy, not just rotating.
+                let pulse = 1.0 + 0.06 * phase.cos().abs();
+                svg.with_transformation(
+                    Transformation::rotate(percentage(turn)).with_scaling(size(pulse, pulse)),
+                )
+            },
+        )
+        .into_any_element()
+    } else {
+        icon.into_any_element()
+    };
+
     div()
+        .id(if hovered {
+            "app-logo-hot"
+        } else {
+            "app-logo"
+        })
         .size(px(36.))
         .rounded_xl()
         .bg(LOGO)
         .shadow(vec![BoxShadow {
-            color: hsla(174. / 360., 0.55, 0.28, 0.28),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(6.),
+            color: hsla(
+                174. / 360.,
+                0.55,
+                0.28,
+                if hovered { 0.42 } else { 0.28 },
+            ),
+            offset: point(px(0.), px(if hovered { 2. } else { 1. })),
+            blur_radius: px(if hovered { 10. } else { 6. }),
             spread_radius: px(0.),
         }])
         .flex()
         .items_center()
         .justify_center()
-        .child(
-            svg()
-                .size(px(22.))
-                .path("icons/logo.svg")
-                .text_color(gpui::rgb(0xffffff)),
-        )
+        .child(icon_el)
 }
 
 /// One caption button (min / max / close) for the custom title bar.
