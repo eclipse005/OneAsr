@@ -9,6 +9,9 @@
 /dll
 # User preferences (local machine paths)
 /settings.json
+# Crash/error log written next to the exe (rotated to .old)
+/oneasr-error.log
+/oneasr-error.log.old
 # Release packaging output
 /dist
 /release

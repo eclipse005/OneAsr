@@ -4,6 +4,7 @@ use ::util::ResultExt;
 use anyhow::{Context, Result};
 use collections::HashMap;
 use itertools::Itertools;
+use smallvec::SmallVec;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use windows::{
     Win32::{
@@ -458,46 +459,140 @@ impl DirectWriteState {
     }
 
     fn select_font(&mut self, target_font: &Font) -> FontId {
+        // OneAsr / stripped Win10: never panic on a single missing face. Walk a
+        // short candidate list (requested family → system UI font → common CJK /
+        // Latin UI faces → first system family) so Chinese UI still paints when
+        // 微软雅黑 or Segoe UI was deleted.
+        //
+        // The first candidate is the "preferred" resolution of `target_font`:
+        //   - `.SystemUIFont` → resolved system UI family
+        //   - otherwise      → `font_name_with_fallbacks(family, system_ui)`
+        // If the preferred candidate is installed we return it silently; only
+        // when we fall through to a *substitute* do we log, so the log line names
+        // the originally requested family (not the resolved one).
         unsafe {
+            let weight = target_font.weight;
+            let style = target_font.style;
+            let features = &target_font.features;
+            let fallbacks = target_font.fallbacks.as_ref();
+            let system_ui = self.system_ui_font_name.clone();
+
+            let mut candidates: SmallVec<[SharedString; 12]> = SmallVec::new();
+            let push_unique = |list: &mut SmallVec<[SharedString; 12]>, name: SharedString| {
+                if name.is_empty() {
+                    return;
+                }
+                if !list
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(name.as_ref()))
+                {
+                    list.push(name);
+                }
+            };
+
             if target_font.family == ".SystemUIFont" {
-                let family = self.system_ui_font_name.clone();
-                self.find_font_id(
-                    family.as_ref(),
-                    target_font.weight,
-                    target_font.style,
-                    &target_font.features,
-                    target_font.fallbacks.as_ref(),
-                )
-                .unwrap()
+                push_unique(&mut candidates, system_ui.clone());
             } else {
-                let family = self.system_ui_font_name.clone();
-                self.find_font_id(
-                    font_name_with_fallbacks(target_font.family.as_ref(), family.as_ref()),
-                    target_font.weight,
-                    target_font.style,
-                    &target_font.features,
-                    target_font.fallbacks.as_ref(),
-                )
-                .unwrap_or_else(|| {
-                    #[cfg(any(test, feature = "test-support"))]
-                    {
-                        panic!("ERROR: {} font not found!", target_font.family);
-                    }
-                    #[cfg(not(any(test, feature = "test-support")))]
-                    {
-                        log::error!("{} not found, use {} instead.", target_font.family, family);
-                        self.get_font_id_from_font_collection(
-                            family.as_ref(),
-                            target_font.weight,
-                            target_font.style,
-                            &target_font.features,
-                            target_font.fallbacks.as_ref(),
-                            true,
-                        )
-                        .unwrap()
-                    }
-                })
+                let mapped = font_name_with_fallbacks(
+                    target_font.family.as_ref(),
+                    system_ui.as_ref(),
+                );
+                push_unique(&mut candidates, mapped.to_string().into());
+                push_unique(&mut candidates, system_ui.clone());
             }
+            for name in [
+                "Segoe UI",
+                "Microsoft YaHei UI",
+                "Microsoft YaHei",
+                "微软雅黑",
+                "NSimSun",
+                "新宋体",
+                "SimSun",
+                "宋体",
+                "Arial",
+                "Tahoma",
+            ] {
+                push_unique(&mut candidates, name.into());
+            }
+
+            // Preferred = candidate 0 (system_ui for `.SystemUIFont`, the mapped
+            // family name otherwise). Hitting any later candidate means the
+            // preferred one was missing — log so the substitution is traceable.
+            for (idx, name) in candidates.iter().enumerate() {
+                if let Some(id) =
+                    self.find_font_id(name.as_ref(), weight, style, features, fallbacks)
+                {
+                    if idx != 0 {
+                        log::error!(
+                            "font '{}' not found, using '{}' instead",
+                            target_font.family,
+                            name
+                        );
+                    }
+                    return id;
+                }
+            }
+
+            if let Some(id) = self.first_system_font_id(weight, style, features, fallbacks) {
+                log::error!(
+                    "font '{}' and all preferred fallbacks missing; using first system family",
+                    target_font.family
+                );
+                return id;
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                panic!("ERROR: {} font not found!", target_font.family);
+            }
+            #[cfg(not(any(test, feature = "test-support")))]
+            {
+                // Truly empty font collection — last-ditch: still must return something.
+                // Re-request Arial via collection refresh; if that fails, panic.
+                self.update_system_font_collection();
+                if let Some(id) =
+                    self.find_font_id("Arial", weight, style, features, fallbacks)
+                {
+                    return id;
+                }
+                panic!(
+                    "ERROR: no usable system font for '{}'",
+                    target_font.family
+                );
+            }
+        }
+    }
+
+    /// First family in the system collection (last-resort face for lite OS images).
+    ///
+    /// Safe to call from anywhere; all `unsafe` calls are bounded to the body.
+    /// Kept as a standalone helper because the system collection is a live COM
+    /// object and we want to short-circuit on `GetFontFamilyCount() == 0`.
+    fn first_system_font_id(
+        &mut self,
+        weight: FontWeight,
+        style: FontStyle,
+        features: &FontFeatures,
+        fallbacks: Option<&FontFallbacks>,
+    ) -> Option<FontId> {
+        // SAFETY: read-only COM enumeration over `system_font_collection`; the
+        // collection is owned by `self` and not mutated during the call.
+        unsafe {
+            let count = self.system_font_collection.GetFontFamilyCount();
+            if count == 0 {
+                return None;
+            }
+            let family = self.system_font_collection.GetFontFamily(0).ok()?;
+            let names = family.GetFamilyNames().ok()?;
+            let family_name = get_name(names, self.components.locale.as_str()).ok()?;
+            self.get_font_id_from_font_collection(
+                &family_name,
+                weight,
+                style,
+                features,
+                fallbacks,
+                true,
+            )
         }
     }
 

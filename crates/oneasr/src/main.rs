@@ -6,9 +6,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod assets;
+mod crashlog;
 mod sfx;
 mod shell;
 mod theme;
+mod ui_font;
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -91,11 +93,27 @@ fn main() {
     init_native_library_path();
     // Cap rayon before any model load so the UI thread keeps a free core.
     init_runtime();
+    // Install-dir error log + panic capture (see `oneasr-error.log`).
+    crashlog::install_panic_hook();
+    crashlog::log_session_start();
 
     Application::new()
         .with_assets(assets::AppAssets::new())
         .run(|cx: &mut App| {
             cx.bind_keys([KeyBinding::new("escape", DismissMenus, None)]);
+            // Resolve UI font against this machine (CJK fallbacks for stripped Win10).
+            let font_plan = ui_font::resolve(cx);
+            crashlog::log_font_plan(&ui_font::diagnose_text(&font_plan));
+            if !font_plan
+                .installed_hits
+                .iter()
+                .any(|h| h.contains("YaHei") || h.contains("雅黑"))
+            {
+                crashlog::log_warn(
+                    "Microsoft YaHei missing — UI uses alternate CJK fallbacks (see font plan)",
+                );
+            }
+
             // Compact default: list + toolbar, not a full-HD empty canvas.
             let bounds = Bounds::centered(None, size(px(860.), px(560.)), cx);
             // Custom-drawn title bar (`appears_transparent`): GPUI never sets WS_CAPTION,
@@ -113,12 +131,16 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |window, cx| {
-                    cx.new(|cx| {
-                        let app = OneAsrApp::new(cx);
-                        app.focus_handle.focus(window);
-                        app
-                    })
+                {
+                    let font_plan = font_plan.clone();
+                    move |window, cx| {
+                        cx.new(|cx| {
+                            let mut app = OneAsrApp::new(cx);
+                            app.ui_font = font_plan;
+                            app.focus_handle.focus(window);
+                            app
+                        })
+                    }
                 },
             )
             .expect("open window");
@@ -129,6 +151,8 @@ fn main() {
 struct OneAsrApp {
     /// Root focus so Escape / key bindings reach the app (menus, dismiss).
     focus_handle: FocusHandle,
+    /// Machine-resolved UI font (primary + CJK DirectWrite fallbacks).
+    ui_font: ui_font::UiFontPlan,
     settings: Settings,
     /// Unsaved settings edits (backend / paths).
     settings_dirty: bool,
@@ -182,6 +206,10 @@ struct OneAsrApp {
     busy: bool,
     picking: bool,
     model_status: ModelStatus,
+    /// Cached settings-panel readiness (refreshed in [`Self::refresh_model_probe`], not per frame).
+    asr_ready: bool,
+    align_ready: bool,
+    cuda_ready: bool,
     /// Soft status-bar hint (no toast). Auto-clears after a few seconds.
     status_hint: Option<SharedString>,
     status_hint_until: Option<Instant>,
@@ -262,6 +290,7 @@ impl OneAsrApp {
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
+            ui_font: ui_font::UiFontPlan::default(),
             settings,
             settings_dirty: false,
             settings_open: false,
@@ -293,6 +322,9 @@ impl OneAsrApp {
             busy: false,
             picking: false,
             model_status: ModelStatus::NotReady,
+            asr_ready: false,
+            align_ready: false,
+            cuda_ready: false,
             status_hint: None,
             status_hint_until: None,
             ui_phase: 0,
@@ -467,8 +499,13 @@ impl OneAsrApp {
         }
     }
 
-    /// Fast FS check for status bar. Does not touch GPU / weights.
+    /// Fast FS check for status bar + settings dots. Does not touch GPU / weights.
+    /// Call after path / download / backend changes — not on every scroll paint.
     fn refresh_model_probe(&mut self) {
+        self.asr_ready = check_asr_model_dir(&self.settings.asr_model_dir).is_ok();
+        self.align_ready =
+            oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
+        self.cuda_ready = is_cuda_runtime_ready();
         self.model_status = if self.settings.can_start().is_ok() {
             ModelStatus::Ready
         } else {
@@ -508,6 +545,7 @@ impl OneAsrApp {
                 );
             }
             Err(e) => {
+                crashlog::log_error(format!("settings save failed: {e}"));
                 self.flash_hint(format!("保存失败: {e}"), cx);
             }
         }
@@ -549,6 +587,7 @@ impl OneAsrApp {
                     // Probe + persist path immediately after pick.
                     self.reset_model_config(cx);
                     if let Err(e) = self.settings.save() {
+                        crashlog::log_error(format!("ASR model dir save failed: {e}"));
                         self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
                     } else {
                         self.flash_hint(
@@ -565,6 +604,7 @@ impl OneAsrApp {
                     self.settings_dirty = false;
                     self.reset_model_config(cx);
                     if let Err(e) = self.settings.save() {
+                        crashlog::log_error(format!("aligner model dir save failed: {e}"));
                         self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
                     } else {
                         self.flash_hint(
@@ -580,6 +620,7 @@ impl OneAsrApp {
                     self.settings.output_dir = dir;
                     self.settings_dirty = false;
                     if let Err(e) = self.settings.save() {
+                        crashlog::log_error(format!("output dir save failed: {e}"));
                         self.flash_hint(format!("输出目录已更新，但保存失败: {e}"), cx);
                     } else {
                         self.flash_hint("字幕输出目录已更新", cx);
@@ -604,6 +645,7 @@ impl OneAsrApp {
                         // dll/ was registered at process start so no re-init is needed.
                         match id.kind() {
                             ModelKind::CudaRuntime => {
+                                self.refresh_model_probe();
                                 self.flash_hint(format!("{} 已安装", id.label()), cx);
                             }
                             ModelKind::Asr | ModelKind::Align => {
@@ -611,7 +653,12 @@ impl OneAsrApp {
                                     .settings
                                     .bind_download_if_active(id, progress.model_dir.clone());
                                 if bound {
-                                    let _ = self.settings.save();
+                                    if let Err(e) = self.settings.save() {
+                                        crashlog::log_error(format!(
+                                            "save after {} download: {e}",
+                                            id.label()
+                                        ));
+                                    }
                                     self.settings_dirty = false;
                                     self.reset_model_config(cx);
                                     self.flash_hint(format!("{} 下载完成", id.label()), cx);
@@ -631,6 +678,7 @@ impl OneAsrApp {
                         } else {
                             format!("{} 下载失败: {}", id.label(), progress.message)
                         };
+                        crashlog::log_error(&fail);
                         self.flash_hint(fail, cx);
                     } else if progress.state == DownloadState::Cancelled {
                         self.flash_hint(format!("{} 已取消", id.label()), cx);
@@ -669,6 +717,7 @@ impl OneAsrApp {
                                 t.error = None;
                             }
                             Err(e) => {
+                                crashlog::log_error(format!("task {id} failed: {e}"));
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
                                 t.error = Some(e);
@@ -1476,7 +1525,8 @@ impl Render for OneAsrApp {
             .flex_col()
             .bg(BG)
             .text_color(TEXT)
-            .font_family("Segoe UI")
+            // Primary + explicit CJK fallbacks (stripped Win10 / deleted 雅黑).
+            .font(self.ui_font.font.clone())
             .on_action(cx.listener(|this, _: &DismissMenus, _, cx| {
                 this.dismiss_menus(cx);
             }))
@@ -1515,6 +1565,9 @@ impl Render for OneAsrApp {
                             .child(self.render_list(cx)),
                     )
                     // Keep mounted while animating closed (p > 0).
+                    // `occlude`: block hits + scroll to the list underneath (otherwise
+                    // overflow_y_scroll on both layers double-notifies every wheel tick —
+                    // a likely amplifier for the hard-to-repro settings scroll crash).
                     .when(drawer_p > 0.001, |el| {
                         let slide = (1.0 - drawer_p) * SETTINGS_W;
                         let fade = 0.25 + 0.75 * drawer_p;
@@ -1530,6 +1583,7 @@ impl Render for OneAsrApp {
                                 .border_l_1()
                                 .border_color(LINE)
                                 .bg(PANEL)
+                                .occlude()
                                 .shadow(vec![
                                     BoxShadow {
                                         color: hsla(0.0, 0.0, 0.0, 0.06 * drawer_p),
@@ -2365,9 +2419,10 @@ impl OneAsrApp {
         let output_dir = self.settings.resolved_output_dir().display().to_string();
         let output_dir_tip = output_dir.clone();
         let dirty = self.is_settings_dirty(cx);
-        let asr_ready = check_asr_model_dir(&self.settings.asr_model_dir).is_ok();
-        let align_ready =
-            oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
+        // Use probe cache — never re-stat model dirs on every scroll paint.
+        let asr_ready = self.asr_ready;
+        let align_ready = self.align_ready;
+        let cuda_ready = self.cuda_ready;
         // Progress is keyed by model id — never show another size’s snapshot here.
         let asr_dl = self.progress_for(asr_id).cloned();
         let align_dl = self.progress_for(ModelId::QwenAlign06B).cloned();
@@ -2376,7 +2431,6 @@ impl OneAsrApp {
         let asr_size_locked = self.download_kind_busy(ModelKind::Asr);
         let align_dl_busy = self.download_busy(ModelId::QwenAlign06B);
         let cuda_dl_busy = self.download_busy(ModelId::CudaRuntime);
-        let cuda_ready = is_cuda_runtime_ready();
 
         let section = |body: gpui::AnyElement| {
             div()
@@ -2956,7 +3010,7 @@ impl OneAsrApp {
                                                 if this.settings.backend == id {
                                                     return;
                                                 }
-                                                if id == "cuda" && !is_cuda_runtime_ready() {
+                                                if id == "cuda" && !this.cuda_ready {
                                                     this.flash_hint(
                                                         "请先下载 CUDA 运行库，再选择 GPU",
                                                         cx,

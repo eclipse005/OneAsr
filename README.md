@@ -80,6 +80,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
   models/             # ASR / Aligner 权重
   output/             # 默认字幕输出
   runs/               # 中间文件（成功后会清理）
+  oneasr-error.log    # 崩溃/错误日志（闪退时可附上）
 ```
 
 ---
