@@ -156,6 +156,8 @@ impl Settings {
 
         if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
             self.asr_model = id.as_str().into();
+            repair_stale_model_dir(&mut self.asr_model_dir, resolve_model_dir(id.as_str()));
+            repair_stale_model_dir(&mut self.aligner_model_dir, default_aligner_model_dir());
             return;
         }
 
@@ -164,6 +166,7 @@ impl Settings {
         if self.asr_model_dir.as_os_str().is_empty() {
             self.asr_model_dir = resolve_model_dir(id.as_str());
         }
+        repair_stale_model_dir(&mut self.aligner_model_dir, default_aligner_model_dir());
     }
 
     /// Default empty → `{app}/output`; relative → join app root (stable vs CWD).
@@ -249,6 +252,19 @@ impl Settings {
         }
     }
 
+}
+
+/// If `current` doesn't exist on disk but `default` does, switch to `default`.
+///
+/// This handles the portable-app case: when the user moves the app folder,
+/// stored absolute model paths become stale, but if the models were moved
+/// together with the app (same `models/` layout), we auto-repair to the
+/// current install-layout location.  Custom user-chosen paths outside the
+/// install layout are left alone.
+fn repair_stale_model_dir(current: &mut PathBuf, default: PathBuf) {
+    if !current.is_dir() && default.is_dir() {
+        *current = default;
+    }
 }
 
 #[cfg(test)]
@@ -378,5 +394,35 @@ mod tests {
             s.output_dir.display()
         );
         assert_eq!(s.resolved_output_dir(), s.output_dir);
+    }
+
+    #[test]
+    fn repair_stale_model_dir_switches_when_default_exists() {
+        let tmp = std::env::temp_dir();
+        // default exists (temp_dir is a real directory)
+        let mut current = PathBuf::from(r"D:\__no_such_dir_for_test__");
+        repair_stale_model_dir(&mut current, tmp.clone());
+        assert_eq!(current, tmp, "stale path should switch to existing default");
+    }
+
+    #[test]
+    fn repair_stale_model_dir_keeps_custom_path_when_neither_exists() {
+        let mut current = PathBuf::from(r"D:\__custom_model_path__");
+        let default = PathBuf::from(r"D:\__also_missing__");
+        let original = current.clone();
+        repair_stale_model_dir(&mut current, default);
+        assert_eq!(
+            current, original,
+            "custom path should be preserved when neither exists"
+        );
+    }
+
+    #[test]
+    fn repair_stale_model_dir_keeps_existing_path() {
+        let tmp = std::env::temp_dir();
+        let mut current = tmp.clone();
+        let default = PathBuf::from(r"D:\__no_such_dir__");
+        repair_stale_model_dir(&mut current, default);
+        assert_eq!(current, tmp, "existing path should not be changed");
     }
 }
