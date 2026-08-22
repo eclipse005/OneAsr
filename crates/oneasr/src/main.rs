@@ -11,6 +11,13 @@ mod sfx;
 mod shell;
 mod theme;
 mod ui_font;
+mod widgets;
+
+use crate::widgets::{
+    floating_lang_menu, timing_breakdown_popover, app_logo, btn, btn_cta, caption_btn,
+    component_install_row, icon_btn, model_download_row, popover_dismiss_layer, settings_gear_btn,
+    BtnKind, IconKind, NameTooltip,
+};
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -20,20 +27,20 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    actions, canvas, deferred, div, hsla, linear, percentage, point, prelude::*, px, size, svg,
-    Animation, AnimationExt as _, App, Application, Bounds, BoxShadow, ClickEvent, Context,
-    ExternalPaths, FocusHandle, KeyBinding, MouseButton, MouseMoveEvent, Pixels, SharedString,
-    Timer, Transformation, Window, WindowBounds, WindowControlArea, WindowOptions,
+    actions, canvas, div, hsla, point, prelude::*, px, size, svg,
+    App, Application, Bounds, BoxShadow, Context,
+    ExternalPaths, FocusHandle, KeyBinding, MouseMoveEvent, Pixels, SharedString,
+    Timer, Window, WindowBounds, WindowControlArea, WindowOptions,
 };
 use oneasr_core::{
     accept_input_path, check_asr_model_dir, demote_current_thread, download_model,
     empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
     format_process_ms, init_native_library_path, init_runtime, is_cuda_runtime_ready,
     next_queue_seq, normalize_source_language, process_media_file_with_progress,
-    probe_duration_async, resolve_app_root, source_language_by_id, AsrStage, DownloadHandle,
-    DownloadProgress, DownloadState, DurationState, ModelId, ModelKind, Settings, StageClock,
-    StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC,
-    CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
+    probe_duration_async, resolve_app_root, source_language_by_id, AsrStage,
+    DownloadHandle, DownloadProgress, DownloadState, DurationState, ModelId, ModelKind,
+    Settings, StageClock, StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC,
+    CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
 };
 
 actions!(oneasr, [DismissMenus]);
@@ -253,13 +260,18 @@ impl OneAsrApp {
                             let id_for_progress = id.clone();
                             let ptx = worker_tx.clone();
                             let mut clock = StageClock::new();
-                            let result = run_task(&path, &name, &settings, |update| {
-                                clock.note(&update);
-                                let _ = ptx.send(WorkerMsg::Progress {
-                                    id: id_for_progress.clone(),
-                                    stage: SharedString::from(update.label()),
-                                });
-                            });
+                            let result = run_task(
+                                &path,
+                                &name,
+                                &settings,
+                                |update| {
+                                    clock.note(&update);
+                                    let _ = ptx.send(WorkerMsg::Progress {
+                                        id: id_for_progress.clone(),
+                                        stage: SharedString::from(update.label()),
+                                    });
+                                },
+                            );
                             let timing = clock.finish();
                             let _ = worker_tx.send(WorkerMsg::Finished {
                                 id,
@@ -1149,6 +1161,51 @@ impl OneAsrApp {
             });
     }
 
+    fn snapshot_task_rows(&self, now: Instant) -> Vec<TaskRowView> {
+        let mut queued: Vec<(&str, u64)> = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Queued)
+            .map(|t| (t.id.as_str(), t.queue_seq.unwrap_or(u64::MAX)))
+            .collect();
+        queued.sort_by_key(|(_, seq)| *seq);
+        let ranks: HashMap<&str, usize> = queued
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (*id, i + 1))
+            .collect();
+
+        self.tasks
+            .iter()
+            .map(|t| {
+                let (opacity, interactive) = if let Some(t0) = self.exiting.get(&t.id) {
+                    let p = (now.duration_since(*t0).as_secs_f32() / ROW_EXIT_SECS).clamp(0.0, 1.0);
+                    (1.0 - ease_out_cubic(p), false)
+                } else if let Some(t0) = self.entering.get(&t.id) {
+                    let p = (now.duration_since(*t0).as_secs_f32() / ROW_ENTER_SECS).clamp(0.0, 1.0);
+                    (ease_out_cubic(p), true)
+                } else {
+                    (1.0, true)
+                };
+                TaskRowView {
+                    id: t.id.clone(),
+                    status: t.status,
+                    has_output: t.output_srt.is_some(),
+                    language: t.language.clone(),
+                    error: t.error.clone(),
+                    name: t.name.clone(),
+                    size_label: t.size_label(),
+                    duration_label: t.duration.label(),
+                    is_video: is_video_format(&t.format),
+                    timing: t.timing.clone(),
+                    opacity,
+                    interactive,
+                    queue_rank: ranks.get(t.id.as_str()).copied(),
+                }
+            })
+            .collect()
+    }
+
     /// Brief message in the bottom status bar (replaces toast).
     fn flash_hint(&mut self, msg: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.flash_hint_for(msg, Duration::from_secs(3), cx);
@@ -1500,6 +1557,24 @@ fn run_task(
     // Runs only on the dedicated ASR worker thread.
     process_media_file_with_progress(path, name, settings, &app_root, on_stage)
         .map_err(|e| e.to_string())
+}
+
+/// Per-frame paint snapshot of a list row. Owned so the children closure
+/// does not clone `Task` (path, output path, …).
+struct TaskRowView {
+    id: String,
+    status: TaskStatus,
+    has_output: bool,
+    language: String,
+    error: Option<String>,
+    name: String,
+    size_label: String,
+    duration_label: String,
+    is_video: bool,
+    timing: Option<TaskTiming>,
+    opacity: f32,
+    interactive: bool,
+    queue_rank: Option<usize>,
 }
 
 impl Render for OneAsrApp {
@@ -1875,48 +1950,14 @@ impl OneAsrApp {
 
         // Rows stay in `tasks` order. Exit tombstones fade in place (1→0);
         // enter map fades new rows (0→1). Exiting rows are non-interactive.
-        let now = Instant::now();
-        let items: Vec<(Task, f32, bool)> = self
-            .tasks
-            .iter()
-            .cloned()
-            .map(|t| {
-                if let Some(t0) = self.exiting.get(&t.id) {
-                    let p = (now.duration_since(*t0).as_secs_f32() / ROW_EXIT_SECS).clamp(0.0, 1.0);
-                    let opacity = 1.0 - ease_out_cubic(p);
-                    (t, opacity, false)
-                } else {
-                    let opacity = self
-                        .entering
-                        .get(&t.id)
-                        .map(|t0| {
-                            let p = (now.duration_since(*t0).as_secs_f32() / ROW_ENTER_SECS)
-                                .clamp(0.0, 1.0);
-                            ease_out_cubic(p)
-                        })
-                        .unwrap_or(1.0);
-                    (t, opacity, true)
-                }
-            })
-            .collect();
-
+        let items = self.snapshot_task_rows(Instant::now());
         let phase = self.ui_phase;
         let hover_id = self.hover_row.clone();
         let lang_menu = self.lang_menu.clone();
         let active_stage = self.active_stage.clone();
-        // Snapshot ranks for 排队中#n labels (live queue only).
-        let queue_ranks: Vec<(String, usize)> = {
-            let mut q: Vec<&Task> = self
-                .tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Queued)
-                .collect();
-            q.sort_by_key(|t| t.queue_seq.unwrap_or(u64::MAX));
-            q.into_iter()
-                .enumerate()
-                .map(|(i, t)| (t.id.clone(), i + 1))
-                .collect()
-        };
+        let timing_popover = self.timing_popover.clone();
+        let timing_visible = self.timing_popover_visible();
+        let timing_progress = self.timing_popover_progress();
 
         div()
             .id("task-list")
@@ -1926,15 +1967,17 @@ impl OneAsrApp {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(items.into_iter().enumerate().map(move |(ix, (task, row_opacity, interactive))| {
-                let id_start = task.id.clone();
-                let id_del = task.id.clone();
-                let id_open = task.id.clone();
-                let id_lang = task.id.clone();
-                // Always show primary + delete slots (gray when locked — never disappear).
-                let done_with_out =
-                    task.status == TaskStatus::Done && task.output_srt.is_some();
-                // Done → open folder (same slot as start); else start.
+            .children(items.into_iter().enumerate().map(move |(ix, row)| {
+                let interactive = row.interactive;
+                let row_opacity = row.opacity;
+                let id_start = row.id.clone();
+                let id_del = row.id.clone();
+                let id_open = row.id.clone();
+                let id_lang = row.id.clone();
+                let row_id = row.id.clone();
+                let row_id_hover = row.id.clone();
+                let id_lang_pick = row.id.clone();
+                let done_with_out = row.status == TaskStatus::Done && row.has_output;
                 let primary_kind = if done_with_out {
                     IconKind::Folder
                 } else {
@@ -1949,56 +1992,43 @@ impl OneAsrApp {
                     && if done_with_out {
                         true
                     } else {
-                        matches!(task.status, TaskStatus::Pending | TaskStatus::Error)
+                        matches!(row.status, TaskStatus::Pending | TaskStatus::Error)
                     };
-                let can_delete = interactive && !task.status.locks_row_actions();
-                let can_edit_lang = interactive && !task.status.locks_row_actions();
-                let lang_open = lang_menu.as_ref() == Some(&task.id);
-                let lang_meta = source_language_by_id(&task.language);
+                let can_delete = interactive && !row.status.locks_row_actions();
+                let can_edit_lang = interactive && !row.status.locks_row_actions();
+                let lang_open = lang_menu.as_ref() == Some(&row.id);
+                let lang_meta = source_language_by_id(&row.language);
                 let lang_short = lang_meta.map(|l| l.short).unwrap_or("?");
-                let lang_current = task.language.clone();
-                let err = task.error.clone();
-                let name = task.name.clone();
-                let name_tip = task.name.clone();
-                let row_id = task.id.clone();
-                let row_id_hover = task.id.clone();
-                let id_lang_pick = task.id.clone();
-                let size_l = task.size_label();
-                let duration = task.duration;
-                let status = task.status;
-                let is_video = is_video_format(&task.format);
-                let is_hovered = interactive && hover_id.as_ref() == Some(&task.id);
-                let qn = queue_ranks
-                    .iter()
-                    .find(|(id, _)| id == &task.id)
-                    .map(|(_, n)| *n);
+                let lang_current = row.language.clone();
+                let err = row.error.clone();
+                let name = row.name.clone();
+                let name_tip = row.name.clone();
+                let size_l = row.size_label.clone();
+                let status = row.status;
+                let is_video = row.is_video;
+                let is_hovered = interactive && hover_id.as_ref() == Some(&row.id);
+                let qn = row.queue_rank;
 
                 // Meta: size · duration · status text (no free-floating status circle).
-                let dur = match duration {
-                    DurationState::Probing => "…".into(),
-                    other => other.label(),
-                };
+                let dur = row.duration_label.clone();
                 let stage_for_row = active_stage
                     .as_ref()
-                    .filter(|(sid, _)| sid == &task.id)
+                    .filter(|(sid, _)| sid == &row.id)
                     .map(|(_, s)| s.as_ref());
                 let (status_label, status_color, status_bg) =
                     status_pill_style(status, phase, qn, stage_for_row);
-                let timing_total = task
+                let timing_total = row
                     .timing
                     .as_ref()
                     .filter(|t| t.has_breakdown())
                     .map(|t| t.total_label());
-                let timing_for_card = task
+                let timing_for_card = row
                     .timing
                     .as_ref()
-                    .filter(|t| t.has_breakdown())
-                    .cloned();
-                let timing_open = self.timing_popover.as_ref() == Some(&task.id)
-                    && self.timing_popover_visible();
-                let timing_pop_p = if timing_open || self.timing_popover.as_ref() == Some(&task.id)
-                {
-                    self.timing_popover_progress()
+                    .filter(|t| t.has_breakdown());
+                let timing_open = timing_popover.as_ref() == Some(&row.id) && timing_visible;
+                let timing_pop_p = if timing_open || timing_popover.as_ref() == Some(&row.id) {
+                    timing_progress
                 } else {
                     0.0
                 };
@@ -2105,8 +2135,8 @@ impl OneAsrApp {
                                             )
                                             .child({
                                                 // Meta: size · media length · [用时 chip + hover card]
-                                                let id_timing = task.id.clone();
-                                                let id_timing_leave = task.id.clone();
+                                                let id_timing = row.id.clone();
+                                                let id_timing_leave = row.id.clone();
                                                 div()
                                                     .flex()
                                                     .items_center()
@@ -3233,423 +3263,100 @@ impl OneAsrApp {
                     }),
             )
     }
-}
 
-/// Compact download row under a model path field.
-fn model_download_row(
-    id: &'static str,
-    cancel_id: &'static str,
-    ready: bool,
-    busy: bool,
-    progress: Option<&DownloadProgress>,
-    kind: ModelKind,
-    on_download: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    download_action_row(
-        id,
-        cancel_id,
-        ready,
-        busy,
-        progress,
-        ActionCopy {
-            ready_status: "已就绪",
-            idle_status: "未下载",
-            busy_btn: "下载中…",
-            idle_btn: "下载模型",
-            ready_btn: "重新下载",
-            kind,
-        },
-        on_download,
-        on_cancel,
-    )
-}
+    fn render_empty_wave(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.empty_wave_clock.elapsed().as_secs_f32();
+        let heights = empty_wave_heights(t, self.empty_wave_smooth_x, self.empty_wave_amp);
+        let entity = cx.entity().clone();
 
-/// CUDA / native runtime components → `{exe}/dll/`, button「安装组件」.
-fn component_install_row(
-    id: &'static str,
-    cancel_id: &'static str,
-    ready: bool,
-    busy: bool,
-    progress: Option<&DownloadProgress>,
-    on_install: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    download_action_row(
-        id,
-        cancel_id,
-        ready,
-        busy,
-        progress,
-        ActionCopy {
-            ready_status: "已安装",
-            idle_status: "未安装",
-            busy_btn: "安装中…",
-            idle_btn: "安装组件",
-            ready_btn: "重新安装",
-            kind: ModelKind::CudaRuntime,
-        },
-        on_install,
-        on_cancel,
-    )
-}
-
-struct ActionCopy {
-    ready_status: &'static str,
-    idle_status: &'static str,
-    busy_btn: &'static str,
-    idle_btn: &'static str,
-    ready_btn: &'static str,
-    kind: ModelKind,
-}
-
-fn download_action_row(
-    id: &'static str,
-    cancel_id: &'static str,
-    ready: bool,
-    busy: bool,
-    progress: Option<&DownloadProgress>,
-    copy: ActionCopy,
-    on_action: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    // Short status only — no filesystem path (model path is already above).
-    let status_text = if let Some(p) = progress {
-        p.label_for_kind(copy.kind)
-    } else if ready {
-        copy.ready_status.to_string()
-    } else {
-        copy.idle_status.to_string()
-    };
-    let status_color = if ready && !busy {
-        ACCENT
-    } else if busy {
-        WARN
-    } else if progress.is_some_and(|p| p.state == DownloadState::Failed) {
-        DANGER
-    } else {
-        MUTED
-    };
-    let busy_label = copy.busy_btn;
-    let action_label = if ready { copy.ready_btn } else { copy.idle_btn };
-
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(status_color)
-                .whitespace_normal()
-                .line_clamp(2)
-                .child(status_text),
-        )
-        .child(
-            div().flex().items_center().gap_1p5().children({
-                let mut kids: Vec<gpui::AnyElement> = Vec::new();
-                if busy {
-                    kids.push(
-                        div()
-                            .id(cancel_id)
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(LINE)
-                            .bg(BG)
-                            .text_xs()
-                            .text_color(MUTED)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(DANGER_SOFT).text_color(DANGER).border_color(DANGER))
-                            .on_click(on_cancel)
-                            .child("取消")
-                            .into_any_element(),
-                    );
-                    kids.push(
-                        div()
-                            .id(id)
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(LINE)
-                            .bg(BG)
-                            .text_xs()
-                            .text_color(MUTED)
-                            .opacity(0.7)
-                            .child(busy_label)
-                            .into_any_element(),
-                    );
-                } else {
-                    kids.push(
-                        div()
-                            .id(id)
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(ACCENT)
-                            .bg(ACCENT_SOFT)
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(ACCENT)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ACCENT).text_color(gpui::rgb(0xffffff)))
-                            .on_click(on_action)
-                            .child(action_label)
-                            .into_any_element(),
-                    );
-                }
-                kids
-            }),
-        )
-}
-
-/// Brand mark: teal tile + SVG waveform → subtitle (matches app-icon.ico).
-/// On hover, the waveform does a light left-right wiggle (repeat while hovered).
-fn app_logo(hovered: bool) -> impl IntoElement {
-    let icon = svg()
-        .size(px(22.))
-        .path("icons/logo.svg")
-        .text_color(gpui::rgb(0xffffff));
-
-    // Distinct element ids so GPUI remounts cleanly when hover starts/stops.
-    let icon_el = if hovered {
-        icon.with_animation(
-            "logo-wiggle",
-            Animation::new(Duration::from_millis(480))
-                .repeat()
-                .with_easing(linear),
-            |svg, delta| {
-                // ~3 half-swings per cycle → lively but not frantic.
-                let phase = delta * TAU * 3.0;
-                let wiggle = phase.sin();
-                // ±12° rotation (fraction of a full turn).
-                let turn = (12.0 / 360.0) * wiggle;
-                // Tiny scale pulse so it feels springy, not just rotating.
-                let pulse = 1.0 + 0.06 * phase.cos().abs();
-                svg.with_transformation(
-                    Transformation::rotate(percentage(turn)).with_scaling(size(pulse, pulse)),
+        div()
+            .id("empty-wave")
+            .w_full()
+            .h(px(EMPTY_WAVE_MAX_H + 24.0))
+            .relative()
+            .cursor_default()
+            // Capture layout bounds so mouse X can be mapped 0..=1 along the strip.
+            .child(
+                canvas(
+                    {
+                        let entity = entity.clone();
+                        move |bounds, _window, cx| {
+                            entity.update(cx, |app, _cx| {
+                                app.empty_wave_bounds = Some(bounds);
+                            });
+                        }
+                    },
+                    |_bounds, (), _window, _cx| {},
                 )
-            },
-        )
-        .into_any_element()
-    } else {
-        icon.into_any_element()
-    };
-
-    div()
-        .id(if hovered {
-            "app-logo-hot"
-        } else {
-            "app-logo"
-        })
-        .size(px(36.))
-        .rounded_xl()
-        .bg(LOGO)
-        .shadow(vec![BoxShadow {
-            color: hsla(
-                174. / 360.,
-                0.55,
-                0.28,
-                if hovered { 0.42 } else { 0.28 },
-            ),
-            offset: point(px(0.), px(if hovered { 2. } else { 1. })),
-            blur_radius: px(if hovered { 10. } else { 6. }),
-            spread_radius: px(0.),
-        }])
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(icon_el)
-}
-
-/// One caption button (min / max / close) for the custom title bar.
-/// Hit routing is via `WindowControlArea` only — no `on_click` (see `render_titlebar`).
-/// `close` gets the Windows-style red hover with a white glyph.
-fn caption_btn(
-    id: &'static str,
-    icon: &'static str,
-    area: WindowControlArea,
-    close: bool,
-) -> impl IntoElement {
-    let group: SharedString = format!("{id}-hover").into();
-    let icon_el = svg()
-        .size(px(14.))
-        .path(icon)
-        .text_color(MUTED)
-        .when(close, |el| {
-            el.group_hover(group.clone(), |s| s.text_color(PANEL))
-        });
-    div()
-        .id(id)
-        .w(px(46.))
-        .h_full()
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .window_control_area(area)
-        .when(close, |el| el.group(group))
-        .hover(move |s| {
-            if close {
-                s.bg(DANGER)
-            } else {
-                s.bg(LINE_SOFT)
-            }
-        })
-        .child(icon_el)
-}
-
-#[derive(Clone, Copy)]
-enum BtnKind {
-    /// Sole solid CTA (全部开始 / 空状态添加).
-    Primary,
-    /// Outlined secondary (添加 / 后端选项).
-    Secondary,
-    /// Low-emphasis destructive/utility (清空) — text only.
-    Quiet,
-}
-
-/// Settings gear.
-/// - **Spin**: only while any model / CUDA DLL download is in flight (open or closed).
-/// - **Tint**: settings drawer open, or download running (so closed-panel DL is still visible).
-fn settings_gear_btn(
-    open: bool,
-    downloading: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let active = open || downloading;
-    let gear = svg()
-        .size(px(18.))
-        .path("icons/gear.svg")
-        .text_color(if active { ACCENT } else { MUTED });
-
-    // Distinct element ids so GPUI remounts when download starts/stops (reliable spin on/off).
-    let gear_el = if downloading {
-        gear.with_animation(
-            "settings-gear-spin",
-            Animation::new(Duration::from_secs(4))
-                .repeat()
-                .with_easing(linear),
-            |svg, delta| svg.with_transformation(Transformation::rotate(percentage(delta))),
-        )
-        .into_any_element()
-    } else {
-        gear.into_any_element()
-    };
-
-    div()
-        .id(if downloading {
-            "settings-gear-dl"
-        } else {
-            "settings-gear"
-        })
-        .size(px(36.))
-        .rounded_lg()
-        .flex()
-        .items_center()
-        .justify_center()
-        .flex_shrink_0()
-        .bg(if open { ACCENT_SOFT } else { PANEL })
-        .border_1()
-        .border_color(if open { ACCENT_SOFT } else { LINE })
-        .cursor_pointer()
-        .hover(|s| {
-            if open {
-                s.bg(ACCENT_SOFT).border_color(ACCENT)
-            } else {
-                s.bg(BG).border_color(ACCENT)
-            }
-        })
-        .on_click(on_click)
-        .child(gear_el)
-}
-
-/// Primary CTA. When disabled: not clickable + tooltip explains why.
-fn btn_cta(
-    label: &str,
-    enabled: bool,
-    disabled_tip: &'static str,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let id = SharedString::from(format!("cta-{label}-{enabled}"));
-    let tip: SharedString = disabled_tip.into();
-    let mut el = div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_lg()
-        .text_sm()
-        .bg(ACCENT)
-        .text_color(PANEL)
-        .border_1()
-        .border_color(ACCENT)
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .opacity(if enabled { 1.0 } else { 0.42 })
-        .child(label.to_string());
-    if enabled {
-        el = el
-            .cursor_pointer()
-            .hover(|s| s.opacity(0.92))
-            .on_click(on_click);
-    } else {
-        el = el.tooltip(move |_, cx| {
-            cx.new(|_| NameTooltip { text: tip.clone() }).into()
-        });
+                .absolute()
+                .size_full(),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if let Some(b) = this.empty_wave_bounds {
+                    let w = f32::from(b.size.width).max(1.0);
+                    let local = (f32::from(event.position.x) - f32::from(b.left())) / w;
+                    this.empty_wave_cursor_x = local.clamp(0.0, 1.0);
+                    if !this.empty_wave_hover {
+                        this.empty_wave_hover = true;
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.empty_wave_hover != *hovered {
+                    this.empty_wave_hover = *hovered;
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .px_6()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .children((0..EMPTY_WAVE_BARS).map(move |i| {
+                        let h = heights[i];
+                        let u = ((h - EMPTY_WAVE_FLAT_H)
+                            / (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H))
+                            .clamp(0.0, 1.0);
+                        let opacity = 0.40 + 0.55 * u;
+                        div()
+                            .w(px(2.5))
+                            .h(px(h))
+                            .rounded_full()
+                            .bg(ACCENT)
+                            .opacity(opacity)
+                    })),
+            )
     }
-    el
 }
 
-fn btn(
-    label: &str,
-    kind: BtnKind,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let id = SharedString::from(format!("btn-{label}-{}-{enabled}", kind as u8));
-    let (bg, fg, border, opacity) = match (kind, enabled) {
-        (BtnKind::Primary, true) => (ACCENT, PANEL, ACCENT, 1.0),
-        (BtnKind::Primary, false) => (ACCENT, PANEL, ACCENT, 0.42),
-        (BtnKind::Secondary, true) => (PANEL, TEXT, LINE, 1.0),
-        (BtnKind::Secondary, false) => (PANEL, MUTED_SOFT, LINE, 1.0),
-        (BtnKind::Quiet, true) => (PANEL, MUTED, PANEL, 1.0),
-        (BtnKind::Quiet, false) => (PANEL, MUTED_SOFT, PANEL, 1.0),
-    };
-    let mut el = div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_lg()
-        .text_sm()
-        .bg(bg)
-        .text_color(fg)
-        .border_1()
-        .border_color(border)
-        .font_weight(match kind {
-            BtnKind::Primary => gpui::FontWeight::SEMIBOLD,
-            BtnKind::Secondary | BtnKind::Quiet => gpui::FontWeight::NORMAL,
-        })
-        .opacity(opacity)
-        .child(label.to_string());
-    if enabled {
-        el = el
-            .cursor_pointer()
-            .hover(|s| match kind {
-                BtnKind::Primary => s.opacity(0.92),
-                BtnKind::Secondary => s.border_color(ACCENT),
-                BtnKind::Quiet => s.text_color(DANGER).bg(DANGER_SOFT),
-            })
-            .on_click(on_click);
+const EMPTY_WAVE_BARS: usize = 64;
+const EMPTY_WAVE_MAX_H: f32 = 78.0;
+const EMPTY_WAVE_FLAT_H: f32 = 5.0;
+const EMPTY_WAVE_SIGMA: f32 = 0.09;
+
+/// Bar heights in px. Flat when `amp≈0`; local gaussian bulge at `cx` (0..=1) otherwise.
+fn empty_wave_heights(t_secs: f32, cx: f32, amp: f32) -> [f32; EMPTY_WAVE_BARS] {
+    let mut out = [EMPTY_WAVE_FLAT_H; EMPTY_WAVE_BARS];
+    if amp < 0.004 {
+        return out;
     }
-    el
+    let n = (EMPTY_WAVE_BARS - 1) as f32;
+    let sigma2 = 2.0 * EMPTY_WAVE_SIGMA * EMPTY_WAVE_SIGMA;
+    for i in 0..EMPTY_WAVE_BARS {
+        let x = i as f32 / n;
+        let dx = x - cx;
+        let env = (-(dx * dx) / sigma2).exp();
+        // Gentle shimmer only under the bulge (not whole-line jitter).
+        let ripple = (x * TAU * 5.0 - t_secs * 5.5).sin() * 0.18;
+        let fine = (x * TAU * 11.0 + t_secs * 3.2).sin() * 0.07;
+        let u = (env * (0.88 + ripple + fine)).clamp(0.0, 1.0) * amp;
+        out[i] = EMPTY_WAVE_FLAT_H + u * (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H);
+    }
+    out
 }
 
 fn is_video_format(fmt: &str) -> bool {
@@ -3734,212 +3441,6 @@ fn media_type_icon(is_video: bool, status: TaskStatus) -> impl IntoElement {
         )
 }
 
-/// Decorative full-width empty-state strip (not real audio FFT).
-/// Idle = flat baseline across the content width. Pointer locally bulges a
-/// soft waveform under the cursor; the bulge eases in/out and follows smoothly.
-const EMPTY_WAVE_BARS: usize = 64;
-const EMPTY_WAVE_MAX_H: f32 = 78.0;
-const EMPTY_WAVE_FLAT_H: f32 = 5.0;
-/// How wide the local bulge is (fraction of strip width, ~gaussian sigma).
-const EMPTY_WAVE_SIGMA: f32 = 0.09;
-
-impl OneAsrApp {
-    fn render_empty_wave(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = self.empty_wave_clock.elapsed().as_secs_f32();
-        let heights = empty_wave_heights(
-            t,
-            self.empty_wave_smooth_x,
-            self.empty_wave_amp,
-        );
-        let entity = cx.entity().clone();
-
-        div()
-            .id("empty-wave")
-            .w_full()
-            .h(px(EMPTY_WAVE_MAX_H + 24.0))
-            .relative()
-            .cursor_default()
-            // Capture layout bounds so mouse X can be mapped 0..=1 along the strip.
-            .child(
-                canvas(
-                    {
-                        let entity = entity.clone();
-                        move |bounds, _window, cx| {
-                            entity.update(cx, |app, _cx| {
-                                app.empty_wave_bounds = Some(bounds);
-                            });
-                        }
-                    },
-                    |_bounds, (), _window, _cx| {},
-                )
-                .absolute()
-                .size_full(),
-            )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if let Some(b) = this.empty_wave_bounds {
-                    let w = f32::from(b.size.width).max(1.0);
-                    let local = (f32::from(event.position.x) - f32::from(b.left())) / w;
-                    this.empty_wave_cursor_x = local.clamp(0.0, 1.0);
-                    if !this.empty_wave_hover {
-                        this.empty_wave_hover = true;
-                    }
-                    cx.notify();
-                }
-            }))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if this.empty_wave_hover != *hovered {
-                    this.empty_wave_hover = *hovered;
-                    cx.notify();
-                }
-            }))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .px_6()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .children((0..EMPTY_WAVE_BARS).map(move |i| {
-                        let h = heights[i];
-                        let u = ((h - EMPTY_WAVE_FLAT_H)
-                            / (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H))
-                            .clamp(0.0, 1.0);
-                        let opacity = 0.40 + 0.55 * u;
-                        div()
-                            .w(px(2.5))
-                            .h(px(h))
-                            .rounded_full()
-                            .bg(ACCENT)
-                            .opacity(opacity)
-                    })),
-            )
-    }
-}
-
-/// Bar heights in px. Flat when `amp≈0`; local gaussian bulge at `cx` (0..=1) otherwise.
-fn empty_wave_heights(t_secs: f32, cx: f32, amp: f32) -> [f32; EMPTY_WAVE_BARS] {
-    let mut out = [EMPTY_WAVE_FLAT_H; EMPTY_WAVE_BARS];
-    if amp < 0.004 {
-        return out;
-    }
-    let n = (EMPTY_WAVE_BARS - 1) as f32;
-    let sigma2 = 2.0 * EMPTY_WAVE_SIGMA * EMPTY_WAVE_SIGMA;
-    for i in 0..EMPTY_WAVE_BARS {
-        let x = i as f32 / n;
-        let dx = x - cx;
-        let env = (-(dx * dx) / sigma2).exp();
-        // Gentle shimmer only under the bulge (not whole-line jitter).
-        let ripple = (x * TAU * 5.0 - t_secs * 5.5).sin() * 0.18;
-        let fine = (x * TAU * 11.0 + t_secs * 3.2).sin() * 0.07;
-        let u = (env * (0.88 + ripple + fine)).clamp(0.0, 1.0) * amp;
-        out[i] = EMPTY_WAVE_FLAT_H + u * (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H);
-    }
-    out
-}
-
-/// Lightweight hover tooltip for truncated filenames.
-struct NameTooltip {
-    text: SharedString,
-}
-
-impl Render for NameTooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(TEXT)
-            .text_color(PANEL)
-            .text_xs()
-            .max_w(px(420.))
-            .child(self.text.clone())
-    }
-}
-
-#[derive(Clone, Copy)]
-enum IconKind {
-    Play,
-    Trash,
-    /// Open containing folder for completed SRT.
-    Folder,
-}
-
-/// Compact icon action — SVG only (no emoji). Always visible; disabled = gray.
-///
-/// Note: GPUI SVG needs an explicit `.text_color()` (currentColor); parent
-/// cascade alone often leaves stroke/fill invisible.
-fn icon_btn(
-    kind: IconKind,
-    tip: &'static str,
-    enabled: bool,
-    row_hovered: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let id = SharedString::from(format!("ico-{tip}-{enabled}-{}-{row_hovered}", kind as u8));
-    let tip_s: SharedString = tip.into();
-    let (fg, bg, border) = if !enabled {
-        (MUTED_SOFT, BG, LINE_SOFT)
-    } else if row_hovered {
-        match kind {
-            IconKind::Play => (ACCENT, ACCENT_SOFT, ACCENT_SOFT),
-            IconKind::Trash => (MUTED, PANEL, LINE),
-            IconKind::Folder => (ACCENT, ACCENT_SOFT, ACCENT_SOFT),
-        }
-    } else {
-        match kind {
-            IconKind::Folder => (ACCENT, ACCENT_SOFT, ACCENT_SOFT),
-            IconKind::Play => (MUTED, PANEL, LINE),
-            IconKind::Trash => (MUTED, PANEL, LINE),
-        }
-    };
-    let mut el = div()
-        .id(id)
-        .size(px(32.))
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(bg)
-        .border_1()
-        .border_color(border)
-        .text_color(fg)
-        .opacity(if enabled { 1.0 } else { 0.55 })
-        .child(
-            svg()
-                .size(px(17.))
-                .path(icon_svg_path(kind))
-                .text_color(fg),
-        )
-        .tooltip(move |_, cx| {
-            cx.new(|_| NameTooltip {
-                text: tip_s.clone(),
-            })
-            .into()
-        });
-    if enabled {
-        el = el
-            .cursor_pointer()
-            .hover(|s| match kind {
-                IconKind::Play => s.bg(ACCENT_SOFT).border_color(ACCENT),
-                IconKind::Trash => s.bg(DANGER_SOFT).border_color(DANGER),
-                // Keep the bg light so the ACCENT icon stays readable (unlike a
-                // solid-ACCENT fill, which would eat the icon of the same color).
-                IconKind::Folder => s.bg(ACCENT_SOFT).border_color(ACCENT),
-            })
-            .on_click(on_click);
-    }
-    el
-}
-
-fn icon_svg_path(kind: IconKind) -> &'static str {
-    match kind {
-        IconKind::Play => "icons/play.svg",
-        IconKind::Trash => "icons/trash.svg",
-        IconKind::Folder => "icons/folder.svg",
-    }
-}
-
 // ── Language select (shared list chip + settings field) ──────────────────────
 
 /// Where a language pick should be written.
@@ -3956,242 +3457,4 @@ enum LangMenuLayout {
     Chip,
     /// Stretch to the settings field width.
     FullWidth,
-}
-
-/// Full-window click-outside scrim under open floating menus (`MENU_DISMISS_Z`).
-/// Mounted on the app root so toolbar / list / status bar are all outside-click targets.
-fn popover_dismiss_layer(cx: &mut Context<OneAsrApp>) -> impl IntoElement {
-    deferred(
-        div()
-            .id("menu-dismiss-layer")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .cursor_default()
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.dismiss_menus(cx);
-                }),
-            ),
-    )
-    .with_priority(MENU_DISMISS_Z)
-}
-
-fn popover_menu_shadow() -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: hsla(0., 0., 0., 0.08),
-            offset: point(px(0.), px(2.)),
-            blur_radius: px(4.),
-            spread_radius: px(0.),
-        },
-        BoxShadow {
-            color: hsla(0., 0., 0., 0.14),
-            offset: point(px(0.), px(8.)),
-            blur_radius: px(20.),
-            spread_radius: px(0.),
-        },
-    ]
-}
-
-/// One row inside the language menu.
-fn lang_menu_option(
-    option_id: SharedString,
-    label: &str,
-    active: bool,
-    target: LangSelectTarget,
-    lang_id: &'static str,
-    cx: &mut Context<OneAsrApp>,
-) -> impl IntoElement {
-    div()
-        .id(option_id)
-        .px_2p5()
-        .py_1p5()
-        .cursor_pointer()
-        .bg(if active { ACCENT_SOFT } else { PANEL })
-        .hover(|s| s.bg(if active { ACCENT_SOFT } else { BG }))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.pick_source_language(target.clone(), lang_id, cx);
-        }))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(if active { ACCENT } else { TEXT })
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(label.to_string()),
-                )
-                .when(active, |el| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(ACCENT)
-                            .child("✓"),
-                    )
-                }),
-        )
-}
-
-/// Processing-time breakdown card under the **用时** chip (`MENU_Z`).
-///
-/// Parent must be a `relative` wrapper around the chip so `left_0` aligns to it.
-fn timing_breakdown_popover(
-    menu_id: SharedString,
-    timing: &TaskTiming,
-    progress: f32,
-    on_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let p = progress.clamp(0.0, 1.0);
-    let opacity = p;
-    // Rise from slightly below (dialog-ish, not full modal).
-    let y_offset = px(6.0 * (1.0 - p));
-    let total = timing.total_label();
-    let max_stage = timing.stages.iter().map(|s| s.elapsed_ms).max().unwrap_or(1);
-
-    let rows: Vec<gpui::AnyElement> = timing
-        .stages
-        .iter()
-        .map(|s| {
-            let is_hot = s.elapsed_ms == max_stage && max_stage > 0;
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_3()
-                .w_full()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(if is_hot { TEXT } else { MUTED })
-                        .font_weight(if is_hot {
-                            gpui::FontWeight::MEDIUM
-                        } else {
-                            gpui::FontWeight::NORMAL
-                        })
-                        .child(s.stage.label().to_string()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(if is_hot { ACCENT } else { MUTED })
-                        .whitespace_nowrap()
-                        .child(format_process_ms(s.elapsed_ms)),
-                )
-                .into_any_element()
-        })
-        .collect();
-
-    deferred(
-        div()
-            .id(menu_id)
-            .absolute()
-            // Sibling under the 用时 chip's relative wrapper.
-            .top(px(26.0))
-            .left_0()
-            .w(px(TIMING_POP_W))
-            .opacity(opacity)
-            .mt(y_offset)
-            .rounded_lg()
-            .border_1()
-            .border_color(LINE)
-            .bg(PANEL)
-            .shadow(popover_menu_shadow())
-            .px_3()
-            .py_2p5()
-            .occlude()
-            .on_hover(on_hover)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .mb_1p5()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(TEXT)
-                            .child("处理耗时"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(ACCENT)
-                            .child(total),
-                    ),
-            )
-            .child(
-                div()
-                    .h(px(1.))
-                    .w_full()
-                    .bg(LINE_SOFT)
-                    .mb_1p5(),
-            )
-            .child(div().flex().flex_col().gap_1().children(rows)),
-    )
-    .with_priority(MENU_Z)
-}
-
-/// Deferred floating language panel (`MENU_Z`, occludes dismiss scrim).
-fn floating_lang_menu(
-    menu_id: SharedString,
-    current: &str,
-    option_id_prefix: &str,
-    target: LangSelectTarget,
-    layout: LangMenuLayout,
-    cx: &mut Context<OneAsrApp>,
-) -> impl IntoElement {
-    let opts: Vec<gpui::AnyElement> = SOURCE_LANGUAGES
-        .iter()
-        .map(|lang| {
-            let active = current == lang.id;
-            lang_menu_option(
-                SharedString::from(format!("{option_id_prefix}-{}", lang.id)),
-                lang.label,
-                active,
-                target.clone(),
-                lang.id,
-                cx,
-            )
-            .into_any_element()
-        })
-        .collect();
-
-    let (top, chip_width) = match layout {
-        LangMenuLayout::Chip => (px(30.), Some(px(LANG_MENU_W))),
-        LangMenuLayout::FullWidth => (px(38.), None),
-    };
-
-    deferred(
-        div()
-            .id(menu_id)
-            .absolute()
-            .top(top)
-            .right_0()
-            .when_some(chip_width, |el, w| el.w(w))
-            .when(matches!(layout, LangMenuLayout::FullWidth), |el| {
-                el.left_0()
-            })
-            .max_h(px(LANG_MENU_MAX_H))
-            .overflow_y_scroll()
-            .rounded_lg()
-            .border_1()
-            .border_color(LINE)
-            .bg(PANEL)
-            .shadow(popover_menu_shadow())
-            .py_1()
-            .occlude()
-            .children(opts),
-    )
-    .with_priority(MENU_Z)
 }

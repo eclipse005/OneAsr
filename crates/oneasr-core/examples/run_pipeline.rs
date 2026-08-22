@@ -18,7 +18,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use oneasr_core::{
-    init_native_library_path, process_media_file_with_progress, StageClock, StageUpdate, Settings,
+    init_native_library_path, process_media_file_with_progress, StageClock, StageUpdate,
+    Settings,
 };
 
 fn usage() -> ! {

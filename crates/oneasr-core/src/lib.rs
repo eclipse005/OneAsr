@@ -16,8 +16,8 @@ pub mod vad;
 
 pub use asr::{
     check_aligner_model_dir, check_asr_model_dir, format_process_ms,
-    process_media_file_with_export, process_media_file_with_progress, AsrStage, ProcessExportOptions,
-    StageClock, StageTiming, StageUpdate, TaskTiming,
+    process_media_file_with_export, process_media_file_with_progress, AsrStage,
+    ProcessExportOptions, StageClock, StageTiming, StageUpdate, TaskTiming,
 };
 pub use job::{accept_input_path, next_queue_seq, DurationState, Task, TaskStatus};
 pub use lang::{

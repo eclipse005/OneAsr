@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use super::catalog::{model_definition, ModelDefinition, ModelId};
@@ -180,7 +180,7 @@ pub fn is_model_ready(id: ModelId) -> bool {
     let def = model_definition(id);
     def.download_files.iter().all(|file| {
         let path = def.model_dir.join(&file.file_name);
-        file_meets_catalog_size(&path, file.expected_size)
+        file_meets_ready_threshold(&path, file.expected_size)
     })
 }
 
@@ -229,12 +229,14 @@ fn cuda_runtime_search_dirs() -> Vec<PathBuf> {
 fn cuda_runtime_ready_in(dir: &Path) -> bool {
     let def = model_definition(ModelId::CudaRuntime);
     def.download_files.iter().all(|file| {
-        file_meets_catalog_size(&dir.join(&file.file_name), file.expected_size)
+        file_meets_ready_threshold(&dir.join(&file.file_name), file.expected_size)
     })
 }
 
-/// File exists and is large enough vs catalog expected size (not empty/truncated).
-fn file_meets_catalog_size(path: &Path, expected_size: u64) -> bool {
+/// File exists and meets the size watermark (>= 50% of expected, min 1 byte).
+/// Returns `true` only when the file is present and non-empty; `false` for missing
+/// files, zero-byte files, or truncated downloads.
+pub fn file_meets_ready_threshold(path: &Path, expected_size: u64) -> bool {
     match std::fs::metadata(path) {
         Ok(meta) if meta.is_file() => {
             let min = (expected_size / 2).max(1);
@@ -281,7 +283,7 @@ pub fn download_model(
 
     emit_downloading(downloaded_bytes, total_bytes, 0, "starting", &mut on_progress);
 
-    let client = match build_client() {
+    let client = match download_client() {
         Ok(c) => c,
         Err(e) => {
             return DownloadOutcome::Failed {
@@ -432,7 +434,7 @@ pub fn download_model(
         .download_files
         .iter()
         .filter(|f| {
-            !file_meets_catalog_size(&definition.model_dir.join(&f.file_name), f.expected_size)
+            !file_meets_ready_threshold(&definition.model_dir.join(&f.file_name), f.expected_size)
         })
         .map(|f| f.file_name.clone())
         .collect();
@@ -484,12 +486,20 @@ fn initial_bytes(definition: &ModelDefinition) -> (u64, u64) {
     (downloaded, total)
 }
 
-fn build_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) OneAsr/0.1")
-        .build()
-        .map_err(|e| e.to_string())
+/// Process-wide reqwest client (connection reuse across sequential downloads).
+/// Build failure is sticky for the process and returned as [`DownloadOutcome::Failed`].
+fn download_client() -> Result<&'static reqwest::blocking::Client, String> {
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+    match CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) OneAsr/0.1")
+            .build()
+            .map_err(|e| e.to_string())
+    }) {
+        Ok(client) => Ok(client),
+        Err(e) => Err(e.clone()),
+    }
 }
 
 fn start_modelscope_download(
@@ -570,21 +580,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("x.dll");
 
-        assert!(!file_meets_catalog_size(&path, 1000));
+        assert!(!file_meets_ready_threshold(&path, 1000));
 
         std::fs::File::create(&path).unwrap();
-        assert!(!file_meets_catalog_size(&path, 1000));
+        assert!(!file_meets_ready_threshold(&path, 1000));
 
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(&[0u8; 100]).unwrap();
         drop(f);
         // 100 < 50% of 1000
-        assert!(!file_meets_catalog_size(&path, 1000));
+        assert!(!file_meets_ready_threshold(&path, 1000));
 
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(&[0u8; 500]).unwrap();
         drop(f);
-        assert!(file_meets_catalog_size(&path, 1000));
+        assert!(file_meets_ready_threshold(&path, 1000));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

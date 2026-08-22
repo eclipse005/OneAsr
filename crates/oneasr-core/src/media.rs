@@ -17,11 +17,14 @@
 //! s16le WAV**. Once converted, further work (duration, slice) stays in-process
 //! via `hound` — no ffmpeg round-trips for PCM.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
+
+use std::time::SystemTime;
 
 use thiserror::Error;
 
@@ -266,22 +269,28 @@ pub fn slice_wav(input: &Path, start: f32, end: f32, out_wav: &Path) -> Result<P
         .clamp(f64::from(start_i), f64::from(total)) as u32;
     let n = end_i.saturating_sub(start_i);
 
-    reader
-        .seek(start_i)
-        .map_err(|e| MediaError::Wav(format!("seek: {e}")))?;
-
     let mut writer = hound::WavWriter::create(out_wav, spec)
         .map_err(|e| MediaError::Wav(format!("create {}: {e}", out_wav.display())))?;
 
-    // Mono i16: one sample per frame.
-    let mut samples = reader.samples::<i16>();
-    for _ in 0..n {
-        let s = samples
-            .next()
-            .ok_or_else(|| MediaError::Wav("unexpected end of wav while slicing".into()))?
-            .map_err(|e| MediaError::Wav(format!("read sample: {e}")))?;
+    if n == 0 {
+        writer.finalize().map_err(|e| MediaError::Wav(format!("finalize: {e}")))?;
+        return Ok(out_wav.to_path_buf());
+    }
+
+    // hound::seek is in PCM frames from the data chunk, not file bytes.
+    reader
+        .seek(start_i)
+        .map_err(|e| MediaError::Wav(format!("seek: {e}")))?;
+    let byte_len = (n as usize).saturating_mul(2);
+    let mut buf = vec![0u8; byte_len];
+    reader
+        .into_inner()
+        .read_exact(&mut buf)
+        .map_err(|e| MediaError::Wav(format!("read samples: {e}")))?;
+    for chunk in buf.chunks_exact(2) {
+        let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
         writer
-            .write_sample(s)
+            .write_sample(sample)
             .map_err(|e| MediaError::Wav(format!("write sample: {e}")))?;
     }
     writer
@@ -333,6 +342,24 @@ pub fn probe_duration_async(path: PathBuf, on_done: impl FnOnce(Option<f64>) + S
     let _ = probe_sender().send((path, Box::new(on_done)));
 }
 
+/// Unique suffix for atomic-write temp files (PID + timestamp + random),
+/// preventing collisions across rapid restarts that reuse the same PID on Windows.
+fn atomic_tmp_suffix() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(1);
+    let ts = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u32)
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{:08x}.{:08x}.{:06x}",
+        std::process::id(),
+        ts.wrapping_add(seq),
+        seq
+    )
+}
+
 /// Write `data` to `path` via temp file + rename (no torn product files on crash).
 pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -341,7 +368,7 @@ pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> 
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "out".into());
-    let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let tmp = parent.join(format!(".{file_name}.{}.tmp", atomic_tmp_suffix()));
     std::fs::write(&tmp, data.as_ref())?;
     // Windows: rename fails if destination exists.
     if path.exists() {
@@ -394,11 +421,11 @@ mod tests {
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        // 1.0 s of silence
+        // 1.0 s ramp so the slice region is identifiable (not just duration).
         {
             let mut w = hound::WavWriter::create(&src, spec).unwrap();
-            for _ in 0..TARGET_SAMPLE_RATE {
-                w.write_sample(0i16).unwrap();
+            for i in 0..TARGET_SAMPLE_RATE {
+                w.write_sample(i as i16).unwrap();
             }
             w.finalize().unwrap();
         }
@@ -409,6 +436,18 @@ mod tests {
         assert!(is_target_pcm_wav(&out));
         let d = wav_duration_sec(&out).unwrap();
         assert!((d - 0.5).abs() < 0.02, "got {d}");
+
+        let samples: Vec<i16> = hound::WavReader::open(&out)
+            .unwrap()
+            .samples::<i16>()
+            .map(|s| s.unwrap())
+            .collect();
+        let start_i = ((0.25f64) * f64::from(TARGET_SAMPLE_RATE)).round() as i16;
+        assert_eq!(samples.first().copied(), Some(start_i));
+        assert_eq!(
+            samples.last().copied(),
+            Some(start_i + (samples.len() as i16) - 1)
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

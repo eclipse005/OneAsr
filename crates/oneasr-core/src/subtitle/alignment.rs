@@ -168,7 +168,7 @@ fn eq_ignore_case_chars(a: &[char], b: &[char]) -> bool {
     }
     a.iter()
         .zip(b.iter())
-        .all(|(x, y)| x.to_lowercase().to_string() == y.to_lowercase().to_string())
+        .all(|(x, y)| x.to_lowercase().eq(y.to_lowercase()))
 }
 
 #[cfg(test)]
@@ -280,5 +280,12 @@ mod tests {
         assert_eq!(out.len(), words.len());
         assert_eq!(out[0].word, "Hello,");
         assert_eq!(out[1].word, "world!");
+    }
+
+    #[test]
+    fn ignore_case_does_not_truncate_case_folding() {
+        // Turkish İ lowercases to i + combining dot; ASCII I lowercases to i.
+        assert!(!eq_ignore_case_chars(&['I'], &['İ']));
+        assert!(eq_ignore_case_chars(&['A'], &['a']));
     }
 }

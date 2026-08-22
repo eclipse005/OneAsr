@@ -13,18 +13,24 @@
 //! `{settings.output_dir}/{stem}.srt` (default `{app}/output`, atomic write).
 //! On success the scratch dir is removed.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
+
+use serde::Deserialize;
 
 use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 use qwen_forced_aligner_rs::{
     AlignRequest, AudioInput, DeviceRequest, ModelOptions, Qwen3ForcedAligner, TextInput,
 };
+use serde_json;
 use thiserror::Error;
 
 use crate::lang::{to_lang_key, to_qwen_language_label};
 use crate::media::{
-    convert_to_16k_mono_wav, slice_wav, wav_duration_sec, write_atomic,
+    convert_to_16k_mono_wav, slice_wav, wav_duration_sec, write_atomic, MediaError,
 };
 use crate::paths::{media_stem, output_srt_path};
 use crate::sentence_boundary::{
@@ -38,8 +44,47 @@ use crate::vad;
 
 #[derive(Debug, Error)]
 pub enum AsrError {
+    #[error("I/O 错误: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("音频处理错误: {0}")]
+    Media(#[from] MediaError),
+    #[error("路径非 UTF-8")]
+    PathNotUtf8,
+    #[error("ASR 未产生任何有效文本（{0} 段全部为空）")]
+    EmptyTranscribe(usize),
+    #[error("对齐后词列表为空")]
+    EmptyAlignment,
+    #[error("断句后字幕为空")]
+    EmptySentenceBoundary,
+    #[error("加载 ASR 失败: {0}")]
+    LoadAsr(String),
+    #[error("加载 Aligner 失败: {0}")]
+    LoadAligner(String),
+    #[error("转写失败 chunk {0}: {1}")]
+    TranscribeChunk(usize, String),
+    #[error("对齐失败 chunk {0}（{1}）: {2}")]
+    AlignChunk(usize, String, String),
+    #[error("{role} 模型文件不全（缺少 {missing}）: {dir}")]
+    ModelIncomplete {
+        role: &'static str,
+        missing: String,
+        dir: String,
+    },
     #[error("{0}")]
-    Msg(String),
+    Other(String),
+}
+
+impl AsrError {
+    /// Wrap an opaque error with context about which pipeline stage failed.
+    pub fn with_stage(self, stage: &str) -> Self {
+        match self {
+            Self::Io(e) => Self::Other(format!("[{stage}] I/O 错误: {e}")),
+            Self::Media(e) => Self::Other(format!("[{stage}] {e}")),
+            Self::LoadAsr(e) => Self::LoadAsr(format!("[{stage}] {e}")),
+            Self::LoadAligner(e) => Self::LoadAligner(format!("[{stage}] {e}")),
+            _ => Self::Other(format!("[{stage}] {self}")),
+        }
+    }
 }
 
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
@@ -241,60 +286,157 @@ fn push_or_merge_stage(stages: &mut Vec<StageTiming>, stage: AsrStage, elapsed_m
     stages.push(StageTiming { stage, elapsed_ms });
 }
 
+// Ready-dir cache: sequential jobs hit the same model path; a poisoned lock
+// is a miss (re-stat) rather than a worker panic. Failures are not cached —
+// a download may complete between probes.
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ModelRole {
+    Asr,
+    Aligner,
+}
+
+static MODEL_DIR_READY: OnceLock<Mutex<HashSet<(ModelRole, PathBuf)>>> = OnceLock::new();
+
+fn model_dir_ready_cache() -> &'static Mutex<HashSet<(ModelRole, PathBuf)>> {
+    MODEL_DIR_READY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn cached_ready_hit(role: ModelRole, canonical: &Path) -> bool {
+    match model_dir_ready_cache().lock() {
+        Ok(guard) => guard.contains(&(role, canonical.to_path_buf())),
+        Err(_) => false,
+    }
+}
+
+fn cached_ready_store(role: ModelRole, canonical: PathBuf) {
+    if let Ok(mut guard) = model_dir_ready_cache().lock() {
+        guard.insert((role, canonical));
+    }
+}
+
+/// Check ASR model directory with success-path caching.
 pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
+    check_model_dir(ModelRole::Asr, model_dir, &["config.json", "tokenizer.json"])
+}
+
+/// Check Aligner model directory with success-path caching.
+pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
+    check_model_dir(ModelRole::Aligner, model_dir, &["config.json"])
+}
+
+fn check_model_dir(
+    role: ModelRole,
+    model_dir: &Path,
+    required: &[&str],
+) -> Result<(), AsrError> {
+    let role_label = match role {
+        ModelRole::Asr => "ASR",
+        ModelRole::Aligner => "Aligner",
+    };
+    if let Ok(canonical) = std::fs::canonicalize(model_dir) {
+        if cached_ready_hit(role, &canonical) {
+            return Ok(());
+        }
+        check_model_dir_inner(role_label, model_dir, required)?;
+        cached_ready_store(role, canonical);
+        return Ok(());
+    }
+    check_model_dir_inner(role_label, model_dir, required)
+}
+
+fn check_model_dir_inner(
+    role: &'static str,
+    model_dir: &Path,
+    required: &[&str],
+) -> Result<(), AsrError> {
     if !model_dir.is_dir() {
-        return Err(AsrError::Msg(format!(
-            "ASR 模型目录不存在: {}",
+        return Err(AsrError::Other(format!(
+            "{role} 模型目录不存在: {}",
             model_dir.display()
         )));
     }
     let mut missing = Vec::new();
-    for name in ["config.json", "tokenizer.json"] {
+    for name in required {
         if !model_dir.join(name).is_file() {
-            missing.push(name.to_string());
+            missing.push((*name).to_string());
         }
     }
+    match weight_filenames(model_dir) {
+        Ok(files) => {
+            for name in files {
+                check_weight_file(model_dir, &name, &mut missing);
+            }
+        }
+        Err(item) => missing.push(item),
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(AsrError::ModelIncomplete {
+            role,
+            missing: join_missing(&missing),
+            dir: model_dir.display().to_string(),
+        })
+    }
+}
+
+/// Hugging Face `weight_map` is tensor-name → shard filename.
+#[derive(Deserialize)]
+struct SafetensorsIndex {
+    weight_map: HashMap<String, String>,
+}
+
+/// Filenames that must exist as weight payloads (unique shard names, or the
+/// single `model.safetensors`).
+fn weight_filenames(model_dir: &Path) -> Result<Vec<String>, String> {
     let index = model_dir.join("model.safetensors.index.json");
     let single = model_dir.join("model.safetensors");
     if index.is_file() {
-        // Shards checked loosely — load will fail with a clear error if incomplete.
-    } else if !single.is_file() {
-        missing.push("model.safetensors 或 model.safetensors.index.json".into());
+        shard_names_from_index(&index)
+    } else if single.is_file() {
+        Ok(vec!["model.safetensors".into()])
+    } else {
+        Err("model.safetensors 或 model.safetensors.index.json".into())
     }
-    if !missing.is_empty() {
-        return Err(AsrError::Msg(format!(
-            "ASR 模型文件不全（缺少 {}）: {}",
-            missing.join(", "),
-            model_dir.display()
-        )));
-    }
-    Ok(())
 }
 
-pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
-    if !model_dir.is_dir() {
-        return Err(AsrError::Msg(format!(
-            "Aligner 模型目录不存在: {}",
-            model_dir.display()
-        )));
+fn shard_names_from_index(index: &Path) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(index)
+        .map_err(|e| format!("model.safetensors.index.json ({e})"))?;
+    let parsed: SafetensorsIndex = serde_json::from_str(&text)
+        .map_err(|e| format!("model.safetensors.index.json ({e})"))?;
+    let mut names: Vec<String> = parsed.weight_map.into_values().collect();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        Err("model.safetensors.index.json (weight_map 为空)".into())
+    } else {
+        Ok(names)
     }
-    let mut missing = Vec::new();
-    if !model_dir.join("config.json").is_file() {
-        missing.push("config.json");
+}
+
+/// Truncated / placeholder downloads are typically a few hundred bytes.
+const MIN_WEIGHT_FILE_BYTES: u64 = 1024;
+
+fn check_weight_file(dir: &Path, name: &str, missing: &mut Vec<String>) {
+    let path = dir.join(name);
+    match std::fs::metadata(&path) {
+        Ok(meta) if meta.is_file() && meta.len() >= MIN_WEIGHT_FILE_BYTES => {}
+        Ok(meta) if meta.is_file() => {
+            missing.push(format!("{name} (过小: {} 字节)", meta.len()));
+        }
+        _ => missing.push(format!("{name} (不存在)")),
     }
-    if !model_dir.join("model.safetensors").is_file()
-        && !model_dir.join("model.safetensors.index.json").is_file()
-    {
-        missing.push("model.safetensors");
+}
+
+fn join_missing(names: &[String]) -> String {
+    const SHOW: usize = 12;
+    if names.len() <= SHOW {
+        names.join(", ")
+    } else {
+        format!("{}… (共 {} 项)", names[..SHOW].join(", "), names.len())
     }
-    if !missing.is_empty() {
-        return Err(AsrError::Msg(format!(
-            "Aligner 模型文件不全（缺少 {}）: {}",
-            missing.join(", "),
-            model_dir.display()
-        )));
-    }
-    Ok(())
 }
 
 /// Resolved compute target for both ASR and Aligner (one policy).
@@ -387,20 +529,20 @@ fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
             #[cfg(feature = "cuda")]
             {
                 if !crate::model::is_cuda_runtime_ready() {
-                    return Err(AsrError::Msg(
+                    return Err(AsrError::Other(
                         "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
                     ));
                 }
                 match probe_cuda_device() {
                     Ok(p) => {
                         if let Some(reason) = cuda_probe_reject_reason(p) {
-                            return Err(AsrError::Msg(format!(
+                            return Err(AsrError::Other(format!(
                                 "{reason}，请在设置中改用 CPU 或自动"
                             )));
                         }
                         Ok(ComputeBackend::Cuda)
                     }
-                    Err(e) => Err(AsrError::Msg(format!(
+                    Err(e) => Err(AsrError::Other(format!(
                         "{e}。GPU 加速需要 NVIDIA 显卡（显存 4GB 起）并更新驱动；\
                          或在设置中改用 CPU"
                     ))),
@@ -408,7 +550,7 @@ fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
             }
             #[cfg(not(feature = "cuda"))]
             {
-                Err(AsrError::Msg(
+                Err(AsrError::Other(
                     "此构建未启用 CUDA，请使用 backend=cpu".into(),
                 ))
             }
@@ -509,12 +651,12 @@ pub struct ProcessExportOptions {
 }
 
 /// Full pipeline: convert → VAD plan → ASR all → unload → align all → SRT.
-pub fn process_media_file_with_progress(
+pub fn process_media_file_with_progress<'a>(
     input: &Path,
     media_name: &str,
     settings: &Settings,
     app_root: &Path,
-    on_stage: impl FnMut(StageUpdate),
+    on_stage: impl FnMut(StageUpdate) + 'a,
 ) -> Result<PathBuf, AsrError> {
     process_media_file_with_export(
         input,
@@ -527,362 +669,466 @@ pub fn process_media_file_with_progress(
 }
 
 /// Same as [`process_media_file_with_progress`] plus optional word-timestamp dump.
-pub fn process_media_file_with_export(
+pub fn process_media_file_with_export<'a>(
     input: &Path,
     media_name: &str,
     settings: &Settings,
     app_root: &Path,
-    mut on_stage: impl FnMut(StageUpdate),
+    on_stage: impl FnMut(StageUpdate) + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
-    let stem = media_stem(input);
-    let srt_path = output_srt_path(&settings.resolved_output_dir(), &stem);
+    Pipeline::new(settings, on_stage).run(input, media_name, app_root, export)
+}
 
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let work_dir = app_root.join("runs").join(format!("{stem}_{stamp}"));
-    std::fs::create_dir_all(&work_dir).map_err(|e| AsrError::Msg(e.to_string()))?;
-    if let Some(parent) = srt_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AsrError::Msg(e.to_string()))?;
+// ── Intermediate stage results ──────────────────────────────────────────
+
+/// Converted 16 kHz mono PCM WAV + the scratch dir that owns it.
+struct ConvertedAudio {
+    work_dir: PathBuf,
+    wav_path: PathBuf,
+    duration: f32,
+    chunk_sec: f32,
+}
+
+impl ConvertedAudio {
+    fn chunk_tmp(&self) -> PathBuf {
+        self.work_dir.join("chunk_tmp.wav")
     }
 
-    // 1. Convert → single master PCM under work_dir
-    on_stage(StageUpdate::new(AsrStage::Converting));
-    let wav = work_dir.join("input_16k.wav");
-    convert_to_16k_mono_wav(input, &wav).map_err(|e| AsrError::Msg(e.to_string()))?;
+    fn remove_scratch(self) {
+        let _ = std::fs::remove_dir_all(&self.work_dir);
+    }
+}
 
-    let duration = wav_duration_sec(&wav).unwrap_or(0.0) as f32;
-    let chunk_sec = settings.chunk_target_seconds_clamped() as f32;
+/// VAD segmentation result + chunk plan.
+struct VadPlan {
+    chunks: Vec<vad::Chunk>,
+    speech_segments: Vec<(f64, f64)>,
+    multi_chunk: bool,
+}
 
-    // 2. VAD + chunk plan (own stage so convert timing stays pure)
-    on_stage(StageUpdate::new(AsrStage::Planning));
-    let (chunks, vad_speech) = if duration > chunk_sec {
-        let speech = vad::run_vad(&wav)?;
-        let silences = vad::speech_to_silences(&speech, duration, MIN_SILENCE_FALLBACK);
-        let planned = vad::plan_chunks(duration, &silences, chunk_sec);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[vad] duration={duration:.1}s speech={} silence_gaps={} chunks={}",
-            speech.len(),
-            silences.len(),
-            planned.len(),
-        );
-        let vad_pairs: Vec<(f64, f64)> = speech
-            .iter()
-            .map(|&(s, e)| (s as f64, e as f64))
-            .collect();
-        (planned, vad_pairs)
-    } else {
-        (
-            vec![vad::Chunk {
-                start: 0.0,
-                end: duration,
-            }],
-            vec![(0.0, duration as f64)],
-        )
-    };
+/// Completed ASR transcription result.
+struct AsrOutput {
+    transcripts: Vec<ChunkTranscript>,
+}
 
-    let multi_chunk = chunks.len() > 1;
-    let force_lang = to_qwen_language_label(&settings.language);
-    let source_lang_key = to_lang_key(&settings.language);
-    let total_chunks = chunks.len().max(1);
+/// Completed ForcedAligner result.
+struct AlignOutput {
+    words: Vec<WordToken>,
+}
 
-    if pipeline_trace() {
-        eprintln!(
-            "[pipeline] duration={duration:.1}s chunk_target={chunk_sec} chunks={total_chunks} lang={force_lang}"
-        );
-        for (i, c) in chunks.iter().enumerate() {
-            eprintln!(
-                "[pipeline] plan#{i} {:.3}-{:.3} ({:.1}s)",
-                c.start,
-                c.end,
-                c.end - c.start
-            );
+/// Convert → VAD → ASR → align → SRT. ASR is dropped before the aligner loads.
+struct Pipeline<'a> {
+    settings: &'a Settings,
+    on_stage: RefCell<Box<dyn FnMut(StageUpdate) + 'a>>,
+}
+
+impl<'a> Pipeline<'a> {
+    fn new(settings: &'a Settings, on_stage: impl FnMut(StageUpdate) + 'a) -> Self {
+        Self {
+            settings,
+            on_stage: RefCell::new(Box::new(on_stage)),
         }
     }
 
-    // Scratch path for the one active slice (deleted after each use when multi).
-    let chunk_tmp = work_dir.join("chunk_tmp.wav");
-
-    // 3. Load ASR once → all chunks → drop
-    on_stage(StageUpdate::new(AsrStage::LoadingAsr));
-    check_asr_model_dir(&settings.asr_model_dir)?;
-    let mut compute = resolve_compute_backend(&settings.backend)?;
-    {
-        let backend_label = match compute {
-            ComputeBackend::Cpu => "cpu",
-            ComputeBackend::Cuda => "cuda",
-        };
-        trace_log(format!(
-            "backend setting={} resolved={} cuda_dlls={}",
-            settings.backend,
-            backend_label,
-            crate::model::is_cuda_runtime_ready(),
-        ));
-        #[cfg(debug_assertions)]
-        if !pipeline_trace() {
-            eprintln!(
-                "[backend] setting={} resolved={} cuda_dlls={}",
-                settings.backend,
-                backend_label,
-                crate::model::is_cuda_runtime_ready(),
-            );
-        }
+    fn emit(&self, update: StageUpdate) {
+        (self.on_stage.borrow_mut())(update);
     }
-    // Auto mode only: a CUDA load that still fails (OOM, driver hiccup, …)
-    // degrades to CPU instead of killing the job. Forced `cuda` gets the
-    // guided error from `cuda_load_failure_msg` instead.
-    #[cfg(feature = "cuda")]
-    let asr = match AsrInference::load(&settings.asr_model_dir, compute.to_asr()) {
-        Ok(asr) => asr,
-        Err(e) if compute == ComputeBackend::Cuda && !is_forced_cuda(&settings.backend) => {
-            trace_log(format!("cuda load failed, falling back to cpu: {e:#}"));
-            compute = ComputeBackend::Cpu;
-            AsrInference::load(&settings.asr_model_dir, ComputeBackend::Cpu.to_asr())
-                .map_err(|e2| AsrError::Msg(format!("加载 ASR 失败: {e2:#}")))?
+
+    fn run(
+        self,
+        input: &Path,
+        media_name: &str,
+        app_root: &Path,
+        export: ProcessExportOptions,
+    ) -> Result<PathBuf, AsrError> {
+        let conv = self.stage_convert(input, app_root)?;
+        let srt_path = (|| {
+            let vad = self.stage_vad_plan(&conv)?;
+            let (asr, compute) = self.stage_transcribe_all(&conv, &vad)?;
+            let align = self.stage_align_all(&conv, &vad, &asr, compute)?;
+            self.stage_export(media_name, vad.speech_segments, align, export)
+        })();
+        if srt_path.is_ok() {
+            conv.remove_scratch();
         }
-        Err(e) if compute == ComputeBackend::Cuda => {
-            return Err(AsrError::Msg(cuda_load_failure_msg(&e)));
-        }
-        Err(e) => return Err(AsrError::Msg(format!("加载 ASR 失败: {e:#}"))),
-    };
-    #[cfg(not(feature = "cuda"))]
-    let asr = AsrInference::load(&settings.asr_model_dir, compute.to_asr())
-        .map_err(|e| AsrError::Msg(format!("加载 ASR 失败: {e:#}")))?;
+        srt_path
+    }
 
-    let mut transcripts: Vec<ChunkTranscript> = Vec::new();
-    #[cfg(debug_assertions)]
-    let mut empty_chunks: Vec<usize> = Vec::new();
+    fn stage_convert(&self, input: &Path, app_root: &Path) -> Result<ConvertedAudio, AsrError> {
+        self.emit(StageUpdate::new(AsrStage::Converting));
+        let stem = media_stem(input);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let work_dir = app_root.join("runs").join(format!("{stem}_{stamp}"));
+        std::fs::create_dir_all(&work_dir)?;
 
-    for (i, chunk) in chunks.iter().enumerate() {
-        on_stage(StageUpdate::with_chunk(
-            AsrStage::Transcribing,
-            i + 1,
-            total_chunks,
-        ));
+        let wav_path = work_dir.join("input_16k.wav");
+        convert_to_16k_mono_wav(input, &wav_path)?;
 
-        let chunk_path = if multi_chunk {
-            slice_wav(&wav, chunk.start, chunk.end, &chunk_tmp)
-                .map_err(|e| AsrError::Msg(e.to_string()))?;
-            chunk_tmp.as_path()
-        } else {
-            wav.as_path()
-        };
+        let duration = wav_duration_sec(&wav_path).unwrap_or(0.0) as f32;
+        let chunk_sec = self.settings.chunk_target_seconds_clamped() as f32;
 
-        let opts = TranscribeOptions::default()
-            .with_max_new_tokens(settings.max_new_tokens)
-            .with_language(force_lang.clone());
+        Ok(ConvertedAudio {
+            work_dir,
+            wav_path,
+            duration,
+            chunk_sec,
+        })
+    }
 
-        let path_str = chunk_path
-            .to_str()
-            .ok_or_else(|| AsrError::Msg("路径非 UTF-8".into()))?;
-        let report = asr
-            .transcribe(path_str, opts)
-            .map_err(|e| AsrError::Msg(format!("转写失败 chunk {}: {e:#}", i + 1)))?;
-        let text = clean_asr_text(&report.text);
+    // ── Stage 2: VAD speech segmentation + chunk plan ───────────────────
 
-        if multi_chunk {
-            let _ = std::fs::remove_file(&chunk_tmp);
-        }
+    /// Run FireRedVAD and derive silence-cut chunk boundaries.
+    fn stage_vad_plan(&self, conv: &ConvertedAudio) -> Result<VadPlan, AsrError> {
+        self.emit(StageUpdate::new(AsrStage::Planning));
 
-        if text.is_empty() {
+        let (chunks, speech_segments) = if conv.duration > conv.chunk_sec {
+            let speech = vad::run_vad(&conv.wav_path)?;
+            let silences =
+                vad::speech_to_silences(&speech, conv.duration, MIN_SILENCE_FALLBACK);
+            let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
             #[cfg(debug_assertions)]
-            empty_chunks.push(i);
-            continue;
+            eprintln!(
+                "[vad] duration={:.1}s speech={} silence_gaps={} chunks={}",
+                conv.duration,
+                speech.len(),
+                silences.len(),
+                planned.len(),
+            );
+            let pairs: Vec<(f64, f64)> = speech
+                .iter()
+                .map(|&(s, e)| (s as f64, e as f64))
+                .collect();
+            (planned, pairs)
+        } else {
+            (
+                vec![vad::Chunk {
+                    start: 0.0,
+                    end: conv.duration,
+                }],
+                vec![(0.0, conv.duration as f64)],
+            )
+        };
+
+        let multi_chunk = chunks.len() > 1;
+
+        if pipeline_trace() {
+            eprintln!(
+                "[pipeline] duration={:.1}s chunk_target={} chunks={}",
+                conv.duration, conv.chunk_sec, chunks.len(),
+            );
+            for (i, c) in chunks.iter().enumerate() {
+                eprintln!(
+                    "[pipeline] plan#{i} {:.3}-{:.3} ({:.1}s)",
+                    c.start, c.end, c.end - c.start
+                );
+            }
         }
 
-        trace_log(format!(
-            "asr#{} {:.1}s chars={}",
-            i + 1,
-            chunk.end - chunk.start,
-            text.chars().count()
-        ));
-        transcripts.push(ChunkTranscript {
-            start_sec: chunk.start as f64,
-            end_sec: chunk.end as f64,
-            text,
-            language: force_lang.clone(),
-        });
-    }
-    drop(asr);
-    trace_log("asr dropped");
-
-    if transcripts.is_empty() {
-        return Err(AsrError::Msg(format!(
-            "ASR 未产生任何有效文本（{total_chunks} 段全部为空）"
-        )));
-    }
-    #[cfg(debug_assertions)]
-    if !empty_chunks.is_empty() {
-        eprintln!(
-            "[asr] skipped empty chunks: {}/{} indices={empty_chunks:?}",
-            empty_chunks.len(),
-            total_chunks
-        );
+        Ok(VadPlan {
+            chunks,
+            speech_segments,
+            multi_chunk,
+        })
     }
 
-    // 4. Load Aligner once → all chunks → drop (re-slice from master as needed)
-    on_stage(StageUpdate::new(AsrStage::LoadingAligner));
-    check_aligner_model_dir(&settings.aligner_model_dir)?;
-    let aligner = Qwen3ForcedAligner::load(
-        &settings.aligner_model_dir,
-        ModelOptions {
-            device: compute.to_align_device(),
-        },
-    )
-    .map_err(|e| AsrError::Msg(format!("加载 Aligner 失败: {e:#}")))?;
+    // ── Stage 3: load ASR + transcribe all chunks ───────────────────────
 
-    let mut all_words: Vec<WordToken> = Vec::new();
-    let align_total = transcripts.len();
-    for (i, seg) in transcripts.iter().enumerate() {
-        on_stage(StageUpdate::with_chunk(
-            AsrStage::Aligning,
-            i + 1,
-            align_total,
-        ));
+    fn stage_transcribe_all(
+        &self,
+        conv: &ConvertedAudio,
+        vad: &VadPlan,
+    ) -> Result<(AsrOutput, ComputeBackend), AsrError> {
+        self.emit(StageUpdate::new(AsrStage::LoadingAsr));
+        check_asr_model_dir(&self.settings.asr_model_dir)?;
+        #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
+        let mut compute = resolve_compute_backend(&self.settings.backend)?;
 
-        let seg_dur = (seg.end_sec - seg.start_sec) as f32;
-        let seg_chars = seg.text.chars().count();
-        trace_log(format!(
-            "align#{} begin {:.3}-{:.3} ({:.1}s) chars={}",
-            i + 1,
-            seg.start_sec,
-            seg.end_sec,
-            seg_dur,
-            seg_chars
-        ));
-
-        let mut segment_words = Vec::new();
-        if seg_dur < MIN_ALIGN_SEC || !has_alignable_word(&seg.text) {
-            // Degenerate chunk (pure punctuation / too short for mel frames):
-            // no model call — pin the text to the whole chunk span instead.
+        {
+            let label = match compute {
+                ComputeBackend::Cpu => "cpu",
+                ComputeBackend::Cuda => "cuda",
+            };
             trace_log(format!(
-                "align#{} degenerate chunk → whole-span fallback",
-                i + 1
+                "backend setting={} resolved={} cuda_dlls={}",
+                self.settings.backend,
+                label,
+                crate::model::is_cuda_runtime_ready(),
             ));
-            let word = seg.text.trim();
-            if !word.is_empty() {
-                segment_words.push(WordToken {
-                    start: round_millis(seg.start_sec),
-                    end: round_millis(seg.end_sec.max(seg.start_sec)),
-                    word: word.to_string(),
-                });
+            #[cfg(debug_assertions)]
+            if !pipeline_trace() {
+                eprintln!(
+                    "[backend] setting={} resolved={} cuda_dlls={}",
+                    self.settings.backend,
+                    label,
+                    crate::model::is_cuda_runtime_ready(),
+                );
             }
-        } else {
-            let chunk_path = if multi_chunk {
-                slice_wav(
-                    &wav,
-                    seg.start_sec as f32,
-                    seg.end_sec as f32,
-                    &chunk_tmp,
-                )
-                .map_err(|e| AsrError::Msg(e.to_string()))?;
+        }
+
+        let asr_model_dir = self.settings.asr_model_dir.clone();
+
+        #[cfg(feature = "cuda")]
+        let asr = match AsrInference::load(&asr_model_dir, compute.to_asr()) {
+            Ok(m) => m,
+            Err(e) if compute == ComputeBackend::Cuda && !is_forced_cuda(&self.settings.backend) => {
+                trace_log(format!("cuda load failed, falling back to cpu: {e:#}"));
+                compute = ComputeBackend::Cpu;
+                AsrInference::load(&asr_model_dir, ComputeBackend::Cpu.to_asr())
+                    .map_err(|e2| AsrError::LoadAsr(format!("{e2:#}")))?
+            }
+            Err(e) if compute == ComputeBackend::Cuda => {
+                return Err(AsrError::LoadAsr(cuda_load_failure_msg(&e)));
+            }
+            Err(e) => return Err(AsrError::LoadAsr(format!("{e:#}"))),
+        };
+        #[cfg(not(feature = "cuda"))]
+        let asr = AsrInference::load(&asr_model_dir, compute.to_asr())
+            .map_err(|e| AsrError::LoadAsr(format!("{e:#}")))?;
+        let force_lang = to_qwen_language_label(&self.settings.language);
+        let chunk_tmp = conv.chunk_tmp();
+
+        let mut transcripts = Vec::new();
+        #[cfg(debug_assertions)]
+        let mut empty_chunks = Vec::new();
+
+        for (i, chunk) in vad.chunks.iter().enumerate() {
+            self.emit(StageUpdate::with_chunk(
+                AsrStage::Transcribing,
+                i + 1,
+                vad.chunks.len().max(1),
+            ));
+
+            let chunk_path = if vad.multi_chunk {
+                slice_wav(&conv.wav_path, chunk.start, chunk.end, &chunk_tmp)?;
                 chunk_tmp.as_path()
             } else {
-                wav.as_path()
+                conv.wav_path.as_path()
             };
 
-            let result = aligner
-                .align(AlignRequest::new(
-                    AudioInput::Path(chunk_path.to_path_buf()),
-                    TextInput::Text(seg.text.clone()),
-                    seg.language.clone(),
-                ))
-                .map_err(|e| {
-                    AsrError::Msg(format!(
-                        "对齐失败 chunk {} ({:.1}s, {} chars): {e:#}",
-                        i + 1,
-                        seg_dur,
-                        seg_chars
-                    ))
-                })?;
-            trace_log(format!(
-                "align#{} ok words={}",
-                i + 1,
-                result.items.len()
-            ));
+            let opts = TranscribeOptions::default()
+                .with_max_new_tokens(self.settings.max_new_tokens)
+                .with_language(force_lang.clone());
 
-            if multi_chunk {
+            let path_str = chunk_path
+                .to_str()
+                .ok_or_else(|| AsrError::PathNotUtf8)?;
+            let report = asr
+                .transcribe(path_str, opts)
+                .map_err(|e| AsrError::TranscribeChunk(i + 1, format!("{e:#}")))?;
+            let text = clean_asr_text(&report.text);
+
+            if vad.multi_chunk {
                 let _ = std::fs::remove_file(&chunk_tmp);
             }
 
-            for item in result.items {
-                let word = item.text.trim();
-                if word.is_empty() {
-                    continue;
-                }
-                segment_words.push(WordToken {
-                    start: round_millis(seg.start_sec + item.start_time.max(0.0)),
-                    end: round_millis(seg.start_sec + item.end_time.max(item.start_time)),
-                    word: word.to_string(),
-                });
+            if text.is_empty() {
+                #[cfg(debug_assertions)]
+                empty_chunks.push(i);
+                continue;
             }
+
+            trace_log(format!(
+                "asr#{} {:.1}s chars={}",
+                i + 1,
+                chunk.end - chunk.start,
+                text.chars().count()
+            ));
+            transcripts.push(ChunkTranscript {
+                start_sec: chunk.start as f64,
+                end_sec: chunk.end as f64,
+                text,
+                language: force_lang.clone(),
+            });
         }
 
-        // Qwen aligner strips punctuation — restore from ASR transcript.
-        let restored = attach_transcript_punctuation(&seg.text, &segment_words);
-        all_words.extend(restored);
-    }
-    drop(aligner);
+        if transcripts.is_empty() {
+            return Err(AsrError::EmptyTranscribe(vad.chunks.len().max(1)));
+        }
+        #[cfg(debug_assertions)]
+        if !empty_chunks.is_empty() {
+            eprintln!(
+                "[asr] skipped empty chunks: {}/{} indices={empty_chunks:?}",
+                empty_chunks.len(),
+                vad.chunks.len().max(1),
+            );
+        }
 
-    // 5. Normalize + sentence boundary → atomic SRT → drop scratch
-    on_stage(StageUpdate::new(AsrStage::Exporting));
-    let words = normalize_word_tokens(all_words);
-    if words.is_empty() {
-        return Err(AsrError::Msg("对齐后词列表为空".into()));
-    }
-
-    let word_dtos: Vec<WordTokenDto> = words
-        .iter()
-        .map(|w| WordTokenDto {
-            start: w.start,
-            end: w.end,
-            word: w.word.clone(),
-        })
-        .collect();
-
-    let step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
-        task_id: stem.clone(),
-        media_path: media_name.to_string(),
-        source_lang: source_lang_key.clone(),
-        subtitle_length_preset: settings.subtitle_length_preset.clone(),
-        words: word_dtos,
-        vad_speech_segments: vad_speech,
-    })
-    .map_err(AsrError::Msg)?;
-
-    let srt_body = source_sentences_to_srt(&step2);
-    if srt_body.trim().is_empty() {
-        return Err(AsrError::Msg("断句后字幕为空".into()));
+        Ok((AsrOutput { transcripts }, compute))
     }
 
-    // Primary deliverable first — side exports must not block it.
-    write_atomic(&srt_path, &srt_body).map_err(|e| AsrError::Msg(e.to_string()))?;
+    // ── Stage 4: load Aligner + align all transcripts ───────────────────
 
-    if let Some(words_path) = export.words_json.as_ref() {
-        match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {
-            Ok(()) => trace_log(format!("words_json={}", words_path.display())),
-            Err(e) => {
-                // CLI / eval only; product GUI leaves `words_json` unset.
-                eprintln!(
-                    "warning: words-json write failed (SRT still OK): {} — {e}",
-                    words_path.display()
-                );
+    fn stage_align_all(
+        &self,
+        conv: &ConvertedAudio,
+        vad: &VadPlan,
+        asr: &AsrOutput,
+        compute: ComputeBackend,
+    ) -> Result<AlignOutput, AsrError> {
+        self.emit(StageUpdate::new(AsrStage::LoadingAligner));
+        check_aligner_model_dir(&self.settings.aligner_model_dir)?;
+        let aligner_dir = self.settings.aligner_model_dir.clone();
+        let aligner_device = compute.to_align_device();
+        let aligner = Qwen3ForcedAligner::load(&aligner_dir, ModelOptions { device: aligner_device })
+            .map_err(|e| AsrError::LoadAligner(format!("{e:#}")))?;
+
+        let mut all_words: Vec<WordToken> = Vec::new();
+        for (i, seg) in asr.transcripts.iter().enumerate() {
+            self.emit(StageUpdate::with_chunk(
+                AsrStage::Aligning,
+                i + 1,
+                asr.transcripts.len(),
+            ));
+
+            let seg_dur = (seg.end_sec - seg.start_sec) as f32;
+            let seg_chars = seg.text.chars().count();
+            trace_log(format!(
+                "align#{} begin {:.3}-{:.3} ({:.1}s) chars={}",
+                i + 1,
+                seg.start_sec,
+                seg.end_sec,
+                seg_dur,
+                seg_chars,
+            ));
+
+            let mut segment_words = Vec::new();
+            if seg_dur < MIN_ALIGN_SEC || !has_alignable_word(&seg.text) {
                 trace_log(format!(
-                    "words_json failed (non-fatal): {} — {e}",
-                    words_path.display()
+                    "align#{} degenerate chunk → whole-span fallback",
+                    i + 1
                 ));
+                let word = seg.text.trim();
+                if !word.is_empty() {
+                    segment_words.push(WordToken {
+                        start: round_millis(seg.start_sec),
+                        end: round_millis(seg.end_sec.max(seg.start_sec)),
+                        word: word.to_string(),
+                    });
+                }
+            } else {
+                let chunk_tmp = conv.chunk_tmp();
+                let chunk_path = if vad.multi_chunk {
+                    slice_wav(
+                        &conv.wav_path,
+                        seg.start_sec as f32,
+                        seg.end_sec as f32,
+                        &chunk_tmp,
+                    )?;
+                    chunk_tmp.as_path()
+                } else {
+                    conv.wav_path.as_path()
+                };
+
+                let result = aligner
+                    .align(AlignRequest::new(
+                        AudioInput::Path(chunk_path.to_path_buf()),
+                        TextInput::Text(seg.text.clone()),
+                        seg.language.clone(),
+                    ))
+                    .map_err(|e| {
+                        AsrError::AlignChunk(
+                            i + 1,
+                            format!("{seg_dur:.1}s"),
+                            format!("{e:#}"),
+                        )
+                    })?;
+                trace_log(format!("align#{} ok words={}", i + 1, result.items.len()));
+
+                if vad.multi_chunk {
+                    let _ = std::fs::remove_file(chunk_path);
+                }
+
+                for item in result.items {
+                    let word = item.text.trim();
+                    if word.is_empty() {
+                        continue;
+                    }
+                    segment_words.push(WordToken {
+                        start: round_millis(seg.start_sec + item.start_time.max(0.0)),
+                        end: round_millis(seg.start_sec + item.end_time.max(item.start_time)),
+                        word: word.to_string(),
+                    });
+                }
             }
+
+            // Qwen aligner strips punctuation — restore from ASR transcript.
+            let restored = attach_transcript_punctuation(&seg.text, &segment_words);
+            all_words.extend(restored);
         }
+
+        Ok(AlignOutput { words: all_words })
     }
 
-    // Scratch is ephemeral after a successful SRT write.
-    let _ = std::fs::remove_dir_all(&work_dir);
+    // ── Stage 5: sentence boundary + SRT write + side exports ────────────
 
-    Ok(srt_path)
+    /// Normalize tokens, run sentence boundary detection, write SRT + JSON.
+    fn stage_export(
+        &self,
+        media_name: &str,
+        speech_segments: Vec<(f64, f64)>,
+        align: AlignOutput,
+        export: ProcessExportOptions,
+    ) -> Result<PathBuf, AsrError> {
+        let stem = media_stem(Path::new(media_name));
+        self.emit(StageUpdate::new(AsrStage::Exporting));
+
+        let words = normalize_word_tokens(align.words);
+        if words.is_empty() {
+            return Err(AsrError::EmptyAlignment);
+        }
+
+        let word_dtos: Vec<WordTokenDto> = words
+            .iter()
+            .map(|w| WordTokenDto {
+                start: w.start,
+                end: w.end,
+                word: w.word.clone(),
+            })
+            .collect();
+
+        let source_lang_key = to_lang_key(&self.settings.language);
+        let step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
+            task_id: stem.clone(),
+            media_path: media_name.to_string(),
+            source_lang: source_lang_key.clone(),
+            subtitle_length_preset: self.settings.subtitle_length_preset.clone(),
+            words: word_dtos,
+            vad_speech_segments: speech_segments,
+        })
+        .map_err(AsrError::Other)?;
+
+        let srt_body = source_sentences_to_srt(&step2);
+        if srt_body.trim().is_empty() {
+            return Err(AsrError::EmptySentenceBoundary);
+        }
+
+        let srt_path = output_srt_path(&self.settings.resolved_output_dir(), &stem);
+        write_atomic(&srt_path, &srt_body)?;
+
+        if let Some(words_path) = export.words_json.as_ref() {
+            match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {
+                Ok(()) => trace_log(format!("words_json={}", words_path.display())),
+                Err(e) => {
+                    eprintln!(
+                        "warning: words-json write failed (SRT still OK): {} — {e}",
+                        words_path.display()
+                    );
+                    trace_log(format!(
+                        "words_json failed (non-fatal): {} — {e}",
+                        words_path.display()
+                    ));
+                }
+            }
+        }
+
+        Ok(srt_path)
+    }
 }
+
 
 /// Word/char tokens after ForcedAligner + punct restore + normalize (pre-sentence-boundary).
 fn write_words_json(
@@ -893,7 +1139,7 @@ fn write_words_json(
     words: &[WordToken],
 ) -> Result<(), AsrError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AsrError::Msg(e.to_string()))?;
+        std::fs::create_dir_all(parent)?;
     }
     let items: Vec<serde_json::Value> = words
         .iter()
@@ -915,8 +1161,8 @@ fn write_words_json(
         "words": items,
     });
     let text = serde_json::to_string_pretty(&body)
-        .map_err(|e| AsrError::Msg(format!("words json: {e}")))?;
-    write_atomic(path, &text).map_err(|e| AsrError::Msg(e.to_string()))
+        .map_err(|e| AsrError::Other(format!("words json: {e}")))?;
+    write_atomic(path, &text).map_err(AsrError::Io)
 }
 
 /// Chunks shorter than this have no usable mel frames to align against.
@@ -1067,5 +1313,92 @@ mod tests {
         push_or_merge_stage(&mut stages, AsrStage::Transcribing, 5);
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].elapsed_ms, 15);
+    }
+
+    #[test]
+    fn model_validation_cache_returns_consistent_results() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr_cache_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), b"{}").unwrap();
+        // Single-file model: must be >= 1024 bytes to pass size check.
+        let big = vec![0u8; 2048];
+        std::fs::write(dir.join("model.safetensors"), &big).unwrap();
+
+        // Both calls should return Ok — second call hits the cache.
+        let r1 = check_asr_model_dir(&dir);
+        let r2 = check_asr_model_dir(&dir);
+        assert!(r1.is_ok(), "first call failed: {r1:?}");
+        assert!(r2.is_ok(), "second call failed: {r2:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_asr_model_dir_uses_shard_filenames_not_tensor_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr_shard_index_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.join("model.safetensors.index.json"),
+            br#"{"weight_map":{"thinker.audio_tower.conv2d1.bias":"model-00001-of-00001.safetensors"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("model-00001-of-00001.safetensors"), vec![0u8; 2048]).unwrap();
+
+        let err_before = check_asr_model_dir(&dir);
+        assert!(err_before.is_ok(), "{err_before:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_asr_model_dir_names_missing_shard() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr_missing_shard_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.join("model.safetensors.index.json"),
+            br#"{"weight_map":{"t":"model-00001-of-00001.safetensors"}}"#,
+        )
+        .unwrap();
+
+        let err = check_asr_model_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains("model-00001-of-00001.safetensors"), "{err}");
+        assert!(err.contains("缺少"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asr_and_aligner_ready_caches_do_not_alias() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr_role_cache_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(dir.join("model.safetensors"), vec![0u8; 2048]).unwrap();
+
+        assert!(check_aligner_model_dir(&dir).is_ok());
+        let err = check_asr_model_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains("tokenizer.json"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

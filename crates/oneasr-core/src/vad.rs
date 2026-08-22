@@ -38,10 +38,10 @@ pub struct Chunk {
 /// Each pair is `(start_sec, end_sec)`. Model weights are embedded in the
 /// FireRedVad crate, so no external model files are needed.
 pub fn run_vad(wav_path: &Path) -> Result<Vec<(f32, f32)>, AsrError> {
-    let vad = Vad::new().map_err(|e| AsrError::Msg(format!("VAD init failed: {e}")))?;
+    let vad = Vad::new().map_err(|e| AsrError::Other(format!("VAD init failed: {e}")))?;
     let out = vad
         .detect_wav(wav_path, &VadConfig::default())
-        .map_err(|e| AsrError::Msg(format!("VAD detect failed: {e}")))?;
+        .map_err(|e| AsrError::Other(format!("VAD detect failed: {e}")))?;
     Ok(out.timestamps)
 }
 
@@ -68,13 +68,14 @@ pub fn speech_to_silences(
 }
 
 /// Pick the best silence in `(window_start, target]`: longest, then closest to target.
+/// Returns the midpoint of the chosen silence, or `None` if no silence qualifies.
 fn pick_silence_cut(
     silences: &[(f32, f32)],
     prev: f32,
     target: f32,
     window_start: f32,
     min_silence: f32,
-) -> Option<(f32, f32)> {
+) -> Option<f32> {
     let mut best: Option<(f32, f32)> = None; // (sil_dur, mid)
     for &(s, e) in silences {
         let sil_dur = e - s;
@@ -103,8 +104,7 @@ fn pick_silence_cut(
             best = Some((sil_dur, mid));
         }
     }
-    // best is (sil_dur, mid); caller wants mid only
-    best.map(|(_, mid)| mid).map(|m| (m, m))
+    best.map(|(_, mid)| mid)
 }
 
 #[inline]
@@ -149,7 +149,7 @@ pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Ve
 
         let mut cut: Option<f32> = None;
         for &thr in &tiers {
-            if let Some((mid, _)) = pick_silence_cut(silences, prev, target, window_start, thr) {
+            if let Some(mid) = pick_silence_cut(silences, prev, target, window_start, thr) {
                 cut = Some(mid);
                 break;
             }
