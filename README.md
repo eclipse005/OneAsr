@@ -44,8 +44,8 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 | 包类型 | 说明 |
 |--------|------|
-| **安装包** `OneAsr_*_setup.exe` | 按向导安装 |
-| **便携包** `OneAsr_*_portable.zip` | 解压后运行 `oneasr.exe` |
+| **安装包** `OneAsr_*_setup.exe` | 按向导安装（含 GUI + `oneasr-cli.exe`） |
+| **便携包** `OneAsr_*_portable.zip` | 解压后运行 `oneasr.exe`（同样含 CLI） |
 
 **首次使用：**
 
@@ -75,6 +75,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 ```text
 {app}/
   oneasr.exe
+  oneasr-cli.exe      # 无界面命令行，与 GUI 同一套流水线
   bin/ffmpeg.exe      # 安装包已带；源码开发需自行放置
   dll/                # CUDA 运行库（设置内下载）
   models/             # ASR / Aligner 权重
@@ -103,6 +104,42 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 - 同一时刻只加载一个大模型，内存友好，但长队列会按文件串行处理
 - 速度慢：检查是否已装 CUDA 运行库、后端是否为 Auto/GPU、驱动是否过旧
 - 失败任务可在列表中重试；`runs/` 在失败时可能残留，便于排查
+
+---
+
+## 命令行 / Python
+
+安装包和便携包都带 `oneasr-cli.exe`，与 GUI 同一条流水线。先用 GUI 把模型（和可选的 CUDA 组件）下载到安装目录，再调用 CLI。默认 `--app-root` 就是 exe 所在目录。
+
+```powershell
+oneasr-cli.exe transcribe --input "C:\path\to\video.mp4" --language zh --backend auto --output "C:\path\to\out.srt"
+```
+
+Python：
+
+```python
+import subprocess
+
+app = r"C:\Path\To\OneAsr"  # 安装目录或便携包解压目录
+subprocess.run(
+    [
+        fr"{app}\oneasr-cli.exe",
+        "transcribe",
+        "--input", r"C:\path\to\video.mp4",
+        "--app-root", app,
+        "--language", "zh",
+        "--backend", "auto",
+        "--output", r"C:\path\to\out.srt",
+    ],
+    check=True,
+)
+```
+
+退出码 0 为成功。阶段日志在 stderr；字幕写到 `--output`（缺省则 `{app}/output/{stem}.srt`）。
+
+```powershell
+oneasr-cli.exe --help
+```
 
 ---
 
@@ -162,6 +199,7 @@ cargo run -p oneasr-core --release --bin oneasr-cli -- `
 ```powershell
 cargo test -p oneasr-core
 cargo build -p oneasr --release
+cargo build -p oneasr-core --release --bin oneasr-cli
 ```
 
 默认 feature 含 CUDA 引擎；运行时无 DLL / 无 GPU 时仍可走 CPU。

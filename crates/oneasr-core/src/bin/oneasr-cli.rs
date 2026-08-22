@@ -21,8 +21,8 @@ use std::time::Instant;
 
 use oneasr_core::media::slice_wav;
 use oneasr_core::{
-    init_native_library_path, process_media_file_with_export, resolve_cuda_runtime_dir,
-    ProcessExportOptions, StageClock, StageUpdate, Settings,
+    init_native_library_path, process_media_file_with_export, resolve_app_root,
+    resolve_cuda_runtime_dir, ProcessExportOptions, StageClock, StageUpdate, Settings,
 };
 use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
@@ -79,7 +79,7 @@ Commands:
 
 transcribe options:
   --input <path>           Media file (required)
-  --app-root <dir>         App root with bin/ffmpeg, models/, dll/  (default: D:\\OneAsr or CWD)
+  --app-root <dir>         App root with bin/ffmpeg, models/, dll/  (default: this exe's install dir)
   --language <code>        zh|en|yue|ja|ko|...  (default: zh)
   --chunk-seconds <30-180> VAD chunk target (default: 60)
   --backend <cuda|cpu|auto>
@@ -114,7 +114,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         return Ok(());
     }
     let input = require_arg(args, "--input")?;
-    let app_root = resolve_app_root(args)?;
+    let app_root = parse_app_root(args)?;
     let language = arg(args, "--language").unwrap_or_else(|| "zh".into());
     let chunk_seconds: u32 = arg(args, "--chunk-seconds")
         .and_then(|s| s.parse().ok())
@@ -248,7 +248,7 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     let out = arg(args, "--out").map(PathBuf::from);
     let backend_s = arg(args, "--backend").unwrap_or_else(|| "cuda".into());
     let max_new_tokens = arg(args, "--max-new-tokens").and_then(|s| s.parse().ok());
-    let app_root = resolve_app_root(args).unwrap_or_else(|_| default_app_root());
+    let app_root = parse_app_root(args).unwrap_or_else(|_| default_app_root());
 
     if !wav.is_file() {
         eprintln!("wav not found: {}", wav.display());
@@ -368,13 +368,12 @@ fn setup_native(app_root: &Path) {
 }
 
 fn default_app_root() -> PathBuf {
-    if PathBuf::from(r"D:\OneAsr\bin\ffmpeg.exe").is_file() {
-        return PathBuf::from(r"D:\OneAsr");
-    }
-    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    resolve_app_root().unwrap_or_else(|| {
+        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    })
 }
 
-fn resolve_app_root(args: &[String]) -> Result<PathBuf, i32> {
+fn parse_app_root(args: &[String]) -> Result<PathBuf, i32> {
     if let Some(s) = arg(args, "--app-root") {
         let p = PathBuf::from(s);
         if !p.is_dir() {
