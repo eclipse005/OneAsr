@@ -135,6 +135,19 @@ pub(super) trait LanguageProfile {
     /// Per-preset source-side subtitle length limit (words or chars).
     fn source_limit(&self, preset: SubtitleLengthPreset) -> u32;
 
+    /// Per-preset display-CHARACTER limit (width budget). Latin languages use
+    /// word limit × 5.5 so long words can't overflow the subtitle line; CJK
+    /// languages already count by character and leave this unbounded.
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64;
+
+    /// Additional function words (articles/prepositions/clitics) for this
+    /// language beyond the global EN/CJK tables. Spaced Universal-3.5
+    /// languages (es/fr/de/pt/it...) get the shared table; others default to
+    /// none.
+    fn function_words_left(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Whether this language uses Punkt sentence boundary detection
     /// (statistical abbreviation detection) instead of the hardcoded
     /// abbreviation table. Currently only English; adding a language
@@ -145,6 +158,19 @@ pub(super) trait LanguageProfile {
 
     /// Whether this language counts characters (not words) as length units.
     fn is_char_based(&self) -> bool;
+
+    /// Extra units allowed above [`Self::source_limit`] in quality mode.
+    /// Japanese/Korean keep a bunsetsu together (助词/属格) instead of
+    /// slicing at the raw cap.
+    fn length_grace_units(&self) -> f64 {
+        super::boundary_rules::LENGTH_GRACE_UNITS
+    }
+
+    /// Force-mode ceiling. JA/KO may exceed the target so a bunsetsu is not
+    /// split; other languages keep the raw cap so existing tests hold.
+    fn force_unit_ceiling(&self, limit: f64) -> f64 {
+        limit
+    }
 }
 
 /// Resolve a BCP-47-ish language tag to a profile.
@@ -169,6 +195,59 @@ fn language_key(lang: &str) -> String {
     let trimmed = lang.trim();
     let end = trimmed.find(['-', '_']).unwrap_or(trimmed.len());
     trimmed[..end].to_ascii_lowercase()
+}
+
+
+/// Shared function-word guards for spaced EU/misc languages (articles,
+/// prepositions, clitics).
+const U35_SPACED_CONNECTORS: &[&str] = &[
+    "y", "o", "pero", "porque", "cuando", "mientras", "entonces", "aunque", "donde", "sino",
+    "et", "ou", "mais", "parce", "quand", "pendant", "donc", "alors",
+    "und", "oder", "aber", "weil", "wenn", "während", "dass", "obwohl", "deshalb",
+    "e", "mas", "quando", "enquanto", "então", "embora",
+    "ma", "perché", "mentre", "allora", "però",
+    "en", "maar", "omdat", "wanneer", "terwijl", "als",
+    "och", "eller", "men", "för", "när", "om", "og", "fordi", "hvis",
+    "ja", "tai", "mutta", "koska", "kun", "jos",
+    "i", "lub", "ale", "ponieważ", "kiedy", "jeśli",
+    "ve", "veya", "ama", "çünkü", "eğer", "sonra",
+    "và", "hoặc", "nhưng", "vì", "khi", "nếu", "thì", "nên",
+    "और", "या", "लेकिन", "क्योंकि", "जब", "यदि", "तो",
+    "و", "أو", "لكن", "لأن", "عندما", "إذا", "ثم",
+    "או", "אבל", "כי", "אם", "אז",
+    "и", "или", "но", "потому", "когда", "если",
+];
+
+const U35_SPACED_FUNCTION_WORDS: &[&str] = &[
+    // articles / prep / clitic (es/fr/de/pt/it/nl)
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al",
+    "por", "para", "con", "sin", "su", "sus", "mi", "mis", "tu", "tus",
+    "es", "son", "está", "están", "se", "lo", "le", "les",
+    "une", "du", "des", "au", "aux", "à", "par", "pour", "avec",
+    "sans", "sur", "son", "sa", "ses", "mon", "ma", "mes", "ton", "ta", "tes",
+    "est", "sont", "ce", "cet", "cette", "ces", "je", "il", "elle", "nous", "vous",
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
+    "einer", "eines", "von", "zu", "mit", "für", "auf", "aus", "bei", "nach",
+    "über", "unter", "ist", "sind", "im", "am", "vom", "zum", "zur", "sich",
+    "o", "os", "as", "um", "uma", "do", "da", "dos", "das", "em", "no", "na",
+    "nos", "nas", "é", "são", "seu", "sua", "seus", "suas",
+    "il", "gli", "uno", "della", "dello", "dei", "delle", "nel", "nella",
+    "è", "sono", "si", "suo", "sua", "suoi", "sue",
+    "het", "een", "van", "te", "voor", "op", "aan", "zijn",
+    // Vietnamese / Hindi / Arabic / Hebrew / Turkish
+    "của", "là", "các", "những", "một", "trong", "với", "để", "không",
+    "được", "đã", "sẽ", "này", "đó",
+    "का", "के", "की", "में", "से", "को", "है", "हैं", "था", "थे", "एक", "यह", "वह",
+    "तो", "ही", "भी",
+    "في", "من", "إلى", "على", "أن", "إن", "هذا", "هذه", "التي", "الذي", "هو", "هي",
+    "של", "את", "על", "אל", "עם", "זה", "זו", "היא", "הוא",
+    "bir", "bu", "şu", "ile", "için",
+];
+
+/// Latin display-character cap ≈ word limit × 5.5 (rounded), matching
+/// EggTranslate's CHARS_PER_WORD_BUDGET (short 66 / standard 88 / loose 110).
+fn latin_char_limit_for(word_limit: u32) -> f64 {
+    (f64::from(word_limit) * 5.5).round()
 }
 
 // ---- char-unit counting (shared, single source of truth) ----
@@ -224,7 +303,8 @@ const ENGLISH_ABBREVIATIONS: &[&str] = &[];
 
 const ENGLISH_CONNECTORS: &[&str] = &[
     "and", "but", "or", "so", "because", "when", "while", "which", "that", "if", "then", "though",
-    "although", "however", "therefore",
+    "although", "however", "therefore", "before", "where", "who", "what", "whom", "whose", "as",
+    "until", "once", "since", "unless", "whereas",
 ];
 
 impl LanguageProfile for EnglishProfile {
@@ -250,6 +330,9 @@ impl LanguageProfile for EnglishProfile {
             SubtitleLengthPreset::Loose => 20,
         }
     }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
     fn uses_punkt_sentence_boundary(&self) -> bool {
         true
     }
@@ -266,7 +349,7 @@ struct ChineseProfile;
 
 const CHINESE_CONNECTORS: &[&str] = &[
     "但是", "因为", "所以", "而且", "或者", "如果", "虽然", "因此", "不过", "然后", "可是", "然而",
-    "另外", "并且", "所以",
+    "另外", "并且", "所以", "为了", "以及", "还有", "及其",
 ];
 
 impl LanguageProfile for ChineseProfile {
@@ -292,6 +375,9 @@ impl LanguageProfile for ChineseProfile {
             SubtitleLengthPreset::Loose => 28,
         }
     }
+    fn source_char_limit(&self, _preset: SubtitleLengthPreset) -> f64 {
+        f64::INFINITY // char-based: units already are chars
+    }
     fn is_char_based(&self) -> bool {
         true
     }
@@ -304,8 +390,12 @@ impl LanguageProfile for ChineseProfile {
 struct JapaneseProfile;
 
 const JAPANESE_CONNECTORS: &[&str] = &[
-    "しかし", "だから", "そして", "でも", "なので", "また", "または", "ゆえに", "けれど", "けれど",
-    "そのため", "さらに",
+    "しかし", "だから", "そして", "でも", "また", "または", "ゆえに",
+    "そのため", "さらに", "それで", "それから",
+    // Spoken turn-takers / new-move starters: cutting BEFORE them is good.
+    "はい", "じゃあ", "それでは", "なるほど", "えっと", "ええ",
+    "まずは", "まず", "次に", "ところで", "ちなみに", "実は", "もっと",
+    "皆さん", "みなさん", "みんな", "こんにちは", "こんばんは",
 ];
 
 impl LanguageProfile for JapaneseProfile {
@@ -331,8 +421,17 @@ impl LanguageProfile for JapaneseProfile {
             SubtitleLengthPreset::Loose => 28,
         }
     }
+    fn source_char_limit(&self, _preset: SubtitleLengthPreset) -> f64 {
+        f64::INFINITY
+    }
     fn is_char_based(&self) -> bool {
         true
+    }
+    fn length_grace_units(&self) -> f64 {
+        6.0
+    }
+    fn force_unit_ceiling(&self, limit: f64) -> f64 {
+        limit + self.length_grace_units()
     }
 }
 
@@ -344,6 +443,7 @@ struct KoreanProfile;
 
 const KOREAN_CONNECTORS: &[&str] = &[
     "하지만", "그래서", "왜냐하면", "그리고", "또는", "만약", "비록", "따라서", "그러나", "그러므로",
+    "그런데", "및", "왜냐면",
 ];
 
 impl LanguageProfile for KoreanProfile {
@@ -369,8 +469,17 @@ impl LanguageProfile for KoreanProfile {
             SubtitleLengthPreset::Loose => 26,
         }
     }
+    fn source_char_limit(&self, _preset: SubtitleLengthPreset) -> f64 {
+        f64::INFINITY
+    }
     fn is_char_based(&self) -> bool {
         true
+    }
+    fn length_grace_units(&self) -> f64 {
+        6.0
+    }
+    fn force_unit_ceiling(&self, limit: f64) -> f64 {
+        limit + self.length_grace_units()
     }
 }
 
@@ -402,6 +511,9 @@ impl LanguageProfile for ThaiProfile {
             SubtitleLengthPreset::Standard => 32,
             SubtitleLengthPreset::Loose => 42,
         }
+    }
+    fn source_char_limit(&self, _preset: SubtitleLengthPreset) -> f64 {
+        f64::INFINITY
     }
     fn is_char_based(&self) -> bool {
         true
@@ -441,6 +553,12 @@ impl LanguageProfile for FrenchProfile {
             SubtitleLengthPreset::Loose => 18,
         }
     }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
+    }
     fn is_char_based(&self) -> bool {
         false
     }
@@ -470,6 +588,12 @@ impl LanguageProfile for GermanProfile {
             SubtitleLengthPreset::Standard => 14,
             SubtitleLengthPreset::Loose => 18,
         }
+    }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
     }
     fn is_char_based(&self) -> bool {
         false
@@ -503,6 +627,12 @@ impl LanguageProfile for SpanishProfile {
             SubtitleLengthPreset::Loose => 20,
         }
     }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
+    }
     fn is_char_based(&self) -> bool {
         false
     }
@@ -534,6 +664,12 @@ impl LanguageProfile for PortugueseProfile {
             SubtitleLengthPreset::Standard => 16,
             SubtitleLengthPreset::Loose => 20,
         }
+    }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
     }
     fn is_char_based(&self) -> bool {
         false
@@ -567,6 +703,12 @@ impl LanguageProfile for ItalianProfile {
             SubtitleLengthPreset::Loose => 20,
         }
     }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
+    }
     fn is_char_based(&self) -> bool {
         false
     }
@@ -598,13 +740,19 @@ impl LanguageProfile for ArabicProfile {
             SubtitleLengthPreset::Loose => 20,
         }
     }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
+    }
     fn is_char_based(&self) -> bool {
         false
     }
 }
 
-/// Fallback for unrecognized languages: empty tables, word counting, no
-/// advisor. Behaves like English but without any language-specific data.
+/// Fallback for unrecognized spaced languages: U3.5 connector/function-word
+/// tables, word counting, no advisor.
 struct DefaultProfile;
 impl LanguageProfile for DefaultProfile {
     fn key(&self) -> &'static str {
@@ -614,7 +762,7 @@ impl LanguageProfile for DefaultProfile {
         &[]
     }
     fn connectors(&self) -> &'static [&'static str] {
-        &[]
+        U35_SPACED_CONNECTORS
     }
     fn word_boundary_advisor(&self, _: &str) -> Advisor {
         Advisor::Default(DefaultAdvisor)
@@ -628,6 +776,12 @@ impl LanguageProfile for DefaultProfile {
             SubtitleLengthPreset::Standard => 16,
             SubtitleLengthPreset::Loose => 20,
         }
+    }
+    fn source_char_limit(&self, preset: SubtitleLengthPreset) -> f64 {
+        latin_char_limit_for(self.source_limit(preset))
+    }
+    fn function_words_left(&self) -> &'static [&'static str] {
+        U35_SPACED_FUNCTION_WORDS
     }
     fn is_char_based(&self) -> bool {
         false
@@ -676,6 +830,7 @@ mod tests {
         assert!(p.abbreviations().is_empty());
         assert!(p.uses_punkt_sentence_boundary());
         assert!(p.connectors().contains(&"and"));
+        assert!(p.connectors().contains(&"where"));
         assert!(!p.is_char_based());
     }
 
@@ -719,7 +874,8 @@ mod tests {
         let p = profile_for_lang("klingon");
         assert_eq!(p.key(), "default");
         assert!(p.abbreviations().is_empty());
-        assert!(p.connectors().is_empty());
+        assert!(p.connectors().contains(&"и"));
+        assert!(p.connectors().contains(&"và"));
         assert!(!p.is_char_based());
     }
 
