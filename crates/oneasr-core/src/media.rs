@@ -89,6 +89,13 @@ fn resolve_bin_dir() -> Option<PathBuf> {
     resolve_app_root().map(|root| root.join("bin"))
 }
 
+/// Whether the bundled ffmpeg tool is present (startup environment report).
+pub fn ffmpeg_present() -> bool {
+    resolve_bin_dir()
+        .map(|d| d.join(FFMPEG_NAME).is_file())
+        .unwrap_or(false)
+}
+
 fn resolve_ffmpeg() -> Result<PathBuf, MediaError> {
     let path = resolve_bin_dir()
         .map(|d| d.join(FFMPEG_NAME))

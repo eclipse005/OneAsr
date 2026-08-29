@@ -116,6 +116,27 @@ impl Default for Settings {
     }
 }
 
+/// What [`Settings::load_with_report`] found on disk. The GUI logs it at startup,
+/// so a pasted `oneasr-error.log` explains fallback-to-defaults and the
+/// portable-move model-dir self-heal without guessing.
+#[derive(Debug, Default, Clone)]
+pub struct SettingsLoadReport {
+    pub config_path: Option<PathBuf>,
+    /// Non-NotFound read failure (permission, file lock, …).
+    pub read_error: Option<String>,
+    /// File exists but is not valid settings JSON.
+    pub parse_error: Option<String>,
+    /// Model-dir repairs applied by `normalize`, as `"old → new"` strings.
+    pub repairs: Vec<String>,
+}
+
+impl SettingsLoadReport {
+    /// True when something notable happened and deserves a log entry.
+    pub fn is_notable(&self) -> bool {
+        self.read_error.is_some() || self.parse_error.is_some() || !self.repairs.is_empty()
+    }
+}
+
 impl Settings {
     pub fn config_path() -> Option<PathBuf> {
         if let Some(root) = resolve_app_root() {
@@ -127,18 +148,37 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
+        Self::load_with_report().0
+    }
+
+    /// Load + report why defaults were used, so the GUI can log it and a pasted
+    /// `oneasr-error.log` explains "my settings are gone" without guessing.
+    pub fn load_with_report() -> (Self, SettingsLoadReport) {
+        let mut report = SettingsLoadReport {
+            config_path: Self::config_path(),
+            ..SettingsLoadReport::default()
+        };
+        let Some(path) = report.config_path.clone() else {
+            return (Self::default(), report);
         };
         match std::fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<Settings>(&text) {
                 Ok(mut s) => {
-                    s.normalize();
-                    s
+                    s.normalize_with_notes(&mut report.repairs);
+                    (s, report)
                 }
-                Err(_) => Self::default(),
+                Err(e) => {
+                    report.parse_error = Some(e.to_string());
+                    (Self::default(), report)
+                }
             },
-            Err(_) => Self::default(),
+            Err(e) => {
+                // Missing file = first run, not an error; keep only real failures.
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    report.read_error = Some(e.to_string());
+                }
+                (Self::default(), report)
+            }
         }
     }
 
@@ -150,14 +190,28 @@ impl Settings {
     /// 3. Else custom path → keep path; clamp `asr_model` to a valid catalog id
     ///    for the size picker only (inference still uses the custom path).
     pub fn normalize(&mut self) {
+        let mut notes = Vec::new();
+        self.normalize_with_notes(&mut notes);
+    }
+
+    /// [`Self::normalize`] while recording every self-heal into `notes`.
+    pub fn normalize_with_notes(&mut self, notes: &mut Vec<String>) {
         self.language = normalize_source_language(&self.language);
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
         self.normalize_output_dir();
 
         if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
             self.asr_model = id.as_str().into();
-            repair_stale_model_dir(&mut self.asr_model_dir, resolve_model_dir(id.as_str()));
-            repair_stale_model_dir(&mut self.aligner_model_dir, default_aligner_model_dir());
+            repair_stale_model_dir(
+                &mut self.asr_model_dir,
+                resolve_model_dir(id.as_str()),
+                notes,
+            );
+            repair_stale_model_dir(
+                &mut self.aligner_model_dir,
+                default_aligner_model_dir(),
+                notes,
+            );
             return;
         }
 
@@ -166,7 +220,11 @@ impl Settings {
         if self.asr_model_dir.as_os_str().is_empty() {
             self.asr_model_dir = resolve_model_dir(id.as_str());
         }
-        repair_stale_model_dir(&mut self.aligner_model_dir, default_aligner_model_dir());
+        repair_stale_model_dir(
+            &mut self.aligner_model_dir,
+            default_aligner_model_dir(),
+            notes,
+        );
     }
 
     /// Default empty → `{app}/output`; relative → join app root (stable vs CWD).
@@ -261,8 +319,17 @@ impl Settings {
 /// together with the app (same `models/` layout), we auto-repair to the
 /// current install-layout location.  Custom user-chosen paths outside the
 /// install layout are left alone.
-fn repair_stale_model_dir(current: &mut PathBuf, default: PathBuf) {
+/// Replace `current` with `default` when `current` no longer exists but the
+/// install-layout default does. Every actual switch is pushed into `notes` so
+/// the GUI can log the repair instead of silently rewriting settings; no-op
+/// calls record nothing.
+fn repair_stale_model_dir(current: &mut PathBuf, default: PathBuf, notes: &mut Vec<String>) {
     if !current.is_dir() && default.is_dir() {
+        notes.push(format!(
+            "model dir reset (missing): {} → {}",
+            current.display(),
+            default.display()
+        ));
         *current = default;
     }
 }
@@ -401,8 +468,10 @@ mod tests {
         let tmp = std::env::temp_dir();
         // default exists (temp_dir is a real directory)
         let mut current = PathBuf::from(r"D:\__no_such_dir_for_test__");
-        repair_stale_model_dir(&mut current, tmp.clone());
+        let mut notes = Vec::new();
+        repair_stale_model_dir(&mut current, tmp.clone(), &mut notes);
         assert_eq!(current, tmp, "stale path should switch to existing default");
+        assert_eq!(notes.len(), 1, "switch must be recorded: {notes:?}");
     }
 
     #[test]
@@ -410,11 +479,13 @@ mod tests {
         let mut current = PathBuf::from(r"D:\__custom_model_path__");
         let default = PathBuf::from(r"D:\__also_missing__");
         let original = current.clone();
-        repair_stale_model_dir(&mut current, default);
+        let mut notes = Vec::new();
+        repair_stale_model_dir(&mut current, default, &mut notes);
         assert_eq!(
             current, original,
             "custom path should be preserved when neither exists"
         );
+        assert!(notes.is_empty(), "no-op repair must not record: {notes:?}");
     }
 
     #[test]
@@ -422,7 +493,23 @@ mod tests {
         let tmp = std::env::temp_dir();
         let mut current = tmp.clone();
         let default = PathBuf::from(r"D:\__no_such_dir__");
-        repair_stale_model_dir(&mut current, default);
+        let mut notes = Vec::new();
+        repair_stale_model_dir(&mut current, default, &mut notes);
         assert_eq!(current, tmp, "existing path should not be changed");
+        assert!(notes.is_empty(), "no-op repair must not record: {notes:?}");
+    }
+
+    #[test]
+    fn load_report_is_notable_reflects_errors() {
+        // The report contract, without touching the real settings file on disk:
+        // any recorded error/repair is notable, a clean load is not.
+        let report = SettingsLoadReport {
+            config_path: Some(PathBuf::from("unused.json")),
+            parse_error: Some("test".into()),
+            ..SettingsLoadReport::default()
+        };
+        assert!(report.is_notable());
+        let clean = SettingsLoadReport::default();
+        assert!(!clean.is_notable());
     }
 }

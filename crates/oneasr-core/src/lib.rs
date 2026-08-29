@@ -23,18 +23,18 @@ pub use job::{accept_input_path, next_queue_seq, DurationState, Task, TaskStatus
 pub use lang::{
     normalize_source_language, source_language_by_id, SOURCE_LANGUAGES, SourceLanguage,
 };
-pub use media::{probe_duration_async, probe_duration_sec, resolve_app_root};
+pub use media::{ffmpeg_present, probe_duration_async, probe_duration_sec, resolve_app_root};
 pub use model::{
     default_aligner_model_dir, default_asr_model_dir, download_model, init_native_library_path,
-    is_cuda_runtime_ready, is_model_ready, resolve_cuda_runtime_dir, resolve_dll_dir,
-    resolve_models_root, DownloadHandle,
+    is_cuda_runtime_ready, is_model_ready, probe_writable, resolve_app_root_dir,
+    resolve_cuda_runtime_dir, resolve_dll_dir, resolve_models_root, DownloadHandle,
     DownloadOutcome, DownloadProgress, DownloadState, ModelId, ModelKind, QWEN3_ASR_06B,
     QWEN3_ASR_17B,
 };
 pub use runtime::{demote_current_thread, init_runtime};
 pub use settings::{
-    clamp_chunk_target_seconds, Settings, CHUNK_TARGET_DEFAULT_SEC, CHUNK_TARGET_MAX_SEC,
-    CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS,
+    clamp_chunk_target_seconds, Settings, SettingsLoadReport, CHUNK_TARGET_DEFAULT_SEC,
+    CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS,
 };
 pub use ui_labels::{
     empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,

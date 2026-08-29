@@ -34,10 +34,11 @@ use gpui::{
 };
 use oneasr_core::{
     accept_input_path, check_asr_model_dir, demote_current_thread, download_model,
-    empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
-    format_process_ms, init_native_library_path, init_runtime, is_cuda_runtime_ready,
-    next_queue_seq, normalize_source_language, process_media_file_with_progress,
-    probe_duration_async, resolve_app_root, source_language_by_id, AsrStage,
+    empty_state_subtitle, empty_state_title, ffmpeg_present, format_batch_progress,
+    format_queue_status, format_process_ms, init_native_library_path, init_runtime,
+    is_cuda_runtime_ready, is_model_ready, next_queue_seq, normalize_source_language,
+    process_media_file_with_progress, probe_duration_async, probe_writable, resolve_app_root,
+    resolve_app_root_dir, resolve_cuda_runtime_dir, source_language_by_id, AsrStage,
     DownloadHandle, DownloadProgress, DownloadState, DurationState, ModelId, ModelKind,
     Settings, StageClock, StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC,
     CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
@@ -290,15 +291,78 @@ impl OneAsrApp {
         })
         .detach();
 
-        let mut settings = Settings::load();
+        let (mut settings, settings_report) = Settings::load_with_report();
         // Force-GPU without runtime DLLs is invalid → fall back to auto and persist.
         let mut cuda_fallback_hint: Option<String> = None;
         if settings.backend.eq_ignore_ascii_case("cuda") && !is_cuda_runtime_ready() {
+            crashlog::log_warn(
+                "backend forced cuda but CUDA runtime missing — reset to auto",
+            );
             settings.backend = "auto".into();
-            let _ = settings.save();
+            if let Err(e) = settings.save() {
+                crashlog::log_error(format!("cuda→auto fallback save failed: {e}"));
+            }
             cuda_fallback_hint =
                 Some("未检测到 CUDA 运行库，已改用自动（可在设置中安装组件后选 GPU）".into());
         }
+        // Log why settings were repaired / fell back to defaults (user report:
+        // "设置丢了" must be answerable from a pasted log alone).
+        if settings_report.is_notable() {
+            let path = settings_report
+                .config_path
+                .clone()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".into());
+            if let Some(e) = &settings_report.read_error {
+                crashlog::log_error(format!(
+                    "settings read failed (using defaults)\n  path: {path}\n  error: {e}"
+                ));
+            }
+            if let Some(e) = &settings_report.parse_error {
+                crashlog::log_error(format!(
+                    "settings parse failed (using defaults)\n  path: {path}\n  error: {e}"
+                ));
+            }
+            for repair in &settings_report.repairs {
+                crashlog::log_warn(format!("settings repaired: {repair}"));
+            }
+        }
+
+        // Environment snapshot: everything support asks for in one block —
+        // install location + writability (os error 5 class), ffmpeg, backend,
+        // per-model readiness. Probe files only, never load weights.
+        let app_root = resolve_app_root_dir();
+        let writable = match probe_writable(&app_root) {
+            Ok(()) => "yes".to_string(),
+            Err(e) => format!("NO ({e})"),
+        };
+        let models_line = [
+            ModelId::Qwen3Asr06B,
+            ModelId::Qwen3Asr17B,
+            ModelId::QwenAlign06B,
+            ModelId::CudaRuntime,
+        ]
+        .map(|id| {
+            format!(
+                "{}={}",
+                id.as_str(),
+                if is_model_ready(id) { "ready" } else { "missing" }
+            )
+        })
+        .join(" ");
+        crashlog::log_info(format!(
+            "environment:\n  settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  cuda dir: {}\n  models: {models_line}",
+            Settings::config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".into()),
+            app_root.display(),
+            if ffmpeg_present() { "yes" } else { "MISSING" },
+            settings.backend,
+            settings.output_dir.display(),
+            resolve_cuda_runtime_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_else(|| "<none>".into()),
+        ));
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
@@ -372,6 +436,18 @@ impl OneAsrApp {
 
         let handle = DownloadHandle::new(id);
         let model_dir = handle.model_dir.clone();
+        // Environment snapshot before the thread starts: when a download later
+        // fails with a bare OS error (e.g. 拒绝访问 / os error 5), this pins the
+        // target dir and whether it accepted writes at all.
+        let writable = match probe_writable(&model_dir) {
+            Ok(()) => "yes".to_string(),
+            Err(e) => format!("NO ({e})"),
+        };
+        crashlog::log_info(format!(
+            "download start: {}\n  dir: {}\n  writable: {writable}",
+            id.label(),
+            model_dir.display(),
+        ));
         match id.kind() {
             ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
@@ -651,6 +727,11 @@ impl OneAsrApp {
                         self.clear_download_handle(id);
                     }
                     if progress.state == DownloadState::Completed {
+                        crashlog::log_info(format!(
+                            "download completed: {} → {}",
+                            id.label(),
+                            progress.model_dir.display()
+                        ));
                         // Install layout already has files. Bind active selection only
                         // when this download is for the currently selected ASR (or Align).
                         // CUDA never binds settings paths (`bind_download_if_active` → false);
@@ -690,9 +771,22 @@ impl OneAsrApp {
                         } else {
                             format!("{} 下载失败: {}", id.label(), progress.message)
                         };
-                        crashlog::log_error(&fail);
+                        // Byte counters separate dir-create failures (0 bytes)
+                        // from mid-file / rename failures for bare OS errors.
+                        crashlog::log_error(format!(
+                            "{fail}\n  dir: {}\n  bytes: {}/{}",
+                            progress.model_dir.display(),
+                            progress.downloaded_bytes,
+                            progress.total_bytes
+                        ));
                         self.flash_hint(fail, cx);
                     } else if progress.state == DownloadState::Cancelled {
+                        crashlog::log_info(format!(
+                            "download cancelled: {} at {}/{} bytes",
+                            id.label(),
+                            progress.downloaded_bytes,
+                            progress.total_bytes
+                        ));
                         self.flash_hint(format!("{} 已取消", id.label()), cx);
                     }
                     // Hide another size's terminal snapshot when viewing this size.
@@ -829,6 +923,9 @@ impl OneAsrApp {
         for path in paths {
             let path = path.canonicalize().unwrap_or(path);
             if !accept_input_path(&path) {
+                // Silent skip in the UI is intentional ("no reaction"), but a
+                // dropped file that never appears must be explainable later.
+                crashlog::log_info(format!("input rejected (unsupported): {}", path.display()));
                 continue;
             }
             if self.tasks.iter().any(|t| t.path == path) {
@@ -1435,6 +1532,16 @@ impl OneAsrApp {
         let mut settings = self.settings.clone();
         settings.language = normalize_source_language(&task_lang);
 
+        // Start context: failures log only `{id}` + message, so this entry is
+        // what makes a pasted log self-sufficient (which file/model/backend).
+        crashlog::log_info(format!(
+            "task start: {id}\n  file: {}\n  model: {}\n  backend: {}\n  language: {}",
+            path.display(),
+            settings.asr_model_dir.display(),
+            settings.backend,
+            settings.language,
+        ));
+
         // Hand off to the dedicated ASR worker — never block the UI thread.
         if self
             .job_tx
@@ -1446,6 +1553,9 @@ impl OneAsrApp {
             })
             .is_err()
         {
+            // The worker thread is gone (e.g. it panicked earlier) — every
+            // further start click would otherwise look like a silent no-op.
+            crashlog::log_error(format!("asr worker channel closed — task {id} cannot start"));
             self.busy = false;
             self.active_stage = None;
             if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
@@ -1538,8 +1648,11 @@ impl OneAsrApp {
         else {
             return;
         };
-        // OS explorer is the feedback; no in-app banner.
-        let _ = shell::open_containing_folder(&path);
+        // OS explorer is the feedback; no in-app banner — but a dead click must
+        // still leave a trace for "点开文件夹没反应" reports.
+        if let Err(e) = shell::open_containing_folder(&path) {
+            crashlog::log_warn(format!("open output folder failed: {e}\n  file: {}", path.display()));
+        }
         cx.notify();
     }
 

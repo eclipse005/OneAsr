@@ -246,6 +246,22 @@ pub fn file_meets_ready_threshold(path: &Path, expected_size: u64) -> bool {
     }
 }
 
+/// Probe whether `dir` accepts file writes (create → write → remove a temp file).
+///
+/// Mirrors the real download flow (`create_dir_all` then open `.part` for append),
+/// so a failure surfaces the same `io::Error` a download would hit. Used to log
+/// the environment when a download starts — with a bare OS error like
+/// `拒绝访问 (os error 5)` this is the only record of *where* it broke.
+pub fn probe_writable(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(format!(".oneasr-write-probe-{}", std::process::id()));
+    let mut f = std::fs::File::create(&probe)?;
+    f.write_all(b"ok")?;
+    f.flush()?;
+    drop(f);
+    std::fs::remove_file(&probe)
+}
+
 /// Download (or resume) into the install-layout dir for `id`.
 ///
 /// Progress callback receives **Downloading only**. Terminal state is `DownloadOutcome`.
@@ -595,6 +611,28 @@ mod tests {
         f.write_all(&[0u8; 500]).unwrap();
         drop(f);
         assert!(file_meets_ready_threshold(&path, 1000));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_writable_creates_dir_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr-probe-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        probe_writable(&dir).expect("fresh temp dir must be writable");
+        assert!(dir.is_dir());
+
+        // The probe file must not linger after the check.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().starts_with(".oneasr-write-probe"))
+            .collect();
+        assert!(leftovers.is_empty(), "probe files left behind: {leftovers:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

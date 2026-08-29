@@ -10,7 +10,8 @@ pub use catalog::{
 };
 pub use download::{
     download_model, file_meets_ready_threshold, is_cuda_runtime_ready, is_model_ready,
-    resolve_cuda_runtime_dir, DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState,
+    probe_writable, resolve_cuda_runtime_dir, DownloadHandle, DownloadOutcome, DownloadProgress,
+    DownloadState,
 };
 pub use path::{
     default_aligner_model_dir, default_asr_model_dir, init_native_library_path,
