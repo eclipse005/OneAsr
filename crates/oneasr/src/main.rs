@@ -133,7 +133,7 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(gpui::TitlebarOptions {
-                        title: Some("OneAsr - dabao005 - www.52pojie.cn".into()),
+                        title: Some("OneAsr".into()),
                         appears_transparent: true,
                         ..Default::default()
                     }),
@@ -1882,7 +1882,7 @@ impl OneAsrApp {
                             .text_xs()
                             .text_color(MUTED_SOFT)
                             .whitespace_nowrap()
-                            .child("OneAsr - dabao005 - www.52pojie.cn"),
+                            .child("OneAsr"),
                     ),
             )
             .child(caption_btn(
