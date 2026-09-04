@@ -2561,6 +2561,7 @@ impl OneAsrApp {
         let aligner_tip = aligner.clone();
         let output_dir = self.settings.resolved_output_dir().display().to_string();
         let output_dir_tip = output_dir.clone();
+        let save_next = self.settings.save_next_to_source;
         let dirty = self.is_settings_dirty(cx);
         // Use probe cache — never re-stat model dirs on every scroll paint.
         let asr_ready = self.asr_ready;
@@ -2841,13 +2842,32 @@ impl OneAsrApp {
                                     .text_sm()
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(TEXT)
-                                    .child("字幕输出目录"),
+                                    .child("字幕输出位置"),
                             )
                             .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(MUTED)
-                                    .child("完成后的 .srt 保存位置（默认安装目录下 output）"),
+                                div().flex().gap_1p5().children(
+                                    [(true, "视频同目录"), (false, "指定目录")]
+                                        .into_iter()
+                                        .map(|(next, label)| {
+                                            let active = save_next == next;
+                                            btn(
+                                                label,
+                                                if active {
+                                                    BtnKind::Primary
+                                                } else {
+                                                    BtnKind::Secondary
+                                                },
+                                                true,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    if this.settings.save_next_to_source == next {
+                                                        return;
+                                                    }
+                                                    this.settings.save_next_to_source = next;
+                                                    this.mark_settings_dirty(cx);
+                                                }),
+                                            )
+                                        }),
+                                ),
                             )
                             .child(
                                 div()
@@ -2859,6 +2879,7 @@ impl OneAsrApp {
                                     .border_color(LINE)
                                     .bg(PANEL)
                                     .overflow_hidden()
+                                    .opacity(if save_next { 0.45 } else { 1.0 })
                                     .hover(|s| s.border_color(ACCENT))
                                     .child(
                                         div()

@@ -90,6 +90,8 @@ fn main() {
     if align.is_dir() {
         settings.aligner_model_dir = align;
     }
+    // Headless runs keep the classic `{app_root}/output` SRT location.
+    settings.save_next_to_source = false;
     settings.normalize();
 
     eprintln!("=== OneAsr headless pipeline ===");

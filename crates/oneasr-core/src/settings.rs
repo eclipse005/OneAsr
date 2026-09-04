@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::media::resolve_app_root;
@@ -74,6 +74,10 @@ pub struct Settings {
     /// Directory for finished `.srt` files. Default: `{app_root}/output`.
     #[serde(default = "default_output_dir")]
     pub output_dir: PathBuf,
+    /// `true` → SRT saved next to the source media file; `output_dir` is the
+    /// fallback when that directory is not writable (or has no parent dir).
+    #[serde(default = "default_save_next_to_source")]
+    pub save_next_to_source: bool,
 }
 
 fn default_asr_model() -> String {
@@ -100,6 +104,10 @@ fn default_output_dir() -> PathBuf {
     default_output_dir_for(&resolve_app_root_dir())
 }
 
+fn default_save_next_to_source() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -112,6 +120,7 @@ impl Default for Settings {
             subtitle_length_preset: default_subtitle_length_preset(),
             chunk_target_seconds: default_chunk_target_seconds(),
             output_dir: default_output_dir(),
+            save_next_to_source: default_save_next_to_source(),
         }
     }
 }
@@ -247,6 +256,20 @@ impl Settings {
             return resolve_app_root_dir().join(&self.output_dir);
         }
         self.output_dir.clone()
+    }
+
+    /// Primary SRT folder for a media file: its own directory when
+    /// [`Self::save_next_to_source`] and the file has a parent dir, else
+    /// [`Self::resolved_output_dir`]. Callers fall back to
+    /// [`Self::resolved_output_dir`] when a write there fails.
+    pub fn srt_target_dir(&self, media: &Path) -> PathBuf {
+        if self.save_next_to_source
+            && let Some(parent) = media.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            return parent.to_path_buf();
+        }
+        self.resolved_output_dir()
     }
 
     /// Chunk target used by the pipeline (always within product range).
@@ -441,6 +464,43 @@ mod tests {
         s.normalize();
         assert!(!s.output_dir.as_os_str().is_empty());
         assert_eq!(s.resolved_output_dir(), s.output_dir);
+    }
+
+    #[test]
+    fn default_saves_next_to_source() {
+        assert!(Settings::default().save_next_to_source);
+    }
+
+    #[test]
+    fn srt_target_dir_uses_media_parent() {
+        let mut s = Settings::default();
+        s.output_dir = PathBuf::from(r"D:\App\output");
+        assert_eq!(
+            s.srt_target_dir(Path::new(r"D:\Movies\lecture.mp4")),
+            PathBuf::from(r"D:\Movies")
+        );
+    }
+
+    #[test]
+    fn srt_target_dir_falls_back_without_parent() {
+        let mut s = Settings::default();
+        s.output_dir = PathBuf::from(r"D:\App\output");
+        // Bare file name has no usable parent dir → configured output dir.
+        assert_eq!(
+            s.srt_target_dir(Path::new("lecture.mp4")),
+            PathBuf::from(r"D:\App\output")
+        );
+    }
+
+    #[test]
+    fn srt_target_dir_respects_output_dir_mode() {
+        let mut s = Settings::default();
+        s.save_next_to_source = false;
+        s.output_dir = PathBuf::from(r"D:\App\output");
+        assert_eq!(
+            s.srt_target_dir(Path::new(r"D:\Movies\lecture.mp4")),
+            PathBuf::from(r"D:\App\output")
+        );
     }
 
     #[test]

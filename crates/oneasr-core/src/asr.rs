@@ -747,7 +747,7 @@ impl<'a> Pipeline<'a> {
             let vad = self.stage_vad_plan(&conv)?;
             let (asr, compute) = self.stage_transcribe_all(&conv, &vad)?;
             let align = self.stage_align_all(&conv, &vad, &asr, compute)?;
-            self.stage_export(media_name, vad.speech_segments, align, export)
+            self.stage_export(input, media_name, vad.speech_segments, align, export)
         })();
         if srt_path.is_ok() {
             conv.remove_scratch();
@@ -1068,6 +1068,7 @@ impl<'a> Pipeline<'a> {
     /// Normalize tokens, run sentence boundary detection, write SRT + JSON.
     fn stage_export(
         &self,
+        input: &Path,
         media_name: &str,
         speech_segments: Vec<(f64, f64)>,
         align: AlignOutput,
@@ -1106,8 +1107,28 @@ impl<'a> Pipeline<'a> {
             return Err(AsrError::EmptySentenceBoundary);
         }
 
-        let srt_path = output_srt_path(&self.settings.resolved_output_dir(), &stem);
-        write_atomic(&srt_path, &srt_body)?;
+        // Primary target: next to the source media when enabled; fall back to
+        // the configured output dir when that write fails (permissions, …).
+        let fallback_dir = self.settings.resolved_output_dir();
+        let target_dir = self.settings.srt_target_dir(input);
+        let mut srt_path = output_srt_path(&target_dir, &stem);
+        if let Err(e) = write_atomic(&srt_path, &srt_body) {
+            if target_dir == fallback_dir {
+                return Err(e.into());
+            }
+            eprintln!(
+                "warning: SRT write failed in {} ({e}); saved to fallback {} instead",
+                target_dir.display(),
+                fallback_dir.display()
+            );
+            trace_log(format!(
+                "srt fallback: {} → {}",
+                target_dir.display(),
+                fallback_dir.display()
+            ));
+            srt_path = output_srt_path(&fallback_dir, &stem);
+            write_atomic(&srt_path, &srt_body)?;
+        }
 
         if let Some(words_path) = export.words_json.as_ref() {
             match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {

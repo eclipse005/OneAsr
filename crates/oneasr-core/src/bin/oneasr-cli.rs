@@ -347,6 +347,9 @@ fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
         settings.aligner_model_dir = align;
     }
     settings.output_dir = app_root.join("output");
+    // Headless runs keep writing to {app_root}/output (GUI's "next to source"
+    // default would be surprising for batch scripts).
+    settings.save_next_to_source = false;
 }
 
 fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
