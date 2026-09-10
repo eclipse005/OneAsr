@@ -17,9 +17,16 @@ serde_json = "1"
 thiserror = "2"
 anyhow = "1"
 
+# Shipped binaries are release-only; thin LTO + single codegen unit keep the
+# 40–56 MB GPU-enabled executables from growing and improve startup. Panics
+# stay unwinding because the GUI worker supervises tasks with `catch_unwind`.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 # Vendored gpui 0.2.2 with the Windows NC-button fix (upstream Zed PR #48330:
 # `default_prevented` must not make GPUI swallow WM_NCLBUTTONDOWN — otherwise
 # custom-titlebar drag / min / max / close are all dead). Revert to crates.io
-# once a released gpui includes the fix.
+# once a released gpui includes the fix. Local patch details: vendor/gpui/PATCHES.md.
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
