@@ -22,7 +22,7 @@ use std::time::Instant;
 use oneasr_core::media::slice_wav;
 use oneasr_core::{
     init_native_library_path, process_media_file_with_export, resolve_app_root,
-    resolve_cuda_runtime_dir, ProcessExportOptions, StageClock, StageUpdate, Settings,
+    resolve_cuda_runtime_dir, ProcessExportOptions, StageClock, StageUpdate, Settings, ModelId,
 };
 use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
@@ -82,7 +82,7 @@ transcribe options:
   --app-root <dir>         App root with bin/ffmpeg, models/, dll/  (default: this exe's install dir)
   --language <code>        zh|en|yue|ja|ko|...  (default: zh)
   --chunk-seconds <30-180> VAD chunk target (default: 60)
-  --backend <cuda|cpu|auto>
+  --backend <cuda|cpu|auto>  Default: auto (CUDA if runtime + GPU, else CPU)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy resulting SRT to this path after success
   --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
@@ -119,7 +119,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let chunk_seconds: u32 = arg(args, "--chunk-seconds")
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
-    let backend = arg(args, "--backend").unwrap_or_else(|| "cuda".into());
+    let backend = arg(args, "--backend").unwrap_or_else(|| "auto".into());
     let max_new_tokens = arg(args, "--max-new-tokens").and_then(|s| s.parse().ok());
     let output_copy = arg(args, "--output").map(PathBuf::from);
     let words_json = arg(args, "--words-json").map(PathBuf::from);
@@ -134,7 +134,8 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
 
     let mut settings = Settings::default();
     settings.language = language;
-    settings.chunk_target_seconds = chunk_seconds.clamp(30, 180);
+    // `Settings::normalize()` below clamps the chunk target to the product range.
+    settings.chunk_target_seconds = chunk_seconds;
     settings.backend = backend;
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
@@ -338,11 +339,18 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
 /// SRT path is driven by `settings.output_dir` (not the pipeline `app_root`
 /// argument alone), so headless runs must pin it here.
 fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
-    let asr_06 = app_root.join("models").join("Qwen3-ASR-0.6B");
-    let align = app_root.join("models").join("Qwen3-ForcedAligner-0.6B");
-    if asr_06.is_dir() {
-        settings.asr_model_dir = asr_06;
+    let models = app_root.join("models");
+    // Bind whichever catalog ASR size is actually installed under --app-root
+    // (0.6B preferred); otherwise keep the default path so the model check
+    // reports the missing directory.
+    if let Some(id) = ModelId::ASR_CHOICES
+        .into_iter()
+        .find(|id| models.join(id.as_str()).is_dir())
+    {
+        settings.asr_model = id.as_str().into();
+        settings.asr_model_dir = models.join(id.as_str());
     }
+    let align = models.join("Qwen3-ForcedAligner-0.6B");
     if align.is_dir() {
         settings.aligner_model_dir = align;
     }

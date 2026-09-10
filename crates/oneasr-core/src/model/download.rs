@@ -9,9 +9,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use super::catalog::{model_definition, ModelDefinition, ModelId};
+use super::catalog::{model_definition, ModelDefinition, ModelDownloadFile, ModelId};
 use super::path::{resolve_dll_dir, resolve_exe_dir};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,10 +172,10 @@ impl DownloadHandle {
     }
 }
 
-/// Whether all catalog files are present with non-truncated sizes.
+/// Whether all catalog files are present at their exact pinned sizes.
 ///
-/// Uses each file's catalog `expected_size` as a low watermark (50%): rejects
-/// empty / partial copies while staying tolerant of rounded CUDA size estimates.
+/// Hashing multi-GB weights on every readiness probe would be far too slow, so
+/// readiness is size-based; SHA-256 is verified once at download time.
 pub fn is_model_ready(id: ModelId) -> bool {
     let def = model_definition(id);
     def.download_files.iter().all(|file| {
@@ -233,15 +233,12 @@ fn cuda_runtime_ready_in(dir: &Path) -> bool {
     })
 }
 
-/// File exists and meets the size watermark (>= 50% of expected, min 1 byte).
-/// Returns `true` only when the file is present and non-empty; `false` for missing
-/// files, zero-byte files, or truncated downloads.
+/// File exists at exactly `expected_size` bytes (size read from the pinned
+/// revision). Returns `false` for missing, zero-byte, truncated, or oversized
+/// files. SHA-256 is checked separately when downloading.
 pub fn file_meets_ready_threshold(path: &Path, expected_size: u64) -> bool {
     match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => {
-            let min = (expected_size / 2).max(1);
-            meta.len() >= min
-        }
+        Ok(meta) if meta.is_file() => meta.len() == expected_size,
         _ => false,
     }
 }
@@ -282,22 +279,7 @@ pub fn download_model(
         };
     }
 
-    let (mut downloaded_bytes, mut total_bytes) = initial_bytes(&definition);
-
-    let emit_downloading =
-        |downloaded: u64, total: u64, speed: u64, message: &str, on_progress: &mut dyn FnMut(DownloadProgress)| {
-            on_progress(DownloadProgress {
-                state: DownloadState::Downloading,
-                model_id: id,
-                model_dir: model_dir.clone(),
-                downloaded_bytes: downloaded,
-                total_bytes: total,
-                speed_bytes_per_sec: speed,
-                message: message.to_string(),
-            });
-        };
-
-    emit_downloading(downloaded_bytes, total_bytes, 0, "starting", &mut on_progress);
+    let (downloaded_bytes, total_bytes) = initial_bytes(&definition);
 
     let client = match download_client() {
         Ok(c) => c,
@@ -310,153 +292,89 @@ pub fn download_model(
         }
     };
 
-    let mut last_speed_mark = Instant::now();
-    let mut last_speed_bytes = downloaded_bytes;
+    let mut ctx = FileDownloadCtx {
+        client,
+        cancel: &cancel,
+        model_id: id,
+        model_dir: &model_dir,
+        on_progress: &mut on_progress,
+        downloaded_bytes,
+        total_bytes,
+        last_speed_mark: Instant::now(),
+        last_speed_bytes: downloaded_bytes,
+    };
+    ctx.emit(0, "starting");
 
     for file in &definition.download_files {
-        if cancel.load(Ordering::Relaxed) {
-            return DownloadOutcome::Cancelled {
-                downloaded_bytes,
-                total_bytes,
-            };
+        if ctx.cancelled() {
+            return ctx.cancelled_outcome();
         }
 
-        let target = definition.model_dir.join(&file.file_name);
+        let target = model_dir.join(&file.file_name);
+        let part_path = model_dir.join(format!("{}.part", file.file_name.replace('/', "_")));
+
+        // A product file that does not match the pinned size is a truncated or
+        // stale leftover: drop it so `.part` is rebuilt from scratch.
         if target.is_file() {
-            continue;
+            if file_meets_ready_threshold(&target, file.expected_size) {
+                continue;
+            }
+            let _ = std::fs::remove_file(&target);
         }
 
         if let Some(parent) = target.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                return DownloadOutcome::Failed {
-                    message: e.to_string(),
-                    downloaded_bytes,
-                    total_bytes,
-                };
+                return ctx.failed(e.to_string());
             }
         }
 
-        let part_path = definition
-            .model_dir
-            .join(format!("{}.part", file.file_name.replace('/', "_")));
-        let part_bytes = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
-
-        let (mut response, restarted) =
-            match start_modelscope_download(&client, &file.url, &part_path, part_bytes) {
-                Ok(v) => v,
-                Err(e) => {
-                    return DownloadOutcome::Failed {
-                        message: format!("{}: {e}", file.file_name),
-                        downloaded_bytes,
-                        total_bytes,
-                    };
-                }
-            };
-        if restarted {
-            downloaded_bytes = downloaded_bytes.saturating_sub(part_bytes);
-        }
-        if !is_success(response.status()) {
-            return DownloadOutcome::Failed {
-                message: format!("下载失败 {}: HTTP {}", file.file_name, response.status()),
-                downloaded_bytes,
-                total_bytes,
-            };
-        }
-
-        // Prefer Content-Length / Content-Range for accurate remaining size.
-        if let Some(remote_total) = content_length_total(&response, part_bytes) {
-            // Reconcile: bytes already accounted + remaining for this file.
-            let other = total_bytes.saturating_sub(file.expected_size);
-            total_bytes = other.saturating_add(remote_total.max(file.expected_size));
-        }
-
-        let mut output = match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&part_path)
-        {
-            Ok(f) => f,
-            Err(e) => {
-                return DownloadOutcome::Failed {
-                    message: e.to_string(),
-                    downloaded_bytes,
-                    total_bytes,
-                };
-            }
-        };
-
-        let mut buf = [0_u8; 64 * 1024];
+        let mut attempt = 1_u32;
         loop {
-            if cancel.load(Ordering::Relaxed) {
-                // Keep `.part` so the next download resumes (same as failure path).
-                drop(output);
-                return DownloadOutcome::Cancelled {
-                    downloaded_bytes,
-                    total_bytes,
-                };
-            }
-            let n = match response.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) => {
-                    return DownloadOutcome::Failed {
-                        message: e.to_string(),
-                        downloaded_bytes,
-                        total_bytes,
-                    };
+            match download_one_file(&mut ctx, file, &target, &part_path) {
+                Ok(()) => break,
+                Err(FileDownloadError::Cancelled) => return ctx.cancelled_outcome(),
+                Err(FileDownloadError::Permanent(message)) => {
+                    return ctx.failed(format!("{}: {message}", file.file_name));
                 }
-            };
-            if let Err(e) = output.write_all(&buf[..n]) {
-                return DownloadOutcome::Failed {
-                    message: e.to_string(),
-                    downloaded_bytes,
-                    total_bytes,
-                };
+                Err(FileDownloadError::Transient(message)) if attempt < MAX_FILE_ATTEMPTS => {
+                    trace_download(&format!(
+                        "{} transient failure (attempt {attempt}/{MAX_FILE_ATTEMPTS}): {message}",
+                        file.file_name
+                    ));
+                    if !sleep_cancellable(ctx.cancel, retry_backoff(attempt)) {
+                        return ctx.cancelled_outcome();
+                    }
+                    attempt += 1;
+                }
+                Err(FileDownloadError::Transient(message)) => {
+                    return ctx.failed(format!(
+                        "{}: {message}（已尝试 {MAX_FILE_ATTEMPTS} 次，可再次点击下载续传）",
+                        file.file_name
+                    ));
+                }
             }
-            downloaded_bytes = downloaded_bytes.saturating_add(n as u64);
-            // Keep total ahead of downloaded so percent never looks stuck >100 from clamp alone.
-            if downloaded_bytes > total_bytes {
-                total_bytes = downloaded_bytes;
-            }
-            let elapsed = last_speed_mark.elapsed().as_secs_f64();
-            if elapsed >= 0.35 {
-                let speed = ((downloaded_bytes.saturating_sub(last_speed_bytes) as f64) / elapsed)
-                    .round() as u64;
-                last_speed_mark = Instant::now();
-                last_speed_bytes = downloaded_bytes;
-                emit_downloading(
-                    downloaded_bytes,
-                    total_bytes,
-                    speed,
-                    &file.file_name,
-                    &mut on_progress,
-                );
-            }
-        }
-        drop(output);
-        if let Some(parent) = target.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(e) = std::fs::rename(&part_path, &target) {
-            return DownloadOutcome::Failed {
-                message: e.to_string(),
-                downloaded_bytes,
-                total_bytes,
-            };
         }
     }
 
-    let bad: Vec<_> = definition
+    let (downloaded_bytes, total_bytes) = (ctx.downloaded_bytes, ctx.total_bytes);
+    let bad: Vec<String> = definition
         .download_files
         .iter()
-        .filter(|f| {
-            !file_meets_ready_threshold(&definition.model_dir.join(&f.file_name), f.expected_size)
+        .filter_map(|f| {
+            let path = definition.model_dir.join(&f.file_name);
+            if file_meets_ready_threshold(&path, f.expected_size) {
+                return None;
+            }
+            let actual = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            Some(format!(
+                "{}（{actual}/{} 字节）",
+                f.file_name, f.expected_size
+            ))
         })
-        .map(|f| f.file_name.clone())
         .collect();
     if !bad.is_empty() {
         return DownloadOutcome::Failed {
-            message: format!("文件缺失或损坏: {}", bad.join(", ")),
+            message: format!("文件缺失或损坏: {}", bad.join("、")),
             downloaded_bytes,
             total_bytes,
         };
@@ -464,6 +382,289 @@ pub fn download_model(
 
     DownloadOutcome::Completed {
         model_dir: definition.model_dir,
+    }
+}
+
+/// Shared mutable download state for the current file + progress emission.
+struct FileDownloadCtx<'a> {
+    client: &'a reqwest::blocking::Client,
+    cancel: &'a AtomicBool,
+    model_id: ModelId,
+    model_dir: &'a Path,
+    on_progress: &'a mut dyn FnMut(DownloadProgress),
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    last_speed_mark: Instant,
+    last_speed_bytes: u64,
+}
+
+impl FileDownloadCtx<'_> {
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    fn cancelled_outcome(&self) -> DownloadOutcome {
+        DownloadOutcome::Cancelled {
+            downloaded_bytes: self.downloaded_bytes,
+            total_bytes: self.total_bytes,
+        }
+    }
+
+    fn failed(&self, message: impl Into<String>) -> DownloadOutcome {
+        DownloadOutcome::Failed {
+            message: message.into(),
+            downloaded_bytes: self.downloaded_bytes,
+            total_bytes: self.total_bytes,
+        }
+    }
+
+    fn emit(&mut self, speed: u64, message: &str) {
+        (self.on_progress)(DownloadProgress {
+            state: DownloadState::Downloading,
+            model_id: self.model_id,
+            model_dir: self.model_dir.to_path_buf(),
+            downloaded_bytes: self.downloaded_bytes,
+            total_bytes: self.total_bytes,
+            speed_bytes_per_sec: speed,
+            message: message.to_string(),
+        });
+    }
+
+    /// Account `n` bytes written and emit a throttled progress tick.
+    fn add_written(&mut self, n: u64, file_name: &str) {
+        self.downloaded_bytes = self.downloaded_bytes.saturating_add(n);
+        // Keep total ahead of downloaded so percent never exceeds 100.
+        if self.downloaded_bytes > self.total_bytes {
+            self.total_bytes = self.downloaded_bytes;
+        }
+        let elapsed = self.last_speed_mark.elapsed().as_secs_f64();
+        if elapsed >= 0.35 {
+            let speed = ((self.downloaded_bytes.saturating_sub(self.last_speed_bytes) as f64)
+                / elapsed)
+                .round() as u64;
+            self.last_speed_mark = Instant::now();
+            self.last_speed_bytes = self.downloaded_bytes;
+            self.emit(speed, file_name);
+        }
+    }
+
+    /// Discard bytes that no longer count (server ignored Range and restarted).
+    fn subtract(&mut self, n: u64) {
+        self.downloaded_bytes = self.downloaded_bytes.saturating_sub(n);
+        self.last_speed_bytes = self.last_speed_bytes.saturating_sub(n);
+    }
+
+    /// Reconcile the UI total with the server-declared full size for this file.
+    fn reconcile_total(&mut self, file: &ModelDownloadFile, remote_total: u64) {
+        let other = self.total_bytes.saturating_sub(file.expected_size);
+        self.total_bytes = other.saturating_add(remote_total.max(file.expected_size));
+    }
+}
+
+#[derive(Debug)]
+enum FileDownloadError {
+    Cancelled,
+    /// Worth retrying (network hiccup, timeout, short body, 5xx).
+    Transient(String),
+    /// Retrying cannot help (4xx, disk error).
+    Permanent(String),
+}
+
+/// Attempts per file before surfacing the failure (resume makes retries cheap).
+const MAX_FILE_ATTEMPTS: u32 = 3;
+
+/// Per-read idle timeout: each `Response::read` call gets a fresh window, so a
+/// stalled connection fails within a minute while large, flowing downloads run
+/// to completion.
+const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// One HTTP attempt at downloading `file` into `part_path` (resume-aware),
+/// renaming to `target` only after both the exact size and SHA-256 match.
+fn download_one_file(
+    ctx: &mut FileDownloadCtx<'_>,
+    file: &ModelDownloadFile,
+    target: &Path,
+    part_path: &Path,
+) -> Result<(), FileDownloadError> {
+    let expected = file.expected_size;
+    let mut part_bytes = std::fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
+
+    // Stale oversized part (e.g. from a previous catalog revision): restart.
+    if part_bytes > expected {
+        discard_part(ctx, part_path, part_bytes, expected);
+        part_bytes = 0;
+    }
+
+    // A complete `.part` from a previous run needs no network round-trip, but
+    // it must pass SHA-256 before it may become the product file.
+    if part_bytes == expected {
+        match sha256_matches(part_path, file.sha256) {
+            Ok(true) => return finish_part_file(part_path, target),
+            Ok(false) => {
+                discard_part(ctx, part_path, part_bytes, expected);
+                part_bytes = 0;
+            }
+            Err(e) => return Err(FileDownloadError::Transient(e.to_string())),
+        }
+    }
+
+    let mut response = modelscope_request(ctx.client, &file.url, part_bytes)
+        .send()
+        .map_err(|e| FileDownloadError::Transient(e.to_string()))?;
+
+    if response.status() == reqwest::StatusCode::OK && part_bytes > 0 {
+        // Server ignored `Range` and served the whole file: discard the part
+        // (and its progress accounting) and request a clean copy.
+        discard_part(ctx, part_path, part_bytes, expected);
+        part_bytes = 0;
+        response = modelscope_request(ctx.client, &file.url, 0)
+            .send()
+            .map_err(|e| FileDownloadError::Transient(e.to_string()))?;
+    }
+
+    if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        // Resume offset past the remote end: the part cannot be trusted
+        // (a valid complete part was already finished above), so restart.
+        discard_part(ctx, part_path, part_bytes, expected);
+        return Err(FileDownloadError::Transient(
+            "服务器拒绝断点续传（HTTP 416），已重置".into(),
+        ));
+    }
+
+    if !is_success(response.status()) {
+        let status = response.status();
+        let message = format!("HTTP {status}");
+        // 4xx usually means a bad URL/permission, but timeout/rate-limit
+        // responses are worth another attempt.
+        let permanent = status.is_client_error()
+            && status != reqwest::StatusCode::REQUEST_TIMEOUT
+            && status != reqwest::StatusCode::TOO_MANY_REQUESTS;
+        return Err(if permanent {
+            FileDownloadError::Permanent(message)
+        } else {
+            FileDownloadError::Transient(message)
+        });
+    }
+
+    if part_bytes > 0 {
+        // Guard against a server that ignores Range: a resume must continue
+        // exactly where `.part` ends, otherwise two offsets would be spliced.
+        match content_range_start(&response) {
+            Some(start) if start == part_bytes => {}
+            _ => {
+                discard_part(ctx, part_path, part_bytes, expected);
+                return Err(FileDownloadError::Transient(
+                    "服务器返回了错误的续传偏移，已重置".into(),
+                ));
+            }
+        }
+    }
+
+    if let Some(remote_total) = content_length_total(&response, part_bytes) {
+        ctx.reconcile_total(file, remote_total);
+    }
+
+    let mut output = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(part_path)
+        .map_err(|e| FileDownloadError::Permanent(e.to_string()))?;
+
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        if ctx.cancelled() {
+            // Keep `.part` so the next download resumes.
+            return Err(FileDownloadError::Cancelled);
+        }
+        let n = match response.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            // Keep `.part`: the retry resumes from the bytes already written.
+            Err(e) => return Err(FileDownloadError::Transient(e.to_string())),
+        };
+        output
+            .write_all(&buf[..n])
+            .map_err(|e| FileDownloadError::Permanent(e.to_string()))?;
+        ctx.add_written(n as u64, &file.file_name);
+    }
+    drop(output);
+
+    let have = std::fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
+    if have != expected {
+        return Err(FileDownloadError::Transient(format!(
+            "文件不完整（{have}/{expected} 字节）"
+        )));
+    }
+    // The pinned revision is immutable, so content is verified before rename;
+    // a mismatch is dropped and re-downloaded (retry budget applies).
+    match sha256_matches(part_path, file.sha256) {
+        Ok(true) => finish_part_file(part_path, target),
+        Ok(false) => {
+            discard_part(ctx, part_path, have, expected);
+            Err(FileDownloadError::Transient(
+                "SHA-256 校验失败，已删除并重新下载".into(),
+            ))
+        }
+        Err(e) => Err(FileDownloadError::Transient(e.to_string())),
+    }
+}
+
+/// Delete an untrusted `.part` and remove its bytes from progress accounting
+/// (they were counted by `initial_bytes`/`add_written`).
+fn discard_part(ctx: &mut FileDownloadCtx<'_>, part_path: &Path, part_bytes: u64, expected: u64) {
+    let _ = std::fs::remove_file(part_path);
+    ctx.subtract(part_bytes.min(expected));
+}
+
+/// Compare `path`'s SHA-256 against `expected_hex` (case-insensitive).
+fn sha256_matches(path: &Path, expected_hex: &str) -> std::io::Result<bool> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0_u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Ok(hex.eq_ignore_ascii_case(expected_hex))
+}
+
+fn finish_part_file(part_path: &Path, target: &Path) -> Result<(), FileDownloadError> {
+    if let Some(parent) = target.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::rename(part_path, target).map_err(|e| FileDownloadError::Permanent(e.to_string()))
+}
+
+fn retry_backoff(attempt: u32) -> Duration {
+    Duration::from_secs(1 << attempt.saturating_sub(1).min(3))
+}
+
+/// Sleep in small slices so cancellation is honoured promptly.
+/// Returns `false` when cancelled.
+fn sleep_cancellable(cancel: &AtomicBool, total: Duration) -> bool {
+    let deadline = Instant::now() + total;
+    while Instant::now() < deadline {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !cancel.load(Ordering::Relaxed)
+}
+
+fn trace_download(msg: &str) {
+    if std::env::var_os("ONEASR_PIPELINE_TRACE").is_some() {
+        eprintln!("[download] {msg}");
     }
 }
 
@@ -481,6 +682,15 @@ fn content_length_total(response: &reqwest::blocking::Response, part_bytes: u64)
     response
         .content_length()
         .map(|len| part_bytes.saturating_add(len))
+}
+
+/// Start offset declared by a `Content-Range: bytes start-end/total` header.
+fn content_range_start(response: &reqwest::blocking::Response) -> Option<u64> {
+    let raw = response.headers().get(reqwest::header::CONTENT_RANGE)?;
+    let text = raw.to_str().ok()?;
+    // Skip the unit token ("bytes " / "bytes="), then parse "start-end/total".
+    let range = text.split_once(' ').map(|(_, rest)| rest).unwrap_or(text);
+    range.split('-').next()?.trim().parse().ok()
 }
 
 fn initial_bytes(definition: &ModelDefinition) -> (u64, u64) {
@@ -508,7 +718,11 @@ fn download_client() -> Result<&'static reqwest::blocking::Client, String> {
     static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
     match CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(30))
+            // Blocking `Response::read` applies this timeout to each read call,
+            // giving stalled connections a bounded wait without capping the
+            // total duration of a large download.
+            .timeout(READ_IDLE_TIMEOUT)
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) OneAsr/0.1")
             .build()
             .map_err(|e| e.to_string())
@@ -516,26 +730,6 @@ fn download_client() -> Result<&'static reqwest::blocking::Client, String> {
         Ok(client) => Ok(client),
         Err(e) => Err(e.clone()),
     }
-}
-
-fn start_modelscope_download(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    part_path: &Path,
-    part_bytes: u64,
-) -> Result<(reqwest::blocking::Response, bool), String> {
-    let mut response = modelscope_request(client, url, part_bytes)
-        .send()
-        .map_err(|e| e.to_string())?;
-    let mut restarted = false;
-    if response.status() == reqwest::StatusCode::OK && part_bytes > 0 {
-        let _ = std::fs::remove_file(part_path);
-        restarted = true;
-        response = modelscope_request(client, url, 0)
-            .send()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok((response, restarted))
 }
 
 fn modelscope_request(
@@ -587,7 +781,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn catalog_size_rejects_empty_and_truncated() {
+    fn catalog_size_rejects_empty_truncated_and_oversized() {
         let dir = std::env::temp_dir().join(format!(
             "oneasr-ready-test-{}",
             std::process::id()
@@ -604,15 +798,56 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(&[0u8; 100]).unwrap();
         drop(f);
-        // 100 < 50% of 1000
         assert!(!file_meets_ready_threshold(&path, 1000));
 
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(&[0u8; 500]).unwrap();
         drop(f);
+        assert!(!file_meets_ready_threshold(&path, 1000));
+
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&[0u8; 1000]).unwrap();
+        drop(f);
         assert!(file_meets_ready_threshold(&path, 1000));
 
+        // Oversized files are not "ready" either (pinned revision is exact).
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&[0u8; 1001]).unwrap();
+        drop(f);
+        assert!(!file_meets_ready_threshold(&path, 1000));
+
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sha256_matches_lowercase_and_uppercase() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr-sha-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("abc.bin");
+        std::fs::write(&path, b"abc").unwrap();
+
+        let known = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(sha256_matches(&path, known).unwrap());
+        assert!(sha256_matches(&path, &known.to_uppercase()).unwrap());
+        assert!(!sha256_matches(&path, &format!("0{known}")).unwrap());
+
+        std::fs::write(&path, b"abd").unwrap();
+        assert!(!sha256_matches(&path, known).unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sleep_cancellable_honours_cancel_flag() {
+        let cancelled = AtomicBool::new(true);
+        assert!(!sleep_cancellable(&cancelled, Duration::from_millis(200)));
+
+        let running = AtomicBool::new(false);
+        assert!(sleep_cancellable(&running, Duration::from_millis(10)));
     }
 
     #[test]

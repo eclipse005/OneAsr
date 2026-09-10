@@ -11,7 +11,8 @@
 //! **Scratch lifecycle**: `runs/{stem}_{ts}/` holds only the full 16 kHz WAV
 //! plus at most one temporary chunk file. Product output is
 //! `{settings.output_dir}/{stem}.srt` (default `{app}/output`, atomic write).
-//! On success the scratch dir is removed.
+//! The scratch dir is removed when `ConvertedAudio` drops — success, failure,
+//! or panic — unless `ONEASR_KEEP_SCRATCH=1` is set for debugging.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -64,7 +65,7 @@ pub enum AsrError {
     TranscribeChunk(usize, String),
     #[error("对齐失败 chunk {0}（{1}）: {2}")]
     AlignChunk(usize, String, String),
-    #[error("{role} 模型文件不全（缺少 {missing}）: {dir}")]
+    #[error("{role} 模型文件不完整（{missing}）: {dir}")]
     ModelIncomplete {
         role: &'static str,
         missing: String,
@@ -316,33 +317,88 @@ fn cached_ready_store(role: ModelRole, canonical: PathBuf) {
 }
 
 /// Check ASR model directory with success-path caching.
+///
+/// Catalog-named install-layout dirs are validated against the catalog's exact
+/// file sizes (same criterion used after download); custom user-picked dirs
+/// fall back to an existence + non-trivial-size check so alternate copies of
+/// the same model still work.
 pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
-    check_model_dir(ModelRole::Asr, model_dir, &["config.json", "tokenizer.json"])
+    run_cached_model_check(ModelRole::Asr, model_dir, || {
+        match crate::model::ModelId::try_from_asr_dir(model_dir) {
+            Some(id) => check_model_dir_against_catalog("ASR", model_dir, id),
+            None => check_model_dir_inner("ASR", model_dir, &["config.json", "tokenizer.json"]),
+        }
+    })
 }
 
 /// Check Aligner model directory with success-path caching.
+///
+/// The install-layout dir (`Qwen3-ForcedAligner-0.6B`) is validated against
+/// the catalog's exact sizes; custom user-picked dirs fall back to an
+/// existence + non-trivial-size check.
 pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
-    check_model_dir(ModelRole::Aligner, model_dir, &["config.json"])
+    run_cached_model_check(ModelRole::Aligner, model_dir, || {
+        match crate::model::ModelId::try_from_aligner_dir(model_dir) {
+            Some(id) => check_model_dir_against_catalog("Aligner", model_dir, id),
+            None => check_model_dir_inner("Aligner", model_dir, &["config.json"]),
+        }
+    })
 }
 
-fn check_model_dir(
+fn run_cached_model_check(
     role: ModelRole,
     model_dir: &Path,
-    required: &[&str],
+    check: impl FnOnce() -> Result<(), AsrError>,
 ) -> Result<(), AsrError> {
-    let role_label = match role {
-        ModelRole::Asr => "ASR",
-        ModelRole::Aligner => "Aligner",
-    };
     if let Ok(canonical) = std::fs::canonicalize(model_dir) {
         if cached_ready_hit(role, &canonical) {
             return Ok(());
         }
-        check_model_dir_inner(role_label, model_dir, required)?;
+        check()?;
         cached_ready_store(role, canonical);
         return Ok(());
     }
-    check_model_dir_inner(role_label, model_dir, required)
+    check()
+}
+
+/// Validate a directory against a catalog definition (present + size contract).
+fn check_model_dir_against_catalog(
+    role: &'static str,
+    model_dir: &Path,
+    id: crate::model::ModelId,
+) -> Result<(), AsrError> {
+    if !model_dir.is_dir() {
+        return Err(AsrError::Other(format!(
+            "{role} 模型目录不存在: {}",
+            model_dir.display()
+        )));
+    }
+    let definition = crate::model::model_definition(id);
+    let missing: Vec<String> = definition
+        .download_files
+        .iter()
+        .filter_map(|file| {
+            let path = model_dir.join(&file.file_name);
+            if crate::model::file_meets_ready_threshold(&path, file.expected_size) {
+                return None;
+            }
+            let actual = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            Some(if actual == 0 {
+                format!("{}（不存在）", file.file_name)
+            } else {
+                format!("{}（{actual}/{} 字节）", file.file_name, file.expected_size)
+            })
+        })
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(AsrError::ModelIncomplete {
+            role,
+            missing: join_missing(&missing),
+            dir: model_dir.display().to_string(),
+        })
+    }
 }
 
 fn check_model_dir_inner(
@@ -683,6 +739,9 @@ pub fn process_media_file_with_export<'a>(
 // ── Intermediate stage results ──────────────────────────────────────────
 
 /// Converted 16 kHz mono PCM WAV + the scratch dir that owns it.
+///
+/// The scratch dir is removed on drop (success, failure, or panic). Set
+/// `ONEASR_KEEP_SCRATCH=1` to keep it for post-mortem debugging.
 struct ConvertedAudio {
     work_dir: PathBuf,
     wav_path: PathBuf,
@@ -694,10 +753,20 @@ impl ConvertedAudio {
     fn chunk_tmp(&self) -> PathBuf {
         self.work_dir.join("chunk_tmp.wav")
     }
+}
 
-    fn remove_scratch(self) {
+impl Drop for ConvertedAudio {
+    fn drop(&mut self) {
+        if keep_scratch() {
+            return;
+        }
         let _ = std::fs::remove_dir_all(&self.work_dir);
     }
+}
+
+/// Opt-in scratch retention (`ONEASR_KEEP_SCRATCH=1`); unset/empty/`0` disables.
+fn keep_scratch() -> bool {
+    std::env::var_os("ONEASR_KEEP_SCRATCH").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 /// VAD segmentation result + chunk plan.
@@ -742,17 +811,12 @@ impl<'a> Pipeline<'a> {
         app_root: &Path,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
+        // `conv` owns the scratch dir; dropping it cleans up on every path.
         let conv = self.stage_convert(input, app_root)?;
-        let srt_path = (|| {
-            let vad = self.stage_vad_plan(&conv)?;
-            let (asr, compute) = self.stage_transcribe_all(&conv, &vad)?;
-            let align = self.stage_align_all(&conv, &vad, &asr, compute)?;
-            self.stage_export(input, media_name, vad.speech_segments, align, export)
-        })();
-        if srt_path.is_ok() {
-            conv.remove_scratch();
-        }
-        srt_path
+        let vad = self.stage_vad_plan(&conv)?;
+        let (asr, compute) = self.stage_transcribe_all(&conv, &vad)?;
+        let align = self.stage_align_all(&conv, &vad, &asr, compute)?;
+        self.stage_export(input, media_name, vad.speech_segments, align, export)
     }
 
     fn stage_convert(&self, input: &Path, app_root: &Path) -> Result<ConvertedAudio, AsrError> {
@@ -766,9 +830,15 @@ impl<'a> Pipeline<'a> {
         std::fs::create_dir_all(&work_dir)?;
 
         let wav_path = work_dir.join("input_16k.wav");
-        convert_to_16k_mono_wav(input, &wav_path)?;
+        if let Err(e) = convert_to_16k_mono_wav(input, &wav_path) {
+            let _ = std::fs::remove_dir_all(&work_dir);
+            return Err(e.into());
+        }
 
-        let duration = wav_duration_sec(&wav_path).unwrap_or(0.0) as f32;
+        let duration = wav_duration_sec(&wav_path).ok_or_else(|| {
+            let _ = std::fs::remove_dir_all(&work_dir);
+            AsrError::Other("无法读取转码后音频时长".into())
+        })? as f32;
         let chunk_sec = self.settings.chunk_target_seconds_clamped() as f32;
 
         Ok(ConvertedAudio {
@@ -786,23 +856,40 @@ impl<'a> Pipeline<'a> {
         self.emit(StageUpdate::new(AsrStage::Planning));
 
         let (chunks, speech_segments) = if conv.duration > conv.chunk_sec {
-            let speech = vad::run_vad(&conv.wav_path)?;
-            let silences =
-                vad::speech_to_silences(&speech, conv.duration, MIN_SILENCE_FALLBACK);
-            let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[vad] duration={:.1}s speech={} silence_gaps={} chunks={}",
-                conv.duration,
-                speech.len(),
-                silences.len(),
-                planned.len(),
-            );
-            let pairs: Vec<(f64, f64)> = speech
-                .iter()
-                .map(|&(s, e)| (s as f64, e as f64))
-                .collect();
-            (planned, pairs)
+            match vad::run_vad(&conv.wav_path) {
+                Ok(speech) => {
+                    let silences =
+                        vad::speech_to_silences(&speech, conv.duration, MIN_SILENCE_FALLBACK);
+                    let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[vad] duration={:.1}s speech={} silence_gaps={} chunks={}",
+                        conv.duration,
+                        speech.len(),
+                        silences.len(),
+                        planned.len(),
+                    );
+                    let pairs: Vec<(f64, f64)> = speech
+                        .iter()
+                        .map(|&(s, e)| (s as f64, e as f64))
+                        .collect();
+                    (planned, pairs)
+                }
+                Err(e) => {
+                    // VAD improves cut placement but is not a hard requirement:
+                    // fall back to fixed-duration cuts so a VAD failure does
+                    // not abort the whole job (boundary scoring then degrades
+                    // to punctuation + length budget).
+                    trace_log(format!(
+                        "VAD failed, falling back to {:.0}s fixed chunks: {e}",
+                        conv.chunk_sec
+                    ));
+                    (
+                        vad::plan_chunks(conv.duration, &[], conv.chunk_sec),
+                        Vec::new(),
+                    )
+                }
+            }
         } else {
             (
                 vec![vad::Chunk {
@@ -1233,7 +1320,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let err = check_asr_model_dir(&dir).unwrap_err().to_string();
-        assert!(err.contains("不全") || err.contains("缺少") || err.contains("不存在"), "{err}");
+        assert!(err.contains("不完整"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1400,7 +1487,7 @@ mod tests {
 
         let err = check_asr_model_dir(&dir).unwrap_err().to_string();
         assert!(err.contains("model-00001-of-00001.safetensors"), "{err}");
-        assert!(err.contains("缺少"), "{err}");
+        assert!(err.contains("不完整"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

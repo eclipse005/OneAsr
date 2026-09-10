@@ -42,18 +42,65 @@ fn token_allows_space_after(token: &str) -> bool {
 }
 
 fn token_has_spacing_word(token: &str) -> bool {
-    token
-        .chars()
-        .any(|ch| ch.is_ascii_alphanumeric() || is_hangul(ch))
+    token.chars().any(|ch| ch.is_alphanumeric() && !is_no_space_script(ch))
 }
 
-fn is_hangul(ch: char) -> bool {
+/// Scripts that do not separate words with spaces: Han ideographs and kana
+/// (including half-width katakana). Hangul is deliberately absent — Korean
+/// writes word spacing, so Hangul must keep the same behavior as Latin.
+fn is_no_space_script(ch: char) -> bool {
     matches!(
         ch as u32,
-        0x1100..=0x11FF
-            | 0x3130..=0x318F
-            | 0xA960..=0xA97F
-            | 0xAC00..=0xD7AF
-            | 0xD7B0..=0xD7FF
+        0x3040..=0x30FF        // Hiragana + Katakana
+            | 0x3400..=0x4DBF  // CJK Unified Ideographs Extension A
+            | 0x4E00..=0x9FFF  // CJK Unified Ideographs
+            | 0xF900..=0xFAFF  // CJK Compatibility Ideographs
+            | 0xFF66..=0xFF9D  // Half-width Katakana
+            | 0x20000..=0x2FA1F // CJK Extensions B–F + Compatibility Supplement
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn join(parts: &[&str]) -> String {
+        join_words(parts.iter().copied())
+    }
+
+    #[test]
+    fn latin_uses_spaces() {
+        assert_eq!(join(&["Hello", "world"]), "Hello world");
+    }
+
+    #[test]
+    fn cyrillic_uses_spaces() {
+        assert_eq!(join(&["Привет", "мир"]), "Привет мир");
+        assert_eq!(join(&["Привет,", "мир!"]), "Привет, мир!");
+    }
+
+    #[test]
+    fn accented_latin_words_use_spaces() {
+        assert_eq!(join(&["il", "va", "à", "Paris"]), "il va à Paris");
+        assert_eq!(join(&["lui", "è", "andato"]), "lui è andato");
+        assert_eq!(join(&["été", "là"]), "été là");
+    }
+
+    #[test]
+    fn cjk_has_no_spaces() {
+        assert_eq!(join(&["你好", "世界"]), "你好世界");
+        assert_eq!(join(&["こんにちは", "世界"]), "こんにちは世界");
+        assert_eq!(join(&["カタカナ", "テスト"]), "カタカナテスト");
+    }
+
+    #[test]
+    fn korean_uses_spaces() {
+        assert_eq!(join(&["안녕", "하세요"]), "안녕 하세요");
+    }
+
+    #[test]
+    fn punctuation_glues_to_previous_word() {
+        assert_eq!(join(&["Hello", ",", "world", "!"]), "Hello, world!");
+        assert_eq!(join(&["你好", "，", "世界", "。"]), "你好，世界。");
+    }
 }

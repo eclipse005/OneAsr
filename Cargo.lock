@@ -3068,9 +3068,11 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2",
+ "system-configuration 0.7.0",
  "tokio",
  "tower-service",
  "tracing",
+ "windows-registry 0.4.0",
 ]
 
 [[package]]
@@ -4301,7 +4303,6 @@ dependencies = [
  "gpui",
  "oneasr-core",
  "rfd",
- "unicode-segmentation",
  "windows 0.61.3",
  "winresource",
 ]
@@ -4322,6 +4323,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
 ]
 
@@ -4920,7 +4922,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 [[package]]
 name = "punkt"
 version = "2.0.0"
-source = "git+https://github.com/eclipse005/rust-punkt.git#ca9187276d9478c0bc67c1cc3cd787de88f6e293"
+source = "git+https://github.com/eclipse005/rust-punkt.git?rev=ca9187276d9478c0bc67c1cc3cd787de88f6e293#ca9187276d9478c0bc67c1cc3cd787de88f6e293"
 dependencies = [
  "phf 0.11.3",
  "serde_json",
@@ -6492,6 +6494,17 @@ name = "system-configuration"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
+dependencies = [
+ "bitflags 2.13.0",
+ "core-foundation 0.9.4",
+ "system-configuration-sys",
+]
+
+[[package]]
+name = "system-configuration"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
 dependencies = [
  "bitflags 2.13.0",
  "core-foundation 0.9.4",
@@ -8340,7 +8353,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
- "system-configuration",
+ "system-configuration 0.6.1",
  "tokio",
  "tokio-rustls",
  "tokio-socks",

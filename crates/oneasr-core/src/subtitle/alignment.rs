@@ -38,6 +38,7 @@ pub fn align_text_to_timestamps(full_text: &str, word_timestamps: &[WordToken]) 
         .collect();
 
     let mut result: Vec<WordToken> = word_timestamps.to_vec();
+    let total = word_timestamps.len();
     let mut matched = 0usize;
     let mut word_idx = 0usize;
     let mut clean_pos = 0usize;
@@ -45,6 +46,12 @@ pub fn align_text_to_timestamps(full_text: &str, word_timestamps: &[WordToken]) 
     let mut last_attached_original_end = 0usize;
 
     while word_idx < word_timestamps.len() && clean_pos < clean_chars.len() {
+        // The match-quality floor (<50%) is known up front: if the best
+        // possible outcome can no longer clear it, stop before spending
+        // another O(text) scan per remaining word.
+        if (matched + (total - word_idx)) * 2 < total {
+            return word_timestamps.to_vec();
+        }
         let target = &cleaned_words[word_idx];
         if target.is_empty() {
             word_idx += 1;
@@ -124,8 +131,7 @@ pub fn align_text_to_timestamps(full_text: &str, word_timestamps: &[WordToken]) 
         );
     }
 
-    let total = word_timestamps.len() as f64;
-    if total > 0.0 && (matched as f64) < total * 0.5 {
+    if total > 0 && (matched as f64) < total as f64 * 0.5 {
         return word_timestamps.to_vec();
     }
 

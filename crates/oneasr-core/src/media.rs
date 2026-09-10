@@ -24,7 +24,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use thiserror::Error;
 
@@ -122,6 +122,47 @@ fn ffmpeg_command(ffmpeg: &Path) -> Command {
     cmd
 }
 
+/// Upper bound for a metadata probe (headers only, never full decode).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Run a command with a wall-clock budget, returning `(success, stderr)`.
+///
+/// Returns `None` when the child could not be spawned or was killed after
+/// `timeout`. Stderr is drained on a helper thread so a chatty child cannot
+/// deadlock on a full pipe while we wait.
+fn run_capture_stderr(cmd: &mut Command, timeout: Duration) -> Option<(bool, String)> {
+    use std::process::Stdio;
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let mut stderr_pipe = child.stderr.take();
+    let reader = thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_string(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => {
+                let _ = child.kill();
+                break None;
+            }
+        }
+    };
+    let stderr = reader.join().unwrap_or_default();
+    status.map(|s| (s.success(), stderr))
+}
+
 /// True when `path` is already the pipeline PCM contract (16 kHz mono s16le).
 pub fn is_target_pcm_wav(path: &Path) -> bool {
     let Ok(reader) = hound::WavReader::open(path) else {
@@ -163,8 +204,10 @@ pub fn probe_duration_sec(input: &Path) -> Option<f64> {
         "-i",
     ])
     .arg(input);
-    let output = cmd.output().ok()?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // ffmpeg exits non-zero without an output target; duration still lands on
+    // stderr. The timeout matters more: a corrupt container must not pin a
+    // probe worker (and with it the whole import queue) forever.
+    let (_success, stderr) = run_capture_stderr(&mut cmd, PROBE_TIMEOUT)?;
     parse_duration_from_ffmpeg_stderr(&stderr)
 }
 
@@ -377,10 +420,9 @@ pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> 
         .unwrap_or_else(|| "out".into());
     let tmp = parent.join(format!(".{file_name}.{}.tmp", atomic_tmp_suffix()));
     std::fs::write(&tmp, data.as_ref())?;
-    // Windows: rename fails if destination exists.
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
+    // `fs::rename` maps to MoveFileExW(MOVEFILE_REPLACE_EXISTING) on Windows,
+    // so it atomically replaces an existing destination. Deleting first would
+    // open a window where a crash/AV lock loses the previous good file.
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {

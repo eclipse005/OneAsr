@@ -43,17 +43,8 @@ impl SpeechSegmentIndex {
         if self.segments.len() < 2 {
             return false;
         }
-        let cut = (left_end_sec + right_start_sec) / 2.0;
-        for window in self.segments.windows(2) {
-            let silence_start = window[0].1;
-            let silence_end = window[1].0;
-            if cut >= silence_start - CUT_POINT_TOLERANCE_SEC
-                && cut <= silence_end + CUT_POINT_TOLERANCE_SEC
-            {
-                return true;
-            }
-        }
-        false
+        self.gap_index_at((left_end_sec + right_start_sec) / 2.0)
+            .is_some()
     }
 
     /// Width (seconds) of the VAD silence gap that the cut point between
@@ -66,20 +57,35 @@ impl SpeechSegmentIndex {
         left_end_sec: f64,
         right_start_sec: f64,
     ) -> f64 {
-        if self.segments.len() < 2 {
+        let Some(i) = self.gap_index_at((left_end_sec + right_start_sec) / 2.0) else {
             return 0.0;
-        }
-        let cut = (left_end_sec + right_start_sec) / 2.0;
-        for window in self.segments.windows(2) {
-            let silence_start = window[0].1;
-            let silence_end = window[1].0;
-            if cut >= silence_start - CUT_POINT_TOLERANCE_SEC
-                && cut <= silence_end + CUT_POINT_TOLERANCE_SEC
-            {
-                return (silence_end - silence_start).max(0.0);
+        };
+        (self.segments[i + 1].0 - self.segments[i].1).max(0.0)
+    }
+
+    /// Binary search for the gap (between segments `i` and `i + 1`) whose
+    /// tolerance-expanded window contains `cut`.
+    ///
+    /// Segments are sorted and non-overlapping, so gap ends are non-decreasing
+    /// and `partition_point` semantics apply. This replaces the previous
+    /// O(segments) scan that ran once per word-pair query (millions of times on
+    /// long media).
+    fn gap_index_at(&self, cut: f64) -> Option<usize> {
+        let gap_count = self.segments.len() - 1;
+        let mut lo = 0usize;
+        let mut hi = gap_count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            // Gap `mid` ends where segment `mid + 1` starts.
+            if self.segments[mid + 1].0 + CUT_POINT_TOLERANCE_SEC < cut {
+                lo = mid + 1;
+            } else {
+                hi = mid;
             }
         }
-        0.0
+        // `lo` is the first gap with `end + tolerance >= cut`; it matches when
+        // the cut is not past its start + tolerance.
+        (lo < gap_count && self.segments[lo].1 - CUT_POINT_TOLERANCE_SEC <= cut).then_some(lo)
     }
 }
 
