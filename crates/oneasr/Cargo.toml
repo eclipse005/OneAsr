@@ -20,7 +20,6 @@ oneasr-core = { workspace = true, default-features = false }
 gpui = "0.2.2"
 anyhow = { workspace = true }
 rfd = "0.15"
-unicode-segmentation = "1"
 
 [target.'cfg(windows)'.dependencies]
 # Used by `crashlog` for human-readable local timestamps in `oneasr-error.log`.

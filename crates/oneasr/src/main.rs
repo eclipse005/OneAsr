@@ -39,7 +39,7 @@ use oneasr_core::{
     is_cuda_runtime_ready, is_model_ready, next_queue_seq, normalize_source_language,
     process_media_file_with_progress, probe_duration_async, probe_writable, resolve_app_root,
     resolve_app_root_dir, resolve_cuda_runtime_dir, source_language_by_id, AsrStage,
-    DownloadHandle, DownloadProgress, DownloadState, DurationState, ModelId, ModelKind,
+    DownloadHandle, DownloadProgress, DownloadState, ModelId, ModelKind,
     Settings, StageClock, StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC,
     CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
 };
@@ -212,6 +212,8 @@ struct OneAsrApp {
     /// Finished (ok or err) count within the current batch.
     batch_done: usize,
     busy: bool,
+    /// One-shot: the ASR worker channel was found dead (log/recover only once).
+    worker_channel_dead: bool,
     picking: bool,
     model_status: ModelStatus,
     /// Cached settings-panel readiness (refreshed in [`Self::refresh_model_probe`], not per frame).
@@ -221,8 +223,6 @@ struct OneAsrApp {
     /// Soft status-bar hint (no toast). Auto-clears after a few seconds.
     status_hint: Option<SharedString>,
     status_hint_until: Option<Instant>,
-    /// Advances while any task is probing duration (drives soft spinner).
-    ui_phase: u8,
     /// Live stage label for the row currently Processing (from worker Progress).
     active_stage: Option<(String, SharedString)>,
     /// Latest download progress (settings panel).
@@ -261,18 +261,31 @@ impl OneAsrApp {
                             let id_for_progress = id.clone();
                             let ptx = worker_tx.clone();
                             let mut clock = StageClock::new();
-                            let result = run_task(
-                                &path,
-                                &name,
-                                &settings,
-                                |update| {
-                                    clock.note(&update);
-                                    let _ = ptx.send(WorkerMsg::Progress {
-                                        id: id_for_progress.clone(),
-                                        stage: SharedString::from(update.label()),
-                                    });
+                            // A panic inside the pipeline must not kill the shared
+                            // worker (that would strand `Processing` rows forever).
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                || {
+                                    run_task(
+                                        &path,
+                                        &name,
+                                        &settings,
+                                        |update| {
+                                            clock.note(&update);
+                                            let _ = ptx.send(WorkerMsg::Progress {
+                                                id: id_for_progress.clone(),
+                                                stage: SharedString::from(update.label()),
+                                            });
+                                        },
+                                    )
                                 },
-                            );
+                            ))
+                            .unwrap_or_else(|payload| {
+                                let message = panic_message(payload);
+                                crashlog::log_error(format!(
+                                    "ASR worker panic (task {id}): {message}"
+                                ));
+                                Err(format!("处理线程异常: {message}"))
+                            });
                             let timing = clock.finish();
                             let _ = worker_tx.send(WorkerMsg::Finished {
                                 id,
@@ -396,6 +409,7 @@ impl OneAsrApp {
             batch_goal: None,
             batch_done: 0,
             busy: false,
+            worker_channel_dead: false,
             picking: false,
             model_status: ModelStatus::NotReady,
             asr_ready: false,
@@ -403,7 +417,6 @@ impl OneAsrApp {
             cuda_ready: false,
             status_hint: None,
             status_hint_until: None,
-            ui_phase: 0,
             active_stage: None,
             asr_download: None,
             align_download: None,
@@ -466,7 +479,8 @@ impl OneAsrApp {
         );
 
         let tx = self.tx.clone();
-        thread::Builder::new()
+        let spawn_dir = model_dir.clone();
+        let spawn_result = thread::Builder::new()
             .name(format!("oneasr-dl-{}", id.as_str()))
             .spawn(move || {
                 let outcome = download_model(&handle, |p| {
@@ -475,8 +489,23 @@ impl OneAsrApp {
                 // Single terminal event — never double-emit Failed from Err.
                 let snap = DownloadProgress::from_outcome(id, handle.model_dir.clone(), &outcome);
                 let _ = tx.send(WorkerMsg::ModelDownload(snap));
-            })
-            .ok();
+            });
+        if let Err(e) = spawn_result {
+            // Roll the optimistic Downloading state back so the user can retry
+            // instead of being stuck on a handle that will never report.
+            crashlog::log_error(format!("spawn download thread failed: {e}"));
+            self.clear_download_handle(id);
+            self.set_download_progress(DownloadProgress {
+                state: DownloadState::Failed,
+                model_id: id,
+                model_dir: spawn_dir,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                speed_bytes_per_sec: 0,
+                message: e.to_string(),
+            });
+            self.flash_hint(format!("下载启动失败: {e}"), cx);
+        }
         cx.notify();
     }
 
@@ -640,14 +669,6 @@ impl OneAsrApp {
     }
 
     fn poll_worker(&mut self, cx: &mut Context<Self>) {
-        // Soft UI phase tick: duration probe · pending breath · processing dots.
-        let need_phase = self.tasks.iter().any(|t| {
-            t.duration == DurationState::Probing || t.status == TaskStatus::Processing
-        });
-        if need_phase {
-            self.ui_phase = self.ui_phase.wrapping_add(1);
-            cx.notify();
-        }
         // Expire status-bar hints.
         if let Some(until) = self.status_hint_until {
             if Instant::now() >= until {
@@ -812,7 +833,6 @@ impl OneAsrApp {
                     {
                         self.active_stage = None;
                     }
-                    self.refresh_model_probe();
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                         t.timing = timing.has_breakdown().then_some(timing);
                         match result {
@@ -838,7 +858,33 @@ impl OneAsrApp {
                     self.try_start_next(cx);
                 }
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Disconnected) => {
+                    // Worker died without reporting: do not leave rows stuck in
+                    // Processing/Queued or `busy` latched forever. Guard with a
+                    // one-shot flag — poll_worker keeps running every 80 ms.
+                    if !self.worker_channel_dead {
+                        self.worker_channel_dead = true;
+                        crashlog::log_error(
+                            "worker channel disconnected — marking in-flight tasks failed",
+                        );
+                        let mut affected = false;
+                        for t in &mut self.tasks {
+                            if matches!(t.status, TaskStatus::Processing | TaskStatus::Queued) {
+                                t.status = TaskStatus::Error;
+                                t.queue_seq = None;
+                                t.error = Some("ASR 工作线程已退出".into());
+                                affected = true;
+                            }
+                        }
+                        if affected {
+                            self.busy = false;
+                            self.active_stage = None;
+                            self.end_batch_if_idle(cx);
+                        }
+                        cx.notify();
+                    }
+                    break;
+                }
             }
         }
     }
@@ -1201,12 +1247,10 @@ impl OneAsrApp {
     }
 
     fn animations_active(&self) -> bool {
-        // Drawer slide + processing status dots + row enter/exit + empty-wave hover.
+        // Drawer slide + row enter/exit + empty-wave hover. Processing rows are
+        // deliberately excluded: their visuals are static, and a multi-hour ASR
+        // run must not force an animation frame for the whole window.
         let drawer = (self.settings_progress() - self.settings_to).abs() > 0.002;
-        let processing = self
-            .tasks
-            .iter()
-            .any(|t| t.status == TaskStatus::Processing);
         let row_anim = !self.exiting.is_empty() || !self.entering.is_empty();
         // Keep RAF while amp eases out after mouse leaves (smooth collapse to flat).
         let empty_wave =
@@ -1214,7 +1258,7 @@ impl OneAsrApp {
         let timing_pop = (self.timing_popover_progress() - self.timing_pop_to).abs() > 0.002
             || self.timing_hover_since.is_some()
             || self.timing_leave_since.is_some();
-        drawer || processing || row_anim || empty_wave || timing_pop
+        drawer || row_anim || empty_wave || timing_pop
     }
 
     /// Advance empty-wave smoothing (cursor follow + amp ease). Call once per frame while active.
@@ -1658,6 +1702,17 @@ impl OneAsrApp {
 
 }
 
+/// Human-readable message from a caught panic payload.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "未知 panic".into()
+    }
+}
+
 fn run_task(
     path: &std::path::Path,
     name: &str,
@@ -2064,7 +2119,6 @@ impl OneAsrApp {
         // Rows stay in `tasks` order. Exit tombstones fade in place (1→0);
         // enter map fades new rows (0→1). Exiting rows are non-interactive.
         let items = self.snapshot_task_rows(Instant::now());
-        let phase = self.ui_phase;
         let hover_id = self.hover_row.clone();
         let lang_menu = self.lang_menu.clone();
         let active_stage = self.active_stage.clone();
@@ -2129,7 +2183,7 @@ impl OneAsrApp {
                     .filter(|(sid, _)| sid == &row.id)
                     .map(|(_, s)| s.as_ref());
                 let (status_label, status_color, status_bg) =
-                    status_pill_style(status, phase, qn, stage_for_row);
+                    status_pill_style(status, qn, stage_for_row);
                 let timing_total = row
                     .timing
                     .as_ref()
@@ -3515,7 +3569,6 @@ fn status_border_color(status: TaskStatus) -> gpui::Rgba {
 /// Status pill: (label, foreground, soft background).
 fn status_pill_style(
     status: TaskStatus,
-    _phase: u8,
     queue_n: Option<usize>,
     stage: Option<&str>,
 ) -> (String, gpui::Rgba, gpui::Rgba) {

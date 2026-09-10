@@ -16,7 +16,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use oneasr_core::model::resolve_app_root_dir;
 
@@ -25,19 +25,28 @@ const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-/// `{app_root}/oneasr-error.log`
+/// `{app_root}/oneasr-error.log`.
+///
+/// Resolved once per process: `resolve_app_root_dir` walks the filesystem
+/// (up to ~16 stat calls) and would otherwise run on every log line.
 pub fn log_path() -> PathBuf {
-    resolve_app_root_dir().join("oneasr-error.log")
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| resolve_app_root_dir().join("oneasr-error.log"))
+        .clone()
 }
 
 /// Fallback when `{app_root}` is not writable: `%LOCALAPPDATA%\OneAsr\`, else
 /// `%TEMP%\OneAsr\` (dev / stripped environments without the env var).
 fn fallback_log_path() -> PathBuf {
-    let base = match std::env::var_os("LOCALAPPDATA") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => std::env::temp_dir(),
-    };
-    base.join("OneAsr").join("oneasr-error.log")
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let base = match std::env::var_os("LOCALAPPDATA") {
+            Some(v) if !v.is_empty() => PathBuf::from(v),
+            _ => std::env::temp_dir(),
+        };
+        base.join("OneAsr").join("oneasr-error.log")
+    })
+    .clone()
 }
 
 /// Install panic hook early in `main`. Chains the previous hook (debug console).
