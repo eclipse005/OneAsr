@@ -1,12 +1,16 @@
-//! Qwen3-ASR + ForcedAligner pipeline.
+//! ASR pipeline: prepare → VAD → transcribe → align → export.
 //!
 //! ```text
+//! [optional vocal separation] → 16 kHz master
 //! load ASR once → all VAD chunks transcribed → unload ASR
 //! load Aligner once → all chunks aligned → unload Aligner
-//! word normalize → sentence_boundary → SRT
+//! word normalize → sentence_boundary → SRT / TXT
 //! ```
 //!
-//! Never keeps ASR and Aligner in VRAM at the same time.
+//! Never keeps ASR and Aligner in VRAM at the same time. Engines come from a
+//! [`crate::engine::EngineProvider`], so this module states the policy
+//! (staging, engine lifetime, export rules) and knows nothing about concrete
+//! model crates — see `crate::engine` for the ports and their adapters.
 //!
 //! **Scratch lifecycle**: `runs/{stem}_{ts}/` holds only the full 16 kHz WAV
 //! plus at most one temporary chunk file. Product output is
@@ -22,26 +26,25 @@ use std::time::Instant;
 
 use serde::Deserialize;
 
-use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
-use qwen_forced_aligner_rs::{
-    AlignRequest, AudioInput, DeviceRequest, ModelOptions, Qwen3ForcedAligner, TextInput,
-};
 use serde_json;
 use thiserror::Error;
 
+use crate::diagnostics::{pipeline_trace, trace_log};
+use crate::engine::{
+    AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent, TranscribeRequest,
+};
 use crate::lang::{to_lang_key, to_qwen_language_label};
 use crate::media::{
-    convert_to_16k_mono_wav, slice_wav, wav_duration_sec, write_atomic, MediaError,
+    MediaError, convert_to_16k_mono_wav, slice_wav, wav_duration_sec, write_atomic,
 };
 use crate::paths::{media_stem, output_path};
 use crate::sentence_boundary::{
-    build_source_sentences_from_words, source_sentences_to_srt, source_sentences_to_txt,
-    SentenceBoundaryRequest, WordTokenDto,
+    SentenceBoundaryRequest, WordTokenDto, build_source_sentences_from_words,
+    source_sentences_to_srt, source_sentences_to_txt,
 };
-use crate::separation;
 use crate::settings::Settings;
 use crate::subtitle::alignment::align_text_to_timestamps;
-use crate::subtitle::segmenter::{normalize_word_tokens, WordToken};
+use crate::subtitle::segmenter::{WordToken, normalize_word_tokens};
 use crate::text_script;
 use crate::vad;
 
@@ -51,8 +54,6 @@ pub enum AsrError {
     Io(#[from] std::io::Error),
     #[error("音频处理错误: {0}")]
     Media(#[from] MediaError),
-    #[error("路径非 UTF-8")]
-    PathNotUtf8,
     #[error("语音识别未产生任何有效文本（{0} 段全部为空）")]
     EmptyTranscribe(usize),
     #[error("对齐后词列表为空")]
@@ -91,20 +92,6 @@ impl AsrError {
 }
 
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
-
-/// Opt-in pipeline diagnostics (`ONEASR_PIPELINE_TRACE=1`).
-fn pipeline_trace() -> bool {
-    matches!(
-        std::env::var("ONEASR_PIPELINE_TRACE").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
-    )
-}
-
-fn trace_log(msg: impl AsRef<str>) {
-    if pipeline_trace() {
-        eprintln!("[pipeline] {}", msg.as_ref());
-    }
-}
 
 /// Fine-grained pipeline stage for live UI status and timing breakdown.
 ///
@@ -369,11 +356,43 @@ pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
 
 /// Check the optional HTDemucs weights directory (vocal separation).
 ///
-/// The file name and size contract come from the catalog, so a custom
-/// user-picked directory works as long as it holds `htdemucs_ft.safetensors`.
+/// Same rule as the ASR / aligner dirs: the install-layout folder is validated
+/// against the catalog's exact size; a custom user-picked folder only has to
+/// hold the one weights file the loader expects.
 pub fn check_demucs_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Demucs, model_dir, || {
-        check_model_dir_against_catalog("人声分离", model_dir, crate::model::ModelId::HtdemucsFt)
+        let is_install_layout = model_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case(crate::model::HTDEMUCS_FT));
+        if is_install_layout {
+            return check_model_dir_against_catalog(
+                "人声分离",
+                model_dir,
+                crate::model::ModelId::HtdemucsFt,
+            );
+        }
+        if !model_dir.is_dir() {
+            return Err(AsrError::Other(format!(
+                "人声分离 模型目录不存在: {}",
+                model_dir.display()
+            )));
+        }
+        let mut missing = Vec::new();
+        check_weight_file(
+            model_dir,
+            crate::engine::local::DEMUCS_WEIGHTS_FILE,
+            &mut missing,
+        );
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(AsrError::ModelIncomplete {
+                role: "人声分离",
+                missing: join_missing(&missing),
+                dir: model_dir.display().to_string(),
+            })
+        }
     })
 }
 
@@ -492,8 +511,8 @@ fn weight_filenames(model_dir: &Path) -> Result<Vec<String>, String> {
 fn shard_names_from_index(index: &Path) -> Result<Vec<String>, String> {
     let text = std::fs::read_to_string(index)
         .map_err(|e| format!("model.safetensors.index.json ({e})"))?;
-    let parsed: SafetensorsIndex = serde_json::from_str(&text)
-        .map_err(|e| format!("model.safetensors.index.json ({e})"))?;
+    let parsed: SafetensorsIndex =
+        serde_json::from_str(&text).map_err(|e| format!("model.safetensors.index.json ({e})"))?;
     let mut names: Vec<String> = parsed.weight_map.into_values().collect();
     names.sort();
     names.dedup();
@@ -525,182 +544,6 @@ fn join_missing(names: &[String]) -> String {
     } else {
         format!("{}… (共 {} 项)", names[..SHOW].join(", "), names.len())
     }
-}
-
-/// Resolved compute target for both ASR and Aligner (one policy).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ComputeBackend {
-    Cpu,
-    Cuda,
-}
-
-/// Engines ship prebuilt PTX for sm_61+ (see qwen3-asr `prebuilt_ptx`).
-/// Older cards physically cannot run the kernels, so this stays a hard gate
-/// (VRAM size is only a settings-page hint, not a gate — small-VRAM GPUs
-/// degrade gracefully via WDDM paging and the user may still prefer GPU).
-#[cfg(feature = "cuda")]
-const MIN_CUDA_CC: (i32, i32) = (6, 1);
-
-/// Live GPU facts from a real device probe (cached — probe cost is ~0.5s).
-#[cfg(feature = "cuda")]
-struct CudaProbe {
-    name: String,
-    total_vram: usize,
-    cc: (i32, i32),
-}
-
-/// Probe the real GPU once per process. DLL presence (`is_cuda_runtime_ready`)
-/// only proves files exist; this proves a usable NVIDIA device + driver.
-#[cfg(feature = "cuda")]
-fn probe_cuda_device() -> &'static Result<CudaProbe, String> {
-    static PROBE: std::sync::OnceLock<Result<CudaProbe, String>> = std::sync::OnceLock::new();
-    PROBE.get_or_init(|| {
-        let ctx = cudarc::driver::CudaContext::new(0)
-            .map_err(|e| format!("CUDA 初始化失败（无可用 NVIDIA 显卡或驱动异常）: {e:?}"))?;
-        let name = ctx.name().map_err(|e| format!("读取显卡名称失败: {e:?}"))?;
-        let cc = ctx
-            .compute_capability()
-            .map_err(|e| format!("读取 compute capability 失败: {e:?}"))?;
-        let total_vram = ctx
-            .total_mem()
-            .map_err(|e| format!("读取显存大小失败: {e:?}"))?;
-        Ok(CudaProbe {
-            name,
-            total_vram,
-            cc,
-        })
-    })
-}
-
-/// Why a probed GPU is still unsuitable for the CUDA engine.
-#[cfg(feature = "cuda")]
-fn cuda_probe_reject_reason(p: &CudaProbe) -> Option<String> {
-    if p.cc < MIN_CUDA_CC {
-        return Some(format!(
-            "显卡 {name} 过旧（sm_{maj}{min}），GPU 加速最低需要 sm_61（GTX 10 系）",
-            name = p.name,
-            maj = p.cc.0,
-            min = p.cc.1
-        ));
-    }
-    None
-}
-
-impl ComputeBackend {
-    fn to_asr(self) -> AsrBackend {
-        match self {
-            Self::Cpu => AsrBackend::Cpu,
-            Self::Cuda => AsrBackend::Cuda,
-        }
-    }
-
-    fn to_align_device(self) -> DeviceRequest {
-        match self {
-            Self::Cpu => DeviceRequest::Cpu,
-            Self::Cuda => DeviceRequest::Cuda(0),
-        }
-    }
-}
-
-/// Resolve inference backend from settings.
-///
-/// Product rule (single installer + optional Settings「安装组件」):
-/// - **cpu** → always CPU
-/// - **cuda** → require app `dll/` CUDA runtime **and** a live probe of a
-///   usable NVIDIA GPU (≥ sm_61); error with guidance otherwise
-/// - **auto** → CUDA only when DLLs are ready *and* the probe passes;
-///   otherwise CPU with a trace log (never hard-fail auto on GPU issues)
-fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, AsrError> {
-    match backend.trim().to_ascii_lowercase().as_str() {
-        "cpu" => Ok(ComputeBackend::Cpu),
-        "cuda" => {
-            #[cfg(feature = "cuda")]
-            {
-                if !crate::model::is_cuda_runtime_ready() {
-                    return Err(AsrError::Other(
-                        "未检测到 CUDA 运行库，请在设置中下载后再使用 GPU".into(),
-                    ));
-                }
-                match probe_cuda_device() {
-                    Ok(p) => {
-                        if let Some(reason) = cuda_probe_reject_reason(p) {
-                            return Err(AsrError::Other(format!(
-                                "{reason}，请在设置中改用 CPU 或自动"
-                            )));
-                        }
-                        Ok(ComputeBackend::Cuda)
-                    }
-                    Err(e) => Err(AsrError::Other(format!(
-                        "{e}。GPU 加速需要 NVIDIA 显卡（显存 4GB 起）并更新驱动；\
-                         或在设置中改用 CPU"
-                    ))),
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                Err(AsrError::Other(
-                    "此构建未启用 CUDA，请使用 backend=cpu".into(),
-                ))
-            }
-        }
-        // auto
-        _ => {
-            #[cfg(feature = "cuda")]
-            {
-                if !crate::model::is_cuda_runtime_ready() {
-                    return Ok(ComputeBackend::Cpu);
-                }
-                match probe_cuda_device() {
-                    Ok(p) => {
-                        if let Some(reason) = cuda_probe_reject_reason(p) {
-                            trace_log(format!("auto backend → cpu: {reason}"));
-                            Ok(ComputeBackend::Cpu)
-                        } else {
-                            trace_log(format!(
-                                "auto backend → cuda: {} sm_{}{} vram={:.1}GB",
-                                p.name,
-                                p.cc.0,
-                                p.cc.1,
-                                p.total_vram as f64 / 1e9
-                            ));
-                            Ok(ComputeBackend::Cuda)
-                        }
-                    }
-                    Err(e) => {
-                        trace_log(format!("auto backend → cpu: {e}"));
-                        Ok(ComputeBackend::Cpu)
-                    }
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                Ok(ComputeBackend::Cpu)
-            }
-        }
-    }
-}
-
-/// Settings explicitly pinned to GPU (vs auto/cpu) — no silent CPU fallback.
-fn is_forced_cuda(backend: &str) -> bool {
-    backend.trim().eq_ignore_ascii_case("cuda")
-}
-
-/// Append actionable guidance to a CUDA engine load failure.
-#[cfg(feature = "cuda")]
-fn cuda_load_failure_msg(e: &impl std::fmt::Display) -> String {
-    let probe_hint = match probe_cuda_device() {
-        Ok(p) => format!(
-            "（显卡 {}，显存 {:.1}GB）",
-            p.name,
-            p.total_vram as f64 / 1e9
-        ),
-        Err(_) => String::new(),
-    };
-    format!(
-        "加载语音识别模型失败: {e:#}{probe_hint}\n\
-         请检查：1) 显存 ≥ 4GB 且未被其他程序占满；2) NVIDIA 驱动已更新；\
-         3) 关闭占用 GPU 的程序后重试。或在设置中将后端改为 CPU"
-    )
 }
 
 fn clean_asr_text(raw: &str) -> String {
@@ -765,7 +608,29 @@ pub fn process_media_file_with_export<'a>(
     on_stage: impl FnMut(StageUpdate) + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
-    Pipeline::new(settings, on_stage).run(input, media_name, app_root, export)
+    let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
+        .map_err(|e| AsrError::Other(e.message().to_string()))?;
+    process_media_file_with_provider(
+        input, media_name, settings, app_root, &provider, on_stage, export,
+    )
+}
+
+/// [`process_media_file_with_export`] with an explicit
+/// [`EngineProvider`](crate::engine::EngineProvider).
+///
+/// Production calls go through the wrapper above (local Qwen / HTDemucs
+/// engines); embedding and tests inject their own provider — see
+/// [`crate::engine::testing`].
+pub fn process_media_file_with_provider<'a>(
+    input: &Path,
+    media_name: &str,
+    settings: &Settings,
+    app_root: &Path,
+    provider: &dyn crate::engine::EngineProvider,
+    on_stage: impl FnMut(StageUpdate) + 'a,
+    export: ProcessExportOptions,
+) -> Result<PathBuf, AsrError> {
+    Pipeline::new(settings, provider, on_stage).run(input, media_name, app_root, export)
 }
 
 // ── Intermediate stage results ──────────────────────────────────────────
@@ -821,13 +686,19 @@ struct AlignOutput {
 /// Convert → VAD → ASR → align → SRT. ASR is dropped before the aligner loads.
 struct Pipeline<'a> {
     settings: &'a Settings,
+    provider: &'a dyn EngineProvider,
     on_stage: RefCell<Box<dyn FnMut(StageUpdate) + 'a>>,
 }
 
 impl<'a> Pipeline<'a> {
-    fn new(settings: &'a Settings, on_stage: impl FnMut(StageUpdate) + 'a) -> Self {
+    fn new(
+        settings: &'a Settings,
+        provider: &'a dyn EngineProvider,
+        on_stage: impl FnMut(StageUpdate) + 'a,
+    ) -> Self {
         Self {
             settings,
+            provider,
             on_stage: RefCell::new(Box::new(on_stage)),
         }
     }
@@ -845,8 +716,8 @@ impl<'a> Pipeline<'a> {
     ) -> Result<PathBuf, AsrError> {
         let conv = self.stage_prepare(input, app_root)?;
         let vad = self.stage_vad_plan(&conv)?;
-        let (asr, compute) = self.stage_transcribe_all(&conv, &vad)?;
-        let align = self.stage_align_all(&conv, &vad, &asr, compute)?;
+        let asr = self.stage_transcribe_all(&conv, &vad)?;
+        let align = self.stage_align_all(&conv, &vad, &asr)?;
         self.stage_export(input, media_name, vad.speech_segments, align, export)
     }
 
@@ -896,33 +767,33 @@ impl<'a> Pipeline<'a> {
     /// Separate the vocals stem (HTDemucs v4, native Rust inference) and return
     /// the vocals WAV. Runs before VAD so chunk planning and ASR both see the
     /// music-suppressed audio.
-    fn stage_separate_vocals(
-        &self,
-        input: &Path,
-        work_dir: &Path,
-    ) -> Result<PathBuf, AsrError> {
+    fn stage_separate_vocals(&self, input: &Path, work_dir: &Path) -> Result<PathBuf, AsrError> {
         self.emit(StageUpdate::new(AsrStage::Separating));
         let model_dir = self.settings.resolved_demucs_model_dir();
-        let vocals = separation::separate_vocals(
-            input,
-            &model_dir,
-            work_dir,
-            &self.settings.backend,
-            // Chunk-level progress → 「人声分离 n/N」, backend fallbacks →
-            // a status-bar warning; both ride the existing stage channel.
-            &mut |event| match event {
-                separation::SeparationEvent::Progress { done, total } => {
-                    self.emit(StageUpdate::with_chunk(AsrStage::Separating, done, total));
-                }
-                separation::SeparationEvent::FellBackToCpu { reason } => {
-                    self.emit(
-                        StageUpdate::new(AsrStage::Separating).with_warning(format!(
+        let separator = self
+            .provider
+            .load_separator()
+            .map_err(|e| AsrError::Other(e.message().to_string()))?;
+        let vocals = separator
+            .separate(
+                SeparateRequest {
+                    input,
+                    out_dir: work_dir,
+                },
+                // Chunk-level progress → 「人声分离 n/N」, backend fallbacks →
+                // a status-bar warning; both ride the existing stage channel.
+                &mut |event| match event {
+                    SeparationEvent::Progress { done, total } => {
+                        self.emit(StageUpdate::with_chunk(AsrStage::Separating, done, total));
+                    }
+                    SeparationEvent::FellBackToCpu { reason } => {
+                        self.emit(StageUpdate::new(AsrStage::Separating).with_warning(format!(
                             "人声分离 GPU 不可用，已改用 CPU（速度明显变慢）：{reason}"
-                        )),
-                    );
-                }
-            },
-        )?;
+                        )));
+                    }
+                },
+            )
+            .map_err(|e| AsrError::Other(e.message().to_string()))?;
 
         trace_log(format!(
             "vocal separation: vocals stem ready ({})",
@@ -951,10 +822,8 @@ impl<'a> Pipeline<'a> {
                         silences.len(),
                         planned.len(),
                     );
-                    let pairs: Vec<(f64, f64)> = speech
-                        .iter()
-                        .map(|&(s, e)| (s as f64, e as f64))
-                        .collect();
+                    let pairs: Vec<(f64, f64)> =
+                        speech.iter().map(|&(s, e)| (s as f64, e as f64)).collect();
                     (planned, pairs)
                 }
                 Err(e) => {
@@ -987,12 +856,16 @@ impl<'a> Pipeline<'a> {
         if pipeline_trace() {
             eprintln!(
                 "[pipeline] duration={:.1}s chunk_target={} chunks={}",
-                conv.duration, conv.chunk_sec, chunks.len(),
+                conv.duration,
+                conv.chunk_sec,
+                chunks.len(),
             );
             for (i, c) in chunks.iter().enumerate() {
                 eprintln!(
                     "[pipeline] plan#{i} {:.3}-{:.3} ({:.1}s)",
-                    c.start, c.end, c.end - c.start
+                    c.start,
+                    c.end,
+                    c.end - c.start
                 );
             }
         }
@@ -1010,53 +883,15 @@ impl<'a> Pipeline<'a> {
         &self,
         conv: &ConvertedAudio,
         vad: &VadPlan,
-    ) -> Result<(AsrOutput, ComputeBackend), AsrError> {
+    ) -> Result<AsrOutput, AsrError> {
         self.emit(StageUpdate::new(AsrStage::LoadingAsr));
         check_asr_model_dir(&self.settings.asr_model_dir)?;
-        #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
-        let mut compute = resolve_compute_backend(&self.settings.backend)?;
-
-        {
-            let label = match compute {
-                ComputeBackend::Cpu => "cpu",
-                ComputeBackend::Cuda => "cuda",
-            };
-            trace_log(format!(
-                "backend setting={} resolved={} cuda_dlls={}",
-                self.settings.backend,
-                label,
-                crate::model::is_cuda_runtime_ready(),
-            ));
-            #[cfg(debug_assertions)]
-            if !pipeline_trace() {
-                eprintln!(
-                    "[backend] setting={} resolved={} cuda_dlls={}",
-                    self.settings.backend,
-                    label,
-                    crate::model::is_cuda_runtime_ready(),
-                );
-            }
-        }
-
-        let asr_model_dir = self.settings.asr_model_dir.clone();
-
-        #[cfg(feature = "cuda")]
-        let asr = match AsrInference::load(&asr_model_dir, compute.to_asr()) {
-            Ok(m) => m,
-            Err(e) if compute == ComputeBackend::Cuda && !is_forced_cuda(&self.settings.backend) => {
-                trace_log(format!("cuda load failed, falling back to cpu: {e:#}"));
-                compute = ComputeBackend::Cpu;
-                AsrInference::load(&asr_model_dir, ComputeBackend::Cpu.to_asr())
-                    .map_err(|e2| AsrError::LoadAsr(format!("{e2:#}")))?
-            }
-            Err(e) if compute == ComputeBackend::Cuda => {
-                return Err(AsrError::LoadAsr(cuda_load_failure_msg(&e)));
-            }
-            Err(e) => return Err(AsrError::LoadAsr(format!("{e:#}"))),
-        };
-        #[cfg(not(feature = "cuda"))]
-        let asr = AsrInference::load(&asr_model_dir, compute.to_asr())
-            .map_err(|e| AsrError::LoadAsr(format!("{e:#}")))?;
+        // The provider owns backend resolution + the GPU→CPU *load* fallback;
+        // a failure in the middle of a run is never retried (see `engine`).
+        let asr = self
+            .provider
+            .load_asr()
+            .map_err(|e| AsrError::LoadAsr(e.message().to_string()))?;
         let force_lang = to_qwen_language_label(&self.settings.language);
         let chunk_tmp = conv.chunk_tmp();
 
@@ -1078,16 +913,13 @@ impl<'a> Pipeline<'a> {
                 conv.wav_path.as_path()
             };
 
-            let opts = TranscribeOptions::default()
-                .with_max_new_tokens(self.settings.max_new_tokens)
-                .with_language(force_lang.clone());
-
-            let path_str = chunk_path
-                .to_str()
-                .ok_or_else(|| AsrError::PathNotUtf8)?;
             let report = asr
-                .transcribe(path_str, opts)
-                .map_err(|e| AsrError::TranscribeChunk(i + 1, format!("{e:#}")))?;
+                .transcribe(TranscribeRequest {
+                    wav: chunk_path,
+                    language: &force_lang,
+                    max_new_tokens: self.settings.max_new_tokens,
+                })
+                .map_err(|e| AsrError::TranscribeChunk(i + 1, e.message().to_string()))?;
             let text = clean_asr_text(&report.text);
 
             if vad.multi_chunk {
@@ -1126,7 +958,7 @@ impl<'a> Pipeline<'a> {
             );
         }
 
-        Ok((AsrOutput { transcripts }, compute))
+        Ok(AsrOutput { transcripts })
     }
 
     // ── Stage 4: load Aligner + align all transcripts ───────────────────
@@ -1136,14 +968,13 @@ impl<'a> Pipeline<'a> {
         conv: &ConvertedAudio,
         vad: &VadPlan,
         asr: &AsrOutput,
-        compute: ComputeBackend,
     ) -> Result<AlignOutput, AsrError> {
         self.emit(StageUpdate::new(AsrStage::LoadingAligner));
         check_aligner_model_dir(&self.settings.aligner_model_dir)?;
-        let aligner_dir = self.settings.aligner_model_dir.clone();
-        let aligner_device = compute.to_align_device();
-        let aligner = Qwen3ForcedAligner::load(&aligner_dir, ModelOptions { device: aligner_device })
-            .map_err(|e| AsrError::LoadAligner(format!("{e:#}")))?;
+        let aligner = self
+            .provider
+            .load_aligner()
+            .map_err(|e| AsrError::LoadAligner(e.message().to_string()))?;
 
         let mut all_words: Vec<WordToken> = Vec::new();
         for (i, seg) in asr.transcripts.iter().enumerate() {
@@ -1193,32 +1024,37 @@ impl<'a> Pipeline<'a> {
                 };
 
                 let result = aligner
-                    .align(AlignRequest::new(
-                        AudioInput::Path(chunk_path.to_path_buf()),
-                        TextInput::Text(seg.text.clone()),
-                        seg.language.clone(),
-                    ))
+                    .align(AlignRequest {
+                        wav: chunk_path,
+                        text: &seg.text,
+                        language: &seg.language,
+                    })
                     .map_err(|e| {
                         AsrError::AlignChunk(
                             i + 1,
                             format!("{seg_dur:.1}s"),
-                            format!("{e:#}"),
+                            e.message().to_string(),
                         )
                     })?;
-                trace_log(format!("align#{} ok words={}", i + 1, result.items.len()));
+                trace_log(format!("align#{} ok words={}", i + 1, result.len()));
 
                 if vad.multi_chunk {
                     let _ = std::fs::remove_file(chunk_path);
                 }
 
-                for item in result.items {
-                    let word = item.text.trim();
+                for AlignedToken {
+                    text,
+                    start_sec,
+                    end_sec,
+                } in result
+                {
+                    let word = text.trim();
                     if word.is_empty() {
                         continue;
                     }
                     segment_words.push(WordToken {
-                        start: round_millis(seg.start_sec + item.start_time.max(0.0)),
-                        end: round_millis(seg.start_sec + item.end_time.max(item.start_time)),
+                        start: round_millis(seg.start_sec + start_sec.max(0.0)),
+                        end: round_millis(seg.start_sec + end_sec.max(start_sec)),
                         word: word.to_string(),
                     });
                 }
@@ -1365,7 +1201,6 @@ fn write_export_file(
     Ok(path)
 }
 
-
 /// Word/char tokens after ForcedAligner + punct restore + normalize (pre-sentence-boundary).
 fn write_words_json(
     path: &Path,
@@ -1412,7 +1247,10 @@ fn has_alignable_word(text: &str) -> bool {
     text.chars().any(char::is_alphanumeric)
 }
 
-fn attach_transcript_punctuation(transcript_text: &str, aligned_words: &[WordToken]) -> Vec<WordToken> {
+fn attach_transcript_punctuation(
+    transcript_text: &str,
+    aligned_words: &[WordToken],
+) -> Vec<WordToken> {
     if transcript_text.trim().is_empty() || aligned_words.is_empty() {
         return aligned_words.to_vec();
     }
@@ -1441,37 +1279,13 @@ mod tests {
 
     #[test]
     fn check_asr_model_dir_rejects_missing() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr_empty_model_probe_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("oneasr_empty_model_probe_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let err = check_asr_model_dir(&dir).unwrap_err().to_string();
         assert!(err.contains("不完整"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// GPU smoke: exercise the real device probe used by backend resolution.
-    /// Skips gracefully on machines without a CUDA device/driver.
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn probe_cuda_device_smoke() {
-        match probe_cuda_device() {
-            Ok(p) => {
-                eprintln!(
-                    "probe: {} sm_{}{} vram={:.1}GB reject={:?}",
-                    p.name,
-                    p.cc.0,
-                    p.cc.1,
-                    p.total_vram as f64 / 1e9,
-                    cuda_probe_reject_reason(p)
-                );
-                assert!(p.total_vram > 0);
-                assert!(!p.name.is_empty());
-            }
-            Err(e) => eprintln!("skip probe smoke (no CUDA device): {e}"),
-        }
     }
 
     #[test]
@@ -1528,7 +1342,10 @@ mod tests {
                 AsrStage::Exporting,
             ]
         );
-        assert_ne!(AsrStage::LoadingAsr.label(), AsrStage::LoadingAligner.label());
+        assert_ne!(
+            AsrStage::LoadingAsr.label(),
+            AsrStage::LoadingAligner.label()
+        );
         assert_eq!(AsrStage::Planning.label(), "分段规划");
         assert!(timing.has_breakdown());
     }
@@ -1553,10 +1370,7 @@ mod tests {
 
     #[test]
     fn model_validation_cache_returns_consistent_results() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr_cache_test_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr_cache_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
@@ -1576,10 +1390,7 @@ mod tests {
 
     #[test]
     fn check_asr_model_dir_uses_shard_filenames_not_tensor_names() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr_shard_index_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr_shard_index_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
@@ -1589,7 +1400,11 @@ mod tests {
             br#"{"weight_map":{"thinker.audio_tower.conv2d1.bias":"model-00001-of-00001.safetensors"}}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("model-00001-of-00001.safetensors"), vec![0u8; 2048]).unwrap();
+        std::fs::write(
+            dir.join("model-00001-of-00001.safetensors"),
+            vec![0u8; 2048],
+        )
+        .unwrap();
 
         let err_before = check_asr_model_dir(&dir);
         assert!(err_before.is_ok(), "{err_before:?}");
@@ -1599,10 +1414,7 @@ mod tests {
 
     #[test]
     fn check_asr_model_dir_names_missing_shard() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr_missing_shard_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr_missing_shard_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
@@ -1622,10 +1434,7 @@ mod tests {
 
     #[test]
     fn asr_and_aligner_ready_caches_do_not_alias() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr_role_cache_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr_role_cache_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
