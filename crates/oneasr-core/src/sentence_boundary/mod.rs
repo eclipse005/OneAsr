@@ -28,9 +28,10 @@ use text::join_words;
 use types::SourceSentenceStep2;
 use words::{from_core_words, to_core_words};
 
-pub use assembly::source_sentences_to_srt;
+pub use assembly::{source_sentences_to_srt, source_sentences_to_txt};
 pub use types::{
-    BoundaryDecisionKind, SentenceBoundaryRequest, SourceSentenceStep2 as SourceSentences,
+    BoundaryDecisionKind, SentenceBoundaryRequest, SourceSentence,
+    SourceSentenceStep2 as SourceSentences,
 };
 
 /// Word token with timestamps (same shape as VoxTrans `WordTokenDto`).

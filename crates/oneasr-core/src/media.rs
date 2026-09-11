@@ -281,11 +281,41 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Extract the audio track to a PCM s16le **stereo** WAV at its native sample
+/// rate — the input format HTDemucs expects. ffmpeg does a proper downmix for
+/// multi-channel sources (mono is duplicated), so we never have to guess which
+/// channels carry the dialogue; the engine resamples to 44.1 kHz internally and
+/// restores the original rate on output.
+pub fn extract_audio_wav(input: &Path, out_wav: &Path) -> Result<PathBuf, MediaError> {
+    if let Some(parent) = out_wav.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let ffmpeg = resolve_ffmpeg()?;
+    let mut cmd = ffmpeg_command(&ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(input)
+        .args(["-vn", "-ac", "2", "-c:a", "pcm_s16le"])
+        .arg(out_wav);
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(MediaError::FfmpegFailed(stderr.chars().take(500).collect()));
+    }
+    Ok(out_wav.to_path_buf())
+}
+
 /// Slice `[start, end)` seconds from a pipeline PCM WAV into `out_wav`.
 ///
 /// Uses in-process sample I/O (no ffmpeg). Input must be target PCM
 /// ([`is_target_pcm_wav`]); that is always true after [`convert_to_16k_mono_wav`].
-pub fn slice_wav(input: &Path, start: f32, end: f32, out_wav: &Path) -> Result<PathBuf, MediaError> {
+pub fn slice_wav(
+    input: &Path,
+    start: f32,
+    end: f32,
+    out_wav: &Path,
+) -> Result<PathBuf, MediaError> {
     if let Some(parent) = out_wav.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -323,7 +353,9 @@ pub fn slice_wav(input: &Path, start: f32, end: f32, out_wav: &Path) -> Result<P
         .map_err(|e| MediaError::Wav(format!("create {}: {e}", out_wav.display())))?;
 
     if n == 0 {
-        writer.finalize().map_err(|e| MediaError::Wav(format!("finalize: {e}")))?;
+        writer
+            .finalize()
+            .map_err(|e| MediaError::Wav(format!("finalize: {e}")))?;
         return Ok(out_wav.to_path_buf());
     }
 

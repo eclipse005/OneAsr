@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::media::resolve_app_root;
 use crate::model::{
-    default_aligner_model_dir, default_asr_model_dir, resolve_app_root_dir, resolve_model_dir,
-    ModelId, ModelKind, QWEN3_ASR_06B,
+    ModelId, ModelKind, QWEN3_ASR_06B, default_aligner_model_dir, default_asr_model_dir,
+    resolve_app_root_dir, resolve_model_dir,
 };
 use crate::paths::default_output_dir_for;
+use crate::text_script::{self, TextScript};
 
 /// Inclusive lower bound for VAD ASR chunk target (seconds).
 pub const CHUNK_TARGET_MIN_SEC: u32 = 30;
@@ -78,6 +79,22 @@ pub struct Settings {
     /// fallback when that directory is not writable (or has no parent dir).
     #[serde(default = "default_save_next_to_source")]
     pub save_next_to_source: bool,
+    /// Write finished `.srt` files. At least one of SRT / TXT stays on.
+    #[serde(default = "default_output_srt")]
+    pub output_srt: bool,
+    /// Write a plain-text `.txt` transcript (one cue per line, no timestamps).
+    #[serde(default)]
+    pub output_txt: bool,
+    /// Chinese output script: `simplified` (default) | `traditional`.
+    /// Applies to `zh` / `yue` sources; other languages ignore it.
+    #[serde(default = "default_text_script")]
+    pub text_script: String,
+    /// Run HTDemucs vocal separation before VAD/ASR (needs Demucs weights).
+    #[serde(default)]
+    pub vocal_separation: bool,
+    /// HTDemucs weights directory (default `{app}/models/htdemucs_ft`).
+    #[serde(default = "default_demucs_model_dir")]
+    pub demucs_model_dir: PathBuf,
 }
 
 fn default_asr_model() -> String {
@@ -108,6 +125,19 @@ fn default_save_next_to_source() -> bool {
     true
 }
 
+fn default_output_srt() -> bool {
+    true
+}
+
+fn default_text_script() -> String {
+    // Product default: never re-write the recognizer's own script.
+    TextScript::ORIGINAL_ID.into()
+}
+
+fn default_demucs_model_dir() -> PathBuf {
+    crate::model::default_demucs_model_dir()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -121,6 +151,11 @@ impl Default for Settings {
             chunk_target_seconds: default_chunk_target_seconds(),
             output_dir: default_output_dir(),
             save_next_to_source: default_save_next_to_source(),
+            output_srt: default_output_srt(),
+            output_txt: false,
+            text_script: default_text_script(),
+            vocal_separation: false,
+            demucs_model_dir: default_demucs_model_dir(),
         }
     }
 }
@@ -208,6 +243,20 @@ impl Settings {
         self.language = normalize_source_language(&self.language);
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
         self.normalize_output_dir();
+        // At least one output format must stay enabled.
+        if !self.output_srt && !self.output_txt {
+            self.output_srt = true;
+            notes.push("输出格式全关 → 恢复 SRT".into());
+        }
+        let script = TextScript::from_id(&self.text_script).id();
+        if script != self.text_script {
+            self.text_script = script.into();
+        }
+        repair_stale_model_dir(
+            &mut self.demucs_model_dir,
+            default_demucs_model_dir(),
+            notes,
+        );
 
         if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
             self.asr_model = id.as_str().into();
@@ -278,6 +327,26 @@ impl Settings {
         clamp_chunk_target_seconds(self.chunk_target_seconds)
     }
 
+    /// Parsed Chinese output script (`simplified` when unset / unknown).
+    #[inline]
+    pub fn text_script_choice(&self) -> TextScript {
+        TextScript::from_id(&self.text_script)
+    }
+
+    /// Conversion to apply for a source language, or `None` when the setting
+    /// does not apply (non-Chinese sources keep the raw ASR script).
+    pub fn text_script_for(&self, lang_key: &str) -> Option<TextScript> {
+        text_script::applies_to_language(lang_key).then(|| self.text_script_choice())
+    }
+
+    /// Directory that owns the Demucs weights (never empty).
+    pub fn resolved_demucs_model_dir(&self) -> PathBuf {
+        if self.demucs_model_dir.as_os_str().is_empty() {
+            return default_demucs_model_dir();
+        }
+        self.demucs_model_dir.clone()
+    }
+
     pub fn selected_asr_id(&self) -> ModelId {
         ModelId::parse_asr(&self.asr_model)
     }
@@ -307,6 +376,10 @@ impl Settings {
     pub fn can_start(&self) -> Result<(), String> {
         crate::asr::check_asr_model_dir(&self.asr_model_dir).map_err(|e| e.to_string())?;
         crate::asr::check_aligner_model_dir(&self.aligner_model_dir).map_err(|e| e.to_string())?;
+        if self.vocal_separation {
+            crate::asr::check_demucs_model_dir(&self.resolved_demucs_model_dir())
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -329,10 +402,12 @@ impl Settings {
                 self.aligner_model_dir = model_dir;
                 true
             }
+            // Weights always land in the install-layout dir the settings
+            // already point at; nothing to re-bind.
+            ModelKind::Demucs => false,
             ModelKind::CudaRuntime => false,
         }
     }
-
 }
 
 /// If `current` doesn't exist on disk but `default` does, switch to `default`.
@@ -393,10 +468,7 @@ mod tests {
         let dir_06 = PathBuf::from(r"C:\App\models\Qwen3-ASR-0.6B");
         assert!(!s.bind_download_if_active(ModelId::Qwen3Asr06B, dir_06));
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
-        assert!(s
-            .asr_model_dir
-            .to_string_lossy()
-            .contains("Qwen3-ASR-1.7B"));
+        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B"));
 
         let dir_17 = PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B");
         assert!(s.bind_download_if_active(ModelId::Qwen3Asr17B, dir_17.clone()));
@@ -408,10 +480,7 @@ mod tests {
         let mut s = Settings::default();
         s.select_asr_model(ModelId::Qwen3Asr17B);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
-        assert!(s
-            .asr_model_dir
-            .to_string_lossy()
-            .contains("Qwen3-ASR-1.7B"));
+        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B"));
     }
 
     #[test]
@@ -449,9 +518,7 @@ mod tests {
     fn default_output_dir_ends_with_output() {
         let s = Settings::default();
         assert!(
-            s.output_dir
-                .file_name()
-                .is_some_and(|n| n == "output"),
+            s.output_dir.file_name().is_some_and(|n| n == "output"),
             "default output_dir should be …/output, got {}",
             s.output_dir.display()
         );
@@ -514,9 +581,7 @@ mod tests {
             s.output_dir.display()
         );
         assert!(
-            s.output_dir
-                .file_name()
-                .is_some_and(|n| n == "output"),
+            s.output_dir.file_name().is_some_and(|n| n == "output"),
             "expected …/output, got {}",
             s.output_dir.display()
         );
@@ -571,5 +636,81 @@ mod tests {
         assert!(report.is_notable());
         let clean = SettingsLoadReport::default();
         assert!(!clean.is_notable());
+    }
+
+    #[test]
+    fn output_formats_never_end_up_all_off() {
+        let mut s = Settings::default();
+        s.output_srt = false;
+        s.output_txt = false;
+        let mut notes = Vec::new();
+        s.normalize_with_notes(&mut notes);
+        assert!(s.output_srt, "SRT must come back when everything is off");
+        assert!(!s.output_txt);
+        assert!(
+            notes.iter().any(|n| n.contains("输出格式")),
+            "repair should be reported: {notes:?}"
+        );
+
+        // TXT-only is a legal choice and must survive normalization.
+        let mut txt_only = Settings::default();
+        txt_only.output_srt = false;
+        txt_only.output_txt = true;
+        txt_only.normalize();
+        assert!(!txt_only.output_srt);
+        assert!(txt_only.output_txt);
+    }
+
+    #[test]
+    fn text_script_defaults_to_original_and_repairs_unknown() {
+        assert_eq!(
+            Settings::default().text_script_choice(),
+            TextScript::Original,
+            "fresh installs must not re-write the model's script"
+        );
+
+        let mut s = Settings::default();
+        s.text_script = "zh-Hant".into();
+        s.normalize();
+        assert_eq!(s.text_script, TextScript::TRADITIONAL_ID);
+        assert_eq!(s.text_script_choice(), TextScript::Traditional);
+
+        s.text_script = "wat".into();
+        s.normalize();
+        assert_eq!(s.text_script, TextScript::ORIGINAL_ID);
+    }
+
+    #[test]
+    fn script_scope_is_chinese_only() {
+        let mut s = Settings::default();
+        s.text_script = TextScript::TRADITIONAL_ID.into();
+        assert_eq!(s.text_script_for("zh"), Some(TextScript::Traditional));
+        assert_eq!(s.text_script_for("yue"), Some(TextScript::Traditional));
+        assert_eq!(s.text_script_for("ja"), None);
+        assert_eq!(s.text_script_for("en"), None);
+    }
+
+    #[test]
+    fn demucs_dir_defaults_under_models_and_repairs_empty() {
+        let mut s = Settings::default();
+        assert!(
+            s.resolved_demucs_model_dir().ends_with("htdemucs_ft"),
+            "default dir should be the install-layout folder: {}",
+            s.resolved_demucs_model_dir().display()
+        );
+
+        s.demucs_model_dir = PathBuf::new();
+        s.normalize();
+        assert!(!s.demucs_model_dir.as_os_str().is_empty());
+        assert!(s.resolved_demucs_model_dir().is_absolute());
+    }
+
+    #[test]
+    fn vocal_separation_defaults_off() {
+        let mut s = Settings::default();
+        assert!(!s.vocal_separation, "sep must be opt-in");
+        // Point at a missing dir so the gate is deterministic on any machine.
+        s.asr_model_dir = PathBuf::from(r"D:\__oneasr_no_such_asr_dir__");
+        assert!(s.can_start().is_err(), "missing ASR dir must fail the gate");
     }
 }

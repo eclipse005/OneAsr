@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use crate::media::resolve_app_root;
 
-use super::catalog::{QWEN3_ASR_06B, QWEN_ALIGN_06B};
+use super::catalog::{HTDEMUCS_FT, QWEN3_ASR_06B, QWEN_ALIGN_06B};
 
 /// Directory of the running `oneasr.exe` (install dir or `target/*/`).
 pub fn resolve_exe_dir() -> PathBuf {
@@ -45,6 +45,11 @@ pub fn default_asr_model_dir() -> PathBuf {
 
 pub fn default_aligner_model_dir() -> PathBuf {
     resolve_model_dir(QWEN_ALIGN_06B)
+}
+
+/// `{app_root}/models/htdemucs_ft` — optional vocal-separation weights.
+pub fn default_demucs_model_dir() -> PathBuf {
+    resolve_model_dir(HTDEMUCS_FT)
 }
 
 /// Dedicated folder for native runtime DLLs (CUDA user-mode libs): `{exe_dir}/dll`.

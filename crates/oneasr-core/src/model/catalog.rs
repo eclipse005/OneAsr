@@ -7,11 +7,15 @@ use super::path::{resolve_dll_dir, resolve_model_dir};
 pub const QWEN3_ASR_06B: &str = "Qwen3-ASR-0.6B";
 pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B";
 pub const QWEN_ALIGN_06B: &str = "Qwen3-ForcedAligner-0.6B";
+/// HTDemucs v4 fine-tuned weights (optional vocal separation stage).
+pub const HTDEMUCS_FT: &str = "htdemucs_ft";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
     Asr,
     Align,
+    /// Optional HTDemucs vocal-separation weights.
+    Demucs,
     /// User-mode CUDA 12.x DLLs next to the app (not under models/).
     CudaRuntime,
 }
@@ -21,6 +25,8 @@ pub enum ModelId {
     Qwen3Asr06B,
     Qwen3Asr17B,
     QwenAlign06B,
+    /// HTDemucs v4 fine-tuned (`htdemucs_ft.safetensors`).
+    HtdemucsFt,
     /// cudart / cublas / cublasLt / curand (scheme B, no NVRTC).
     CudaRuntime,
 }
@@ -31,6 +37,7 @@ impl ModelId {
             Self::Qwen3Asr06B => QWEN3_ASR_06B,
             Self::Qwen3Asr17B => QWEN3_ASR_17B,
             Self::QwenAlign06B => QWEN_ALIGN_06B,
+            Self::HtdemucsFt => HTDEMUCS_FT,
             Self::CudaRuntime => "cuda-runtime-12.8",
         }
     }
@@ -39,6 +46,7 @@ impl ModelId {
         match self {
             Self::Qwen3Asr06B | Self::Qwen3Asr17B => ModelKind::Asr,
             Self::QwenAlign06B => ModelKind::Align,
+            Self::HtdemucsFt => ModelKind::Demucs,
             Self::CudaRuntime => ModelKind::CudaRuntime,
         }
     }
@@ -48,6 +56,7 @@ impl ModelId {
             Self::Qwen3Asr06B => "Qwen3-ASR 0.6B",
             Self::Qwen3Asr17B => "Qwen3-ASR 1.7B",
             Self::QwenAlign06B => "ForcedAligner 0.6B",
+            Self::HtdemucsFt => "人声分离 HTDemucs",
             Self::CudaRuntime => "CUDA 运行库",
         }
     }
@@ -58,6 +67,7 @@ impl ModelId {
             Self::Qwen3Asr06B => "0.6B",
             Self::Qwen3Asr17B => "1.7B",
             Self::QwenAlign06B => "0.6B",
+            Self::HtdemucsFt => "Demucs",
             Self::CudaRuntime => "CUDA",
         }
     }
@@ -144,12 +154,27 @@ pub fn model_definition(id: ModelId) -> ModelDefinition {
         ModelId::QwenAlign06B => {
             model_def(id, resolve_model_dir(QWEN_ALIGN_06B), qwen_align_files())
         }
+        // ModelScope repo name differs from the install-layout folder name.
+        ModelId::HtdemucsFt => model_def_with_repo(
+            id,
+            "htdemucs",
+            resolve_model_dir(HTDEMUCS_FT),
+            htdemucs_ft_files(),
+        ),
         ModelId::CudaRuntime => model_def(id, resolve_dll_dir(), cuda_runtime_files()),
     }
 }
 
 fn model_def(id: ModelId, model_dir: PathBuf, files: Vec<CatalogFile>) -> ModelDefinition {
-    let repo = id.as_str();
+    model_def_with_repo(id, id.as_str(), model_dir, files)
+}
+
+fn model_def_with_repo(
+    id: ModelId,
+    repo: &str,
+    model_dir: PathBuf,
+    files: Vec<CatalogFile>,
+) -> ModelDefinition {
     ModelDefinition {
         id,
         model_dir,
@@ -169,6 +194,18 @@ fn model_def(id: ModelId, model_dir: PathBuf, files: Vec<CatalogFile>) -> ModelD
             })
             .collect(),
     }
+}
+
+/// HTDemucs v4 fine-tuned weights (~336 MB) used by the optional vocal
+/// separation stage. Single file; revision-pinned to the ModelScope commit
+/// that last changed it.
+fn htdemucs_ft_files() -> Vec<CatalogFile> {
+    vec![CatalogFile {
+        file_name: "htdemucs_ft.safetensors",
+        size: 336_125_008,
+        sha256: "255c2650d26537ce4887c9c4cf08c6d4896fad2fecc0b78dc5b875b117bcc575",
+        revision: "49a2f695826675edc10dbfc93185739daf7d0b13",
+    }]
 }
 
 fn qwen3_asr_06b_files() -> Vec<CatalogFile> {
@@ -345,6 +382,7 @@ mod tests {
             ModelId::Qwen3Asr06B,
             ModelId::Qwen3Asr17B,
             ModelId::QwenAlign06B,
+            ModelId::HtdemucsFt,
             ModelId::CudaRuntime,
         ] {
             let def = model_definition(id);

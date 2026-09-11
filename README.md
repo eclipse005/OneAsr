@@ -1,11 +1,11 @@
 # OneAsr
 
-**本地 · 离线 · 批量音视频 → SRT 字幕**
+**本地 · 离线 · 批量音视频 → SRT / TXT 字幕**
 
 Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 与 ForcedAligner，从音视频直接产出带时间轴的字幕文件。
 
 ```text
-音视频  →  VAD 分段  →  识别  →  对齐打轴  →  智能断句  →  *.srt
+音视频  →  [人声分离]  →  VAD 分段  →  识别  →  对齐打轴  →  智能断句  →  *.srt / *.txt
 ```
 
 任意时刻显存中只驻留 **一个** 大模型（先 ASR，再 Aligner），4GB 级显卡也能跑通 0.6B 组合。
@@ -31,6 +31,9 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 - **双规格 ASR**：Qwen3-ASR **0.6B**（更快 / 省显存）· **1.7B**（更准 / 更吃资源）
 - **词级时间轴**：Qwen3-ForcedAligner 对齐；日语分词已内嵌，无需额外模型目录
 - **VAD 智能分段**：目标段长 **30–180 秒**（默认 60），长音频更稳
+- **输出格式可选**：SRT 字幕 / TXT 纯文本（逐句一行）可同时选，至少保留一种
+- **中文字形可选**：原文（默认，保持模型输出）/ 简体 / 繁体，仅对中文、粤语素材生效；转换在导出前完成，不影响时间轴
+- **人声分离（可选）**：内置 HTDemucs v4 原生推理，转录前压掉背景音乐 / 噪声；跟随设置里的「推理后端」，「自动」档在 GPU 不可用时回退 CPU 并在状态栏提示，显式选 GPU 则直接报错
 - **字幕长度预设**：短 / 标准 / 松，控制单行信息量
 - **处理明细**：各阶段耗时可看，方便对比机器与参数
 - **字幕输出位置**：默认与视频同目录，设置里可切换到指定文件夹（如 `{安装目录}/output/`）
@@ -66,6 +69,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 | ASR（二选一） | Qwen3-ASR-0.6B | ~1.8 GB | 默认推荐 |
 | | Qwen3-ASR-1.7B | ~4.4 GB | 更高精度 |
 | 对齐（必需） | Qwen3-ForcedAligner-0.6B | ~1.7 GB | 所有 ASR 共用 |
+| 人声分离（可选） | HTDemucs v4 (htdemucs_ft) | ~336 MB | 带 BGM / 噪声素材启用 |
 | GPU（可选） | CUDA 12.x 运行库 | ~820 MB | cudart / cublas 等 |
 
 常用组合约 **3.5～6.9 GB**，另建议预留任务临时空间。
@@ -114,6 +118,10 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 ```powershell
 oneasr-cli.exe transcribe --input "C:\path\to\video.mp4" --language zh --backend auto --output "C:\path\to\out.srt"
 ```
+
+常用开关：`--txt`（额外输出同名 `.txt`）、`--no-srt`（只出文本，需配合 `--txt`）、
+`--script original|simplified|traditional`（中文字形，默认 `original`）、`--vocal-separation`
+（先做人声分离，需已下载 HTDemucs 权重）。
 
 Python：
 

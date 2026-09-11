@@ -33,14 +33,16 @@ use crate::lang::{to_lang_key, to_qwen_language_label};
 use crate::media::{
     convert_to_16k_mono_wav, slice_wav, wav_duration_sec, write_atomic, MediaError,
 };
-use crate::paths::{media_stem, output_srt_path};
+use crate::paths::{media_stem, output_path};
 use crate::sentence_boundary::{
-    build_source_sentences_from_words, source_sentences_to_srt, SentenceBoundaryRequest,
-    WordTokenDto,
+    build_source_sentences_from_words, source_sentences_to_srt, source_sentences_to_txt,
+    SentenceBoundaryRequest, WordTokenDto,
 };
+use crate::separation;
 use crate::settings::Settings;
 use crate::subtitle::alignment::align_text_to_timestamps;
 use crate::subtitle::segmenter::{normalize_word_tokens, WordToken};
+use crate::text_script;
 use crate::vad;
 
 #[derive(Debug, Error)]
@@ -51,21 +53,21 @@ pub enum AsrError {
     Media(#[from] MediaError),
     #[error("路径非 UTF-8")]
     PathNotUtf8,
-    #[error("ASR 未产生任何有效文本（{0} 段全部为空）")]
+    #[error("语音识别未产生任何有效文本（{0} 段全部为空）")]
     EmptyTranscribe(usize),
     #[error("对齐后词列表为空")]
     EmptyAlignment,
     #[error("断句后字幕为空")]
     EmptySentenceBoundary,
-    #[error("加载 ASR 失败: {0}")]
+    #[error("加载语音识别模型失败: {0}")]
     LoadAsr(String),
-    #[error("加载 Aligner 失败: {0}")]
+    #[error("加载对齐模型失败: {0}")]
     LoadAligner(String),
     #[error("转写失败 chunk {0}: {1}")]
     TranscribeChunk(usize, String),
     #[error("对齐失败 chunk {0}（{1}）: {2}")]
     AlignChunk(usize, String, String),
-    #[error("{role} 模型文件不完整（{missing}）: {dir}")]
+    #[error("{role}模型文件不完整（{missing}）: {dir}")]
     ModelIncomplete {
         role: &'static str,
         missing: String,
@@ -113,6 +115,8 @@ fn trace_log(msg: impl AsRef<str>) {
 pub enum AsrStage {
     /// ffmpeg → 16 kHz mono master WAV.
     Converting,
+    /// Optional HTDemucs vocal separation (vocals replace the master WAV).
+    Separating,
     /// VAD + chunk plan (or single-chunk plan for short audio).
     Planning,
     /// Load Qwen ASR weights.
@@ -131,32 +135,47 @@ impl AsrStage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Converting => "转码音频",
+            Self::Separating => "人声分离",
             Self::Planning => "分段规划",
-            Self::LoadingAsr => "加载 ASR",
+            Self::LoadingAsr => "加载识别模型",
             Self::Transcribing => "转写中",
-            Self::LoadingAligner => "加载 Aligner",
+            Self::LoadingAligner => "加载对齐模型",
             Self::Aligning => "打轴中",
             Self::Exporting => "导出字幕",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct StageUpdate {
     pub stage: AsrStage,
     pub chunk: Option<(usize, usize)>,
+    /// Non-fatal message for the user (e.g.「人声分离已改用 CPU」).
+    /// The GUI flashes it in the status bar; the CLI prints it once.
+    pub warning: Option<String>,
 }
 
 impl StageUpdate {
     pub fn new(stage: AsrStage) -> Self {
-        Self { stage, chunk: None }
+        Self {
+            stage,
+            chunk: None,
+            warning: None,
+        }
     }
 
     pub fn with_chunk(stage: AsrStage, current: usize, total: usize) -> Self {
         Self {
             stage,
             chunk: Some((current, total)),
+            warning: None,
         }
+    }
+
+    /// Attach a user-visible, non-fatal message to this update.
+    pub fn with_warning(mut self, message: impl Into<String>) -> Self {
+        self.warning = Some(message.into());
+        self
     }
 
     pub fn label(&self) -> String {
@@ -295,6 +314,7 @@ fn push_or_merge_stage(stages: &mut Vec<StageTiming>, stage: AsrStage, elapsed_m
 enum ModelRole {
     Asr,
     Aligner,
+    Demucs,
 }
 
 static MODEL_DIR_READY: OnceLock<Mutex<HashSet<(ModelRole, PathBuf)>>> = OnceLock::new();
@@ -325,8 +345,10 @@ fn cached_ready_store(role: ModelRole, canonical: PathBuf) {
 pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Asr, model_dir, || {
         match crate::model::ModelId::try_from_asr_dir(model_dir) {
-            Some(id) => check_model_dir_against_catalog("ASR", model_dir, id),
-            None => check_model_dir_inner("ASR", model_dir, &["config.json", "tokenizer.json"]),
+            Some(id) => check_model_dir_against_catalog("语音识别", model_dir, id),
+            None => {
+                check_model_dir_inner("语音识别", model_dir, &["config.json", "tokenizer.json"])
+            }
         }
     })
 }
@@ -339,9 +361,19 @@ pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
 pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Aligner, model_dir, || {
         match crate::model::ModelId::try_from_aligner_dir(model_dir) {
-            Some(id) => check_model_dir_against_catalog("Aligner", model_dir, id),
-            None => check_model_dir_inner("Aligner", model_dir, &["config.json"]),
+            Some(id) => check_model_dir_against_catalog("对齐", model_dir, id),
+            None => check_model_dir_inner("对齐", model_dir, &["config.json"]),
         }
+    })
+}
+
+/// Check the optional HTDemucs weights directory (vocal separation).
+///
+/// The file name and size contract come from the catalog, so a custom
+/// user-picked directory works as long as it holds `htdemucs_ft.safetensors`.
+pub fn check_demucs_model_dir(model_dir: &Path) -> Result<(), AsrError> {
+    run_cached_model_check(ModelRole::Demucs, model_dir, || {
+        check_model_dir_against_catalog("人声分离", model_dir, crate::model::ModelId::HtdemucsFt)
     })
 }
 
@@ -665,7 +697,7 @@ fn cuda_load_failure_msg(e: &impl std::fmt::Display) -> String {
         Err(_) => String::new(),
     };
     format!(
-        "加载 ASR 失败: {e:#}{probe_hint}\n\
+        "加载语音识别模型失败: {e:#}{probe_hint}\n\
          请检查：1) 显存 ≥ 4GB 且未被其他程序占满；2) NVIDIA 驱动已更新；\
          3) 关闭占用 GPU 的程序后重试。或在设置中将后端改为 CPU"
     )
@@ -811,16 +843,25 @@ impl<'a> Pipeline<'a> {
         app_root: &Path,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
-        // `conv` owns the scratch dir; dropping it cleans up on every path.
-        let conv = self.stage_convert(input, app_root)?;
+        let conv = self.stage_prepare(input, app_root)?;
         let vad = self.stage_vad_plan(&conv)?;
         let (asr, compute) = self.stage_transcribe_all(&conv, &vad)?;
         let align = self.stage_align_all(&conv, &vad, &asr, compute)?;
         self.stage_export(input, media_name, vad.speech_segments, align, export)
     }
 
-    fn stage_convert(&self, input: &Path, app_root: &Path) -> Result<ConvertedAudio, AsrError> {
-        self.emit(StageUpdate::new(AsrStage::Converting));
+    // ── Stage 1: optional vocal separation → 16 kHz mono master ─────────
+
+    /// Build the master WAV the rest of the pipeline consumes.
+    ///
+    /// With separation on, the input is decoded **once** at its native rate for
+    /// HTDemucs and the vocals are transcoded to the 16 kHz master; without it
+    /// the input is transcoded directly. Either way exactly one full decode
+    /// feeds the run.
+    ///
+    /// The scratch dir is owned by [`ConvertedAudio`] from before the first
+    /// decode, so every early return (and panic) cleans up through `Drop`.
+    fn stage_prepare(&self, input: &Path, app_root: &Path) -> Result<ConvertedAudio, AsrError> {
         let stem = media_stem(input);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -829,24 +870,65 @@ impl<'a> Pipeline<'a> {
         let work_dir = app_root.join("runs").join(format!("{stem}_{stamp}"));
         std::fs::create_dir_all(&work_dir)?;
 
-        let wav_path = work_dir.join("input_16k.wav");
-        if let Err(e) = convert_to_16k_mono_wav(input, &wav_path) {
-            let _ = std::fs::remove_dir_all(&work_dir);
-            return Err(e.into());
-        }
-
-        let duration = wav_duration_sec(&wav_path).ok_or_else(|| {
-            let _ = std::fs::remove_dir_all(&work_dir);
-            AsrError::Other("无法读取转码后音频时长".into())
-        })? as f32;
-        let chunk_sec = self.settings.chunk_target_seconds_clamped() as f32;
-
-        Ok(ConvertedAudio {
+        let mut conv = ConvertedAudio {
             work_dir,
-            wav_path,
-            duration,
-            chunk_sec,
-        })
+            wav_path: PathBuf::new(),
+            duration: 0.0,
+            chunk_sec: self.settings.chunk_target_seconds_clamped() as f32,
+        };
+
+        let master_source = if self.settings.vocal_separation {
+            self.stage_separate_vocals(input, &conv.work_dir)?
+        } else {
+            input.to_path_buf()
+        };
+
+        self.emit(StageUpdate::new(AsrStage::Converting));
+        let wav_path = conv.work_dir.join("input_16k.wav");
+        convert_to_16k_mono_wav(&master_source, &wav_path)?;
+        conv.duration = wav_duration_sec(&wav_path)
+            .ok_or_else(|| AsrError::Other("无法读取转码后音频时长".into()))?
+            as f32;
+        conv.wav_path = wav_path;
+        Ok(conv)
+    }
+
+    /// Separate the vocals stem (HTDemucs v4, native Rust inference) and return
+    /// the vocals WAV. Runs before VAD so chunk planning and ASR both see the
+    /// music-suppressed audio.
+    fn stage_separate_vocals(
+        &self,
+        input: &Path,
+        work_dir: &Path,
+    ) -> Result<PathBuf, AsrError> {
+        self.emit(StageUpdate::new(AsrStage::Separating));
+        let model_dir = self.settings.resolved_demucs_model_dir();
+        let vocals = separation::separate_vocals(
+            input,
+            &model_dir,
+            work_dir,
+            &self.settings.backend,
+            // Chunk-level progress → 「人声分离 n/N」, backend fallbacks →
+            // a status-bar warning; both ride the existing stage channel.
+            &mut |event| match event {
+                separation::SeparationEvent::Progress { done, total } => {
+                    self.emit(StageUpdate::with_chunk(AsrStage::Separating, done, total));
+                }
+                separation::SeparationEvent::FellBackToCpu { reason } => {
+                    self.emit(
+                        StageUpdate::new(AsrStage::Separating).with_warning(format!(
+                            "人声分离 GPU 不可用，已改用 CPU（速度明显变慢）：{reason}"
+                        )),
+                    );
+                }
+            },
+        )?;
+
+        trace_log(format!(
+            "vocal separation: vocals stem ready ({})",
+            model_dir.display()
+        ));
+        Ok(vocals)
     }
 
     // ── Stage 2: VAD speech segmentation + chunk plan ───────────────────
@@ -1179,7 +1261,7 @@ impl<'a> Pipeline<'a> {
             .collect();
 
         let source_lang_key = to_lang_key(&self.settings.language);
-        let step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
+        let mut step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
             task_id: stem.clone(),
             media_path: media_name.to_string(),
             source_lang: source_lang_key.clone(),
@@ -1189,8 +1271,23 @@ impl<'a> Pipeline<'a> {
         })
         .map_err(AsrError::Other)?;
 
-        let srt_body = source_sentences_to_srt(&step2);
-        if srt_body.trim().is_empty() {
+        // Chinese output script (zh / yue only). Timing fields are untouched:
+        // conversion rewrites cue text only, after alignment and segmentation.
+        if let Some(script) = self.settings.text_script_for(&source_lang_key) {
+            text_script::convert_sentences(&mut step2, script);
+        }
+
+        let srt_body = self
+            .settings
+            .output_srt
+            .then(|| source_sentences_to_srt(&step2));
+        let txt_body = self
+            .settings
+            .output_txt
+            .then(|| source_sentences_to_txt(&step2));
+        if srt_body.as_deref().is_some_and(|b| b.trim().is_empty())
+            || txt_body.as_deref().is_some_and(|b| b.trim().is_empty())
+        {
             return Err(AsrError::EmptySentenceBoundary);
         }
 
@@ -1198,24 +1295,25 @@ impl<'a> Pipeline<'a> {
         // the configured output dir when that write fails (permissions, …).
         let fallback_dir = self.settings.resolved_output_dir();
         let target_dir = self.settings.srt_target_dir(input);
-        let mut srt_path = output_srt_path(&target_dir, &stem);
-        if let Err(e) = write_atomic(&srt_path, &srt_body) {
-            if target_dir == fallback_dir {
-                return Err(e.into());
-            }
-            eprintln!(
-                "warning: SRT write failed in {} ({e}); saved to fallback {} instead",
-                target_dir.display(),
-                fallback_dir.display()
-            );
-            trace_log(format!(
-                "srt fallback: {} → {}",
-                target_dir.display(),
-                fallback_dir.display()
-            ));
-            srt_path = output_srt_path(&fallback_dir, &stem);
-            write_atomic(&srt_path, &srt_body)?;
+
+        // SRT first: it stays the primary output (task row “打开” target).
+        let mut primary: Option<PathBuf> = None;
+        if let Some(body) = srt_body.as_deref() {
+            primary = Some(write_export_file(
+                &target_dir,
+                &fallback_dir,
+                &stem,
+                "srt",
+                body,
+            )?);
         }
+        if let Some(body) = txt_body.as_deref() {
+            let path = write_export_file(&target_dir, &fallback_dir, &stem, "txt", body)?;
+            if primary.is_none() {
+                primary = Some(path);
+            }
+        }
+        let primary = primary.ok_or_else(|| AsrError::Other("未启用任何输出格式".into()))?;
 
         if let Some(words_path) = export.words_json.as_ref() {
             match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {
@@ -1233,8 +1331,38 @@ impl<'a> Pipeline<'a> {
             }
         }
 
-        Ok(srt_path)
+        Ok(primary)
     }
+}
+
+/// Write one export file into `target_dir`; on failure fall back to the
+/// configured output dir (same policy as the original SRT-only write).
+fn write_export_file(
+    target_dir: &Path,
+    fallback_dir: &Path,
+    stem: &str,
+    ext: &str,
+    body: &str,
+) -> Result<PathBuf, AsrError> {
+    let mut path = output_path(target_dir, stem, ext);
+    if let Err(e) = write_atomic(&path, body) {
+        if target_dir == fallback_dir {
+            return Err(e.into());
+        }
+        eprintln!(
+            "warning: .{ext} write failed in {} ({e}); saved to fallback {} instead",
+            target_dir.display(),
+            fallback_dir.display()
+        );
+        trace_log(format!(
+            "{ext} fallback: {} → {}",
+            target_dir.display(),
+            fallback_dir.display()
+        ));
+        path = output_path(fallback_dir, stem, ext);
+        write_atomic(&path, body)?;
+    }
+    Ok(path)
 }
 
 

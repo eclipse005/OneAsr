@@ -41,7 +41,7 @@ use oneasr_core::{
     resolve_app_root_dir, resolve_cuda_runtime_dir, source_language_by_id, AsrStage,
     DownloadHandle, DownloadProgress, DownloadState, ModelId, ModelKind,
     Settings, StageClock, StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC,
-    CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES,
+    CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES, TextScript,
 };
 
 actions!(oneasr, [DismissMenus]);
@@ -65,6 +65,7 @@ enum WorkerMsg {
     PickCancelled,
     ModelDirPicked(PathBuf),
     AlignerDirPicked(PathBuf),
+    DemucsDirPicked(PathBuf),
     OutputDirPicked(PathBuf),
     Probed {
         id: String,
@@ -74,6 +75,9 @@ enum WorkerMsg {
     Progress {
         id: String,
         stage: SharedString,
+        /// Non-fatal message raised by the pipeline (e.g. separation fell back
+        /// to CPU); flashed in the status bar.
+        warning: Option<SharedString>,
     },
     Finished {
         id: String,
@@ -220,6 +224,8 @@ struct OneAsrApp {
     asr_ready: bool,
     align_ready: bool,
     cuda_ready: bool,
+    /// Optional HTDemucs weights present (vocal separation).
+    demucs_ready: bool,
     /// Soft status-bar hint (no toast). Auto-clears after a few seconds.
     status_hint: Option<SharedString>,
     status_hint_until: Option<Instant>,
@@ -229,10 +235,12 @@ struct OneAsrApp {
     asr_download: Option<DownloadProgress>,
     align_download: Option<DownloadProgress>,
     cuda_download: Option<DownloadProgress>,
+    demucs_download: Option<DownloadProgress>,
     /// Active download cancel handles.
     asr_dl_handle: Option<DownloadHandle>,
     align_dl_handle: Option<DownloadHandle>,
     cuda_dl_handle: Option<DownloadHandle>,
+    demucs_dl_handle: Option<DownloadHandle>,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
     /// Dedicated ASR worker (never run heavy work on the UI thread).
@@ -271,9 +279,14 @@ impl OneAsrApp {
                                         &settings,
                                         |update| {
                                             clock.note(&update);
+                                            let warning = update
+                                                .warning
+                                                .as_ref()
+                                                .map(SharedString::from);
                                             let _ = ptx.send(WorkerMsg::Progress {
                                                 id: id_for_progress.clone(),
                                                 stage: SharedString::from(update.label()),
+                                                warning,
                                             });
                                         },
                                     )
@@ -353,6 +366,7 @@ impl OneAsrApp {
             ModelId::Qwen3Asr06B,
             ModelId::Qwen3Asr17B,
             ModelId::QwenAlign06B,
+            ModelId::HtdemucsFt,
             ModelId::CudaRuntime,
         ]
         .map(|id| {
@@ -415,15 +429,18 @@ impl OneAsrApp {
             asr_ready: false,
             align_ready: false,
             cuda_ready: false,
+            demucs_ready: false,
             status_hint: None,
             status_hint_until: None,
             active_stage: None,
             asr_download: None,
             align_download: None,
             cuda_download: None,
+            demucs_download: None,
             asr_dl_handle: None,
             align_dl_handle: None,
             cuda_dl_handle: None,
+            demucs_dl_handle: None,
             tx: tx.clone(),
             rx,
             job_tx,
@@ -465,6 +482,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
             ModelKind::CudaRuntime => self.cuda_dl_handle = Some(handle.clone()),
+            ModelKind::Demucs => self.demucs_dl_handle = Some(handle.clone()),
         }
         self.set_download_progress(
             DownloadProgress {
@@ -514,6 +532,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle.as_ref(),
             ModelKind::Align => self.align_dl_handle.as_ref(),
             ModelKind::CudaRuntime => self.cuda_dl_handle.as_ref(),
+            ModelKind::Demucs => self.demucs_dl_handle.as_ref(),
         };
         if let Some(h) = handle {
             if h.model_id == id {
@@ -534,6 +553,10 @@ impl OneAsrApp {
                 .is_some_and(|h| h.model_id == id),
             ModelKind::CudaRuntime => self
                 .cuda_dl_handle
+                .as_ref()
+                .is_some_and(|h| h.model_id == id),
+            ModelKind::Demucs => self
+                .demucs_dl_handle
                 .as_ref()
                 .is_some_and(|h| h.model_id == id),
         };
@@ -565,6 +588,13 @@ impl OneAsrApp {
                         .as_ref()
                         .is_some_and(|p| p.state == DownloadState::Downloading)
             }
+            ModelKind::Demucs => {
+                self.demucs_dl_handle.is_some()
+                    || self
+                        .demucs_download
+                        .as_ref()
+                        .is_some_and(|p| p.state == DownloadState::Downloading)
+            }
         }
     }
 
@@ -573,6 +603,7 @@ impl OneAsrApp {
         self.download_kind_busy(ModelKind::Asr)
             || self.download_kind_busy(ModelKind::Align)
             || self.download_kind_busy(ModelKind::CudaRuntime)
+            || self.download_kind_busy(ModelKind::Demucs)
     }
 
     /// Progress snapshot for this exact model id (never another ASR size).
@@ -581,6 +612,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_download.as_ref(),
             ModelKind::Align => self.align_download.as_ref(),
             ModelKind::CudaRuntime => self.cuda_download.as_ref(),
+            ModelKind::Demucs => self.demucs_download.as_ref(),
         }?;
         if p.model_id == id {
             Some(p)
@@ -594,6 +626,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_download = Some(progress),
             ModelKind::Align => self.align_download = Some(progress),
             ModelKind::CudaRuntime => self.cuda_download = Some(progress),
+            ModelKind::Demucs => self.demucs_download = Some(progress),
         }
     }
 
@@ -602,6 +635,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle = None,
             ModelKind::Align => self.align_dl_handle = None,
             ModelKind::CudaRuntime => self.cuda_dl_handle = None,
+            ModelKind::Demucs => self.demucs_dl_handle = None,
         }
     }
 
@@ -623,6 +657,9 @@ impl OneAsrApp {
         self.align_ready =
             oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
         self.cuda_ready = is_cuda_runtime_ready();
+        self.demucs_ready =
+            oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir())
+                .is_ok();
         self.model_status = if self.settings.can_start().is_ok() {
             ModelStatus::Ready
         } else {
@@ -701,8 +738,8 @@ impl OneAsrApp {
                     } else {
                         self.flash_hint(
                             match self.model_status {
-                                ModelStatus::Ready => "ASR 模型目录已更新 · 就绪",
-                                ModelStatus::NotReady => "ASR 模型目录已更新 · 未就绪",
+                                ModelStatus::Ready => "语音识别模型目录已更新 · 就绪",
+                                ModelStatus::NotReady => "语音识别模型目录已更新 · 未就绪",
                             },
                             cx,
                         );
@@ -723,6 +760,25 @@ impl OneAsrApp {
                             },
                             cx,
                         );
+                    }
+                }
+                Ok(WorkerMsg::DemucsDirPicked(dir)) => {
+                    self.settings.demucs_model_dir = dir;
+                    self.settings_dirty = false;
+                    self.refresh_model_probe();
+                    // A row can only have separation on while the weights are
+                    // present, so a dir swap that loses them also clears the
+                    // default for new tasks.
+                    if !self.demucs_ready && self.settings.vocal_separation {
+                        self.settings.vocal_separation = false;
+                    }
+                    if let Err(e) = self.settings.save() {
+                        crashlog::log_error(format!("demucs model dir save failed: {e}"));
+                        self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
+                    } else if self.demucs_ready {
+                        self.flash_hint("人声分离模型目录已更新 · 就绪", cx);
+                    } else {
+                        self.flash_hint("人声分离模型目录已更新 · 未就绪", cx);
                     }
                 }
                 Ok(WorkerMsg::OutputDirPicked(dir)) => {
@@ -761,6 +817,10 @@ impl OneAsrApp {
                             ModelKind::CudaRuntime => {
                                 self.refresh_model_probe();
                                 self.flash_hint(format!("{} 已安装", id.label()), cx);
+                            }
+                            ModelKind::Demucs => {
+                                self.refresh_model_probe();
+                                self.flash_hint(format!("{} 已就绪", id.label()), cx);
                             }
                             ModelKind::Asr | ModelKind::Align => {
                                 let bound = self
@@ -820,8 +880,13 @@ impl OneAsrApp {
                     }
                     cx.notify();
                 }
-                Ok(WorkerMsg::Progress { id, stage }) => {
+                Ok(WorkerMsg::Progress { id, stage, warning }) => {
                     self.active_stage = Some((id, stage));
+                    // Non-fatal pipeline warnings (e.g. separation fell back to
+                    // CPU) must be visible: this window has no console.
+                    if let Some(w) = warning {
+                        self.flash_hint(w, cx);
+                    }
                     cx.notify();
                 }
                 Ok(WorkerMsg::Finished { id, result, timing }) => {
@@ -839,7 +904,7 @@ impl OneAsrApp {
                             Ok(srt) => {
                                 t.status = TaskStatus::Done;
                                 t.queue_seq = None;
-                                t.output_srt = Some(srt);
+                                t.output_file = Some(srt);
                                 t.error = None;
                             }
                             Err(e) => {
@@ -872,7 +937,7 @@ impl OneAsrApp {
                             if matches!(t.status, TaskStatus::Processing | TaskStatus::Queued) {
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
-                                t.error = Some("ASR 工作线程已退出".into());
+                                t.error = Some("识别工作线程已退出".into());
                                 affected = true;
                             }
                         }
@@ -922,7 +987,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         let start = self.settings.asr_model_dir.clone();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择 ASR 模型目录");
+            let mut dlg = rfd::FileDialog::new().set_title("选择语音识别模型目录");
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }
@@ -948,6 +1013,21 @@ impl OneAsrApp {
         cx.notify();
     }
 
+    fn pick_demucs_dir(&mut self, cx: &mut Context<Self>) {
+        let tx = self.tx.clone();
+        let start = self.settings.resolved_demucs_model_dir();
+        thread::spawn(move || {
+            let mut dlg = rfd::FileDialog::new().set_title("选择人声分离模型目录");
+            if start.is_dir() {
+                dlg = dlg.set_directory(&start);
+            }
+            if let Some(dir) = dlg.pick_folder() {
+                let _ = tx.send(WorkerMsg::DemucsDirPicked(dir));
+            }
+        });
+        cx.notify();
+    }
+
     fn pick_output_dir(&mut self, cx: &mut Context<Self>) {
         let tx = self.tx.clone();
         let start = self.settings.resolved_output_dir();
@@ -964,8 +1044,10 @@ impl OneAsrApp {
     }
 
     fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        // New tasks inherit the settings default language (per-task override later).
+        // New tasks inherit the settings defaults (language + vocal separation);
+        // both stay overridable per row afterwards.
         let default_lang = self.settings.language.clone();
+        let default_sep = self.settings.vocal_separation;
         for path in paths {
             let path = path.canonicalize().unwrap_or(path);
             if !accept_input_path(&path) {
@@ -977,7 +1059,7 @@ impl OneAsrApp {
             if self.tasks.iter().any(|t| t.path == path) {
                 continue;
             }
-            let task = Task::from_path(&path, default_lang.clone());
+            let task = Task::from_path(&path, default_lang.clone(), default_sep);
             let id = task.id.clone();
             let p = task.path.clone();
             let tx = self.tx.clone();
@@ -1206,6 +1288,34 @@ impl OneAsrApp {
         cx.notify();
     }
 
+    /// Flip per-task vocal separation (row pill). Blocked while the row is
+    /// processing; enabling needs the Demucs weights to be installed.
+    fn toggle_task_separation(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+            return;
+        };
+        if task.status.locks_row_actions() {
+            self.flash_hint("处理中的任务不能修改人声分离", cx);
+            return;
+        }
+        let next = !task.vocal_separation;
+        if next && !self.demucs_ready {
+            self.flash_hint("请先在设置中下载人声分离模型", cx);
+            return;
+        }
+        task.set_vocal_separation(next);
+        sfx::play(sfx::Sfx::Click);
+        self.flash_hint(
+            if next {
+                "本任务已开启人声分离"
+            } else {
+                "本任务已关闭人声分离"
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
     /// Close language selects (Escape / click-outside scrim). Timing is hover-only.
     fn dismiss_menus(&mut self, cx: &mut Context<Self>) {
         if self.lang_menu.is_none() && !self.settings_lang_open {
@@ -1331,8 +1441,9 @@ impl OneAsrApp {
                 TaskRowView {
                     id: t.id.clone(),
                     status: t.status,
-                    has_output: t.output_srt.is_some(),
+                    has_output: t.output_file.is_some(),
                     language: t.language.clone(),
+                    vocal_separation: t.vocal_separation,
                     error: t.error.clone(),
                     name: t.name.clone(),
                     size_label: t.size_label(),
@@ -1544,20 +1655,46 @@ impl OneAsrApp {
         if self.busy {
             return;
         }
-        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+        let Some(task) = self.tasks.iter().find(|t| t.id == id) else {
             return;
         };
         if task.status != TaskStatus::Queued && task.status != TaskStatus::Pending {
             return;
         }
-        task.status = TaskStatus::Processing;
-        task.queue_seq = None;
-        task.error = None;
-        task.timing = None;
         let id = task.id.clone();
         let path = task.path.clone();
         let name = task.name.clone();
         let task_lang = task.language.clone();
+        let task_sep = task.vocal_separation;
+
+        // Effective settings for **this row**: per-task language + separation
+        // override the settings defaults. Built before anything is marked
+        // Processing so the start gate judges what will actually run.
+        let mut settings = self.settings.clone();
+        settings.language = normalize_source_language(&task_lang);
+        settings.vocal_separation = task_sep;
+        if let Err(e) = settings.can_start() {
+            crashlog::log_warn(format!(
+                "task blocked before start: {id}\n  reason: {e}\n  vocal_separation: {task_sep}"
+            ));
+            if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                t.status = TaskStatus::Error;
+                t.queue_seq = None;
+                t.error = Some(e.clone());
+            }
+            self.flash_hint(e, cx);
+            // The row is settled without a worker job — keep the queue moving.
+            self.try_start_next(cx);
+            cx.notify();
+            return;
+        }
+
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+            t.status = TaskStatus::Processing;
+            t.queue_seq = None;
+            t.error = None;
+            t.timing = None;
+        }
         // Processing locks row language edit — drop a live select on this row.
         if self.lang_menu.as_deref() == Some(id.as_str()) {
             self.lang_menu = None;
@@ -1566,24 +1703,27 @@ impl OneAsrApp {
             self.close_timing_popover();
         }
         self.busy = true;
-        // Match the pipeline's first real `on_stage` (Converting).
+        // Match the pipeline's first real `on_stage`: separation runs before
+        // the 16 kHz transcode when the row has it enabled.
+        let first_stage = if task_sep {
+            AsrStage::Separating
+        } else {
+            AsrStage::Converting
+        };
         self.active_stage = Some((
             id.clone(),
-            SharedString::from(AsrStage::Converting.label()),
+            SharedString::from(first_stage.label()),
         ));
-
-        // Per-task language overrides settings default for this run only.
-        let mut settings = self.settings.clone();
-        settings.language = normalize_source_language(&task_lang);
 
         // Start context: failures log only `{id}` + message, so this entry is
         // what makes a pasted log self-sufficient (which file/model/backend).
         crashlog::log_info(format!(
-            "task start: {id}\n  file: {}\n  model: {}\n  backend: {}\n  language: {}",
+            "task start: {id}\n  file: {}\n  model: {}\n  backend: {}\n  language: {}\n  vocal_separation: {}",
             path.display(),
             settings.asr_model_dir.display(),
             settings.backend,
             settings.language,
+            settings.vocal_separation,
         ));
 
         // Hand off to the dedicated ASR worker — never block the UI thread.
@@ -1604,8 +1744,12 @@ impl OneAsrApp {
             self.active_stage = None;
             if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                 t.status = TaskStatus::Error;
-                t.error = Some("ASR 工作线程已退出".into());
+                t.queue_seq = None;
+                t.error = Some("识别工作线程已退出".into());
             }
+            // Same rule as the pre-flight failure: a settled row must not stall
+            // the rest of the batch.
+            self.try_start_next(cx);
         }
         cx.notify();
     }
@@ -1688,7 +1832,7 @@ impl OneAsrApp {
             .tasks
             .iter()
             .find(|t| t.id == id)
-            .and_then(|t| t.output_srt.clone())
+            .and_then(|t| t.output_file.clone())
         else {
             return;
         };
@@ -1721,8 +1865,8 @@ fn run_task(
 ) -> Result<PathBuf, String> {
     let app_root =
         resolve_app_root().ok_or_else(|| "找不到应用目录（需含 bin/ffmpeg.exe）".to_string())?;
-    // Primary deliverable: {settings.output_dir}/{stem}.srt (real ASR, no stubs).
-    // Runs only on the dedicated ASR worker thread.
+    // Primary deliverable: {target_dir}/{stem}.srt, or .txt when SRT output is
+    // switched off (real ASR, no stubs). Runs only on the dedicated worker thread.
     process_media_file_with_progress(path, name, settings, &app_root, on_stage)
         .map_err(|e| e.to_string())
 }
@@ -1734,6 +1878,8 @@ struct TaskRowView {
     status: TaskStatus,
     has_output: bool,
     language: String,
+    /// Per-task vocal separation (settings default, overridable per row).
+    vocal_separation: bool,
     error: Option<String>,
     name: String,
     size_label: String,
@@ -1862,8 +2008,10 @@ const ROW_EXIT_SECS: f32 = 0.22;
 const ACTIONS_COL_PX: f32 = 120.;
 /// Language chip column (fixed so status changes never shove it).
 const LANG_COL_PX: f32 = 64.;
-/// Status pill column — wide enough for「转写中 99/99」「导出字幕」「排队#99」.
-const STATUS_COL_PX: f32 = 112.;
+/// Per-task vocal-separation toggle column (right of the language chip).
+const SEPARATE_COL_PX: f32 = 76.;
+/// Status pill column — wide enough for「人声分离 1800/1800」「转写中 99/99」.
+const STATUS_COL_PX: f32 = 132.;
 /// List language menu width (absolute panel under the chip).
 const LANG_MENU_W: f32 = 168.;
 /// Floating language menu max height before it scrolls.
@@ -2151,7 +2299,7 @@ impl OneAsrApp {
                     IconKind::Play
                 };
                 let primary_tip = if done_with_out {
-                    "打开字幕位置"
+                    "打开输出位置"
                 } else {
                     "开始"
                 };
@@ -2167,6 +2315,8 @@ impl OneAsrApp {
                 let lang_meta = source_language_by_id(&row.language);
                 let lang_short = lang_meta.map(|l| l.short).unwrap_or("?");
                 let lang_current = row.language.clone();
+                let id_sep = row.id.clone();
+                let sep_on = row.vocal_separation;
                 let err = row.error.clone();
                 let name = row.name.clone();
                 let name_tip = row.name.clone();
@@ -2424,6 +2574,32 @@ impl OneAsrApp {
                                                     )
                                             }),
                                     )
+                                    // Status — informational, left of the control
+                                    // cluster so all clickable pills (语言 / 分离 /
+                                    // 开始 / 删除) sit together on the right.
+                                    .child(
+                                        div()
+                                            .w(px(STATUS_COL_PX))
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .justify_center()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py_0p5()
+                                                    .rounded_full()
+                                                    .bg(status_bg)
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                                            .text_color(status_color)
+                                                            .whitespace_nowrap()
+                                                            .child(status_label),
+                                                    ),
+                                            ),
+                                    )
                                     // Language select — fixed column so status length never shifts it.
                                     .child(
                                         div()
@@ -2512,28 +2688,83 @@ impl OneAsrApp {
                                                     .children(lang_menu_float),
                                             ),
                                     )
-                                    // Status — fixed width; only the filename column shrinks.
+                                    // Vocal separation toggle — same row idiom as
+                                    // the language chip: compact pill, filled when
+                                    // on, per-task override of the settings default.
                                     .child(
                                         div()
-                                            .w(px(STATUS_COL_PX))
+                                            .w(px(SEPARATE_COL_PX))
                                             .flex_shrink_0()
                                             .flex()
                                             .justify_center()
                                             .items_center()
                                             .child(
                                                 div()
+                                                    .id(SharedString::from(format!(
+                                                        "sep-{id_sep}"
+                                                    )))
                                                     .px_2()
-                                                    .py_0p5()
-                                                    .rounded_full()
-                                                    .bg(status_bg)
+                                                    .py_1()
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(if sep_on {
+                                                        ACCENT
+                                                    } else if can_edit_lang {
+                                                        LINE
+                                                    } else {
+                                                        LINE_SOFT
+                                                    })
+                                                    .bg(if sep_on {
+                                                        ACCENT
+                                                    } else if can_edit_lang {
+                                                        BG
+                                                    } else {
+                                                        PANEL
+                                                    })
+                                                    .when(can_edit_lang, |el| {
+                                                        el.cursor_pointer().hover(|s| {
+                                                            s.bg(ACCENT_SOFT)
+                                                                .border_color(ACCENT)
+                                                        })
+                                                    })
+                                                    .when(can_edit_lang, |el| {
+                                                        el.on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                this.toggle_task_separation(
+                                                                    &id_sep, cx,
+                                                                );
+                                                            },
+                                                        ))
+                                                    })
                                                     .child(
                                                         div()
                                                             .text_xs()
-                                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                                            .text_color(status_color)
+                                                            .font_weight(
+                                                                gpui::FontWeight::MEDIUM,
+                                                            )
                                                             .whitespace_nowrap()
-                                                            .child(status_label),
-                                                    ),
+                                                            .text_color(if sep_on {
+                                                                PANEL
+                                                            } else if can_edit_lang {
+                                                                TEXT
+                                                            } else {
+                                                                MUTED_SOFT
+                                                            })
+                                                            .child("分离"),
+                                                    )
+                                                    .tooltip({
+                                                        let tip = if sep_on {
+                                                            "人声分离：开启（转录前分离人声，点击关闭）"
+                                                        } else {
+                                                            "人声分离：关闭（点击开启）"
+                                                        };
+                                                        move |_, cx| {
+                                                            cx.new(|_| NameTooltip {
+                                                                text: tip.into(),
+                                                            })
+                                                            .into()
+                                                        }
+                                                    }),
                                             ),
                                     )
                                     // Two fixed slots: primary (开始 | 打开字幕) + 删除.
@@ -2558,7 +2789,7 @@ impl OneAsrApp {
                                                         .find(|t| t.id == id_start)
                                                         .map(|t| {
                                                             t.status == TaskStatus::Done
-                                                                && t.output_srt.is_some()
+                                                                && t.output_file.is_some()
                                                         })
                                                         .unwrap_or(false)
                                                     {
@@ -2616,6 +2847,19 @@ impl OneAsrApp {
         let output_dir = self.settings.resolved_output_dir().display().to_string();
         let output_dir_tip = output_dir.clone();
         let save_next = self.settings.save_next_to_source;
+        let output_srt = self.settings.output_srt;
+        let output_txt = self.settings.output_txt;
+        let text_script = self.settings.text_script_choice();
+        let vocal_sep = self.settings.vocal_separation;
+        let demucs_ready = self.demucs_ready;
+        let demucs_dl = self.progress_for(ModelId::HtdemucsFt).cloned();
+        let demucs_dl_busy = self.download_busy(ModelId::HtdemucsFt);
+        let demucs_dir = self
+            .settings
+            .resolved_demucs_model_dir()
+            .display()
+            .to_string();
+        let demucs_dir_tip = demucs_dir.clone();
         let dirty = self.is_settings_dirty(cx);
         // Use probe cache — never re-stat model dirs on every scroll paint.
         let asr_ready = self.asr_ready;
@@ -2886,6 +3130,135 @@ impl OneAsrApp {
                             )
                             .into_any_element()
                     }))
+                    // 输出：格式 | 中文字形 并排平分（同「默认语言 | 字幕长度」）
+                    .child(section(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap_2p5()
+                            .child(
+                                div()
+                                    // 中文输出 takes its natural width (3 pills) and
+                                    // may shrink; 输出格式 absorbs the remaining space.
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .text_color(TEXT)
+                                                    .whitespace_nowrap()
+                                                    .child("输出格式"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap_1p5()
+                                            .child(btn(
+                                                "SRT",
+                                                if output_srt {
+                                                    BtnKind::Primary
+                                                } else {
+                                                    BtnKind::Secondary
+                                                },
+                                                true,
+                                                cx.listener(|this, _, _, cx| {
+                                                    if !this.settings.output_txt {
+                                                        this.flash_hint(
+                                                            "至少保留一种输出格式",
+                                                            cx,
+                                                        );
+                                                        return;
+                                                    }
+                                                    this.settings.output_srt =
+                                                        !this.settings.output_srt;
+                                                    this.mark_settings_dirty(cx);
+                                                }),
+                                            ))
+                                            .child(btn(
+                                                "TXT",
+                                                if output_txt {
+                                                    BtnKind::Primary
+                                                } else {
+                                                    BtnKind::Secondary
+                                                },
+                                                true,
+                                                cx.listener(|this, _, _, cx| {
+                                                    if !this.settings.output_srt {
+                                                        this.flash_hint(
+                                                            "至少保留一种输出格式",
+                                                            cx,
+                                                        );
+                                                        return;
+                                                    }
+                                                    this.settings.output_txt =
+                                                        !this.settings.output_txt;
+                                                    this.mark_settings_dirty(cx);
+                                                }),
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .text_color(TEXT)
+                                                    .whitespace_nowrap()
+                                                    .child("中文输出"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(MUTED)
+                                                    .whitespace_nowrap()
+                                                    .child("仅中文/粤语"),
+                                            ),
+                                    )
+                                    .child(
+                                        div().flex().gap_1().children(TextScript::ALL.map(
+                                            |script| {
+                                                let active = text_script == script;
+                                                btn(
+                                                    script.label(),
+                                                    if active {
+                                                        BtnKind::Primary
+                                                    } else {
+                                                        BtnKind::Secondary
+                                                    },
+                                                    true,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        if this.settings.text_script == script.id() {
+                                                            return;
+                                                        }
+                                                        this.settings.text_script =
+                                                            script.id().into();
+                                                        this.mark_settings_dirty(cx);
+                                                    }),
+                                                )
+                                            },
+                                        )),
+                                    ),
+                            )
+                            .into_any_element(),
+                    ))
                     .child(section(
                         div()
                             .flex()
@@ -2992,7 +3365,7 @@ impl OneAsrApp {
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(TEXT)
-                                            .child("ASR 模型"),
+                                            .child("语音识别模型"),
                                     )
                                     .child(
                                         div()
@@ -3190,6 +3563,131 @@ impl OneAsrApp {
                                 }),
                                 cx.listener(|this, _, _, cx| {
                                     this.cancel_model_download(ModelId::QwenAlign06B, cx);
+                                }),
+                            ))
+                            .into_any_element(),
+                    ))
+                    // 人声分离（可选）：HTDemucs 原生 Rust 推理，转录前压掉 BGM
+                    .child(section(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("人声分离"),
+                                    )
+                                    .child(
+                                        div()
+                                            .size(px(8.))
+                                            .rounded_full()
+                                            .bg(if demucs_ready { ACCENT } else { DANGER }),
+                                    ),
+                            )
+                            // 开关 = 新任务默认值（任务行里可单独覆盖）
+                            .child(
+                                div().flex().gap_1p5().children(
+                                    [(false, "关闭"), (true, "开启")]
+                                        .into_iter()
+                                        .map(|(on, label)| {
+                                            let active = vocal_sep == on;
+                                            btn(
+                                                label,
+                                                if active {
+                                                    BtnKind::Primary
+                                                } else {
+                                                    BtnKind::Secondary
+                                                },
+                                                true,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    if this.settings.vocal_separation == on {
+                                                        return;
+                                                    }
+                                                    if on && !this.demucs_ready {
+                                                        this.flash_hint(
+                                                            "请先下载人声分离模型",
+                                                            cx,
+                                                        );
+                                                        return;
+                                                    }
+                                                    this.settings.vocal_separation = on;
+                                                    this.mark_settings_dirty(cx);
+                                                }),
+                                            )
+                                        }),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .id("demucs-dir")
+                                    .flex()
+                                    .items_center()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(LINE)
+                                    .bg(PANEL)
+                                    .overflow_hidden()
+                                    .hover(|s| s.border_color(ACCENT))
+                                    .child(
+                                        div()
+                                            .id("demucs-dir-path")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .px_2p5()
+                                            .py_1p5()
+                                            .text_xs()
+                                            .text_color(TEXT)
+                                            .whitespace_normal()
+                                            .line_clamp(2)
+                                            .child(demucs_dir)
+                                            .tooltip(move |_, cx| {
+                                                cx.new(|_| NameTooltip {
+                                                    text: demucs_dir_tip.clone().into(),
+                                                })
+                                                .into()
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("demucs-dir-browse")
+                                            .flex_shrink_0()
+                                            .px_2p5()
+                                            .py_1p5()
+                                            .border_l_1()
+                                            .border_color(LINE_SOFT)
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(ACCENT_SOFT))
+                                            .child(
+                                                svg()
+                                                    .size(px(15.))
+                                                    .path("icons/folder.svg")
+                                                    .text_color(MUTED),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.pick_demucs_dir(cx)
+                                            })),
+                                    ),
+                            )
+                            .child(model_download_row(
+                                "demucs-dl-btn",
+                                "demucs-dl-cancel",
+                                demucs_ready,
+                                demucs_dl_busy,
+                                demucs_dl.as_ref(),
+                                ModelKind::Demucs,
+                                cx.listener(|this, _, _, cx| {
+                                    this.start_model_download(ModelId::HtdemucsFt, cx);
+                                }),
+                                cx.listener(|this, _, _, cx| {
+                                    this.cancel_model_download(ModelId::HtdemucsFt, cx);
                                 }),
                             ))
                             .into_any_element(),

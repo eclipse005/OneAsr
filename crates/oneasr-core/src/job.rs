@@ -59,19 +59,28 @@ pub struct Task {
     pub format: String,
     /// Source language short id (`zh`, `en`, …). Per-task; defaults from settings.
     pub language: String,
+    /// Run HTDemucs vocal separation for this task; defaults from settings,
+    /// overridable per row (same model as [`Self::language`]).
+    pub vocal_separation: bool,
     pub status: TaskStatus,
     pub error: Option<String>,
     /// FIFO order when [`TaskStatus::Queued`] (lower runs first).
     pub queue_seq: Option<u64>,
-    /// Output SRT path when done.
-    pub output_srt: Option<PathBuf>,
+    /// Primary deliverable written by a finished run (`.srt`, or `.txt` when
+    /// SRT output is switched off) — what the row's “打开” action reveals.
+    pub output_file: Option<PathBuf>,
     /// Per-stage processing wall time (set when a run finishes or fails mid-way).
     pub timing: Option<TaskTiming>,
 }
 
 impl Task {
     /// Build a task; `language` is normalized to a catalog short id (e.g. `zh`).
-    pub fn from_path(path: impl Into<PathBuf>, language: impl Into<String>) -> Self {
+    /// `vocal_separation` is the settings default captured when the row is added.
+    pub fn from_path(
+        path: impl Into<PathBuf>,
+        language: impl Into<String>,
+        vocal_separation: bool,
+    ) -> Self {
         let path = path.into();
         let name = path
             .file_name()
@@ -90,10 +99,11 @@ impl Task {
             duration: DurationState::Probing,
             format,
             language: normalize_source_language(&language.into()),
+            vocal_separation,
             status: TaskStatus::Pending,
             error: None,
             queue_seq: None,
-            output_srt: None,
+            output_file: None,
             timing: None,
         }
     }
@@ -101,6 +111,11 @@ impl Task {
     /// Set source language (normalized to a known catalog id).
     pub fn set_language(&mut self, language: impl AsRef<str>) {
         self.language = normalize_source_language(language.as_ref());
+    }
+
+    /// Toggle per-task vocal separation.
+    pub fn set_vocal_separation(&mut self, enabled: bool) {
+        self.vocal_separation = enabled;
     }
 
     pub fn size_label(&self) -> String {
@@ -174,7 +189,9 @@ pub fn accept_input_path(path: &Path) -> bool {
     if path.is_file() {
         return true;
     }
-    std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
+    std::fs::metadata(path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -200,13 +217,15 @@ mod tests {
 
     #[test]
     fn task_ids_are_unique() {
-        let a = Task::from_path("a.wav", "zh");
-        let b = Task::from_path("b.wav", "en");
-        let c = Task::from_path("c.wav", "ja");
+        let a = Task::from_path("a.wav", "zh", false);
+        let b = Task::from_path("b.wav", "en", true);
+        let c = Task::from_path("c.wav", "ja", false);
         assert_ne!(a.id, b.id);
         assert_ne!(b.id, c.id);
         assert_ne!(a.id, c.id);
         assert_eq!(a.language, "zh");
         assert_eq!(b.language, "en");
+        assert!(!a.vocal_separation);
+        assert!(b.vocal_separation);
     }
 }

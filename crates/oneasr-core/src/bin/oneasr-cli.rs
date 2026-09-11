@@ -84,7 +84,13 @@ transcribe options:
   --chunk-seconds <30-180> VAD chunk target (default: 60)
   --backend <cuda|cpu|auto>  Default: auto (CUDA if runtime + GPU, else CPU)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
-  --output <path>          Copy resulting SRT to this path after success
+  --output <path>          Copy the primary result (SRT, else TXT) to this path
+  --txt                    Also write {{stem}}.txt (one transcript line per cue)
+  --no-srt                 Suppress the .srt file (requires --txt)
+  --script <simplified|traditional>
+                           Chinese output script for zh / yue (default: simplified)
+  --vocal-separation       Run HTDemucs vocal separation before ASR
+  --demucs-model-dir <dir> Directory holding htdemucs_ft.safetensors
   --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
 
 asr-chunk options:
@@ -123,6 +129,11 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let max_new_tokens = arg(args, "--max-new-tokens").and_then(|s| s.parse().ok());
     let output_copy = arg(args, "--output").map(PathBuf::from);
     let words_json = arg(args, "--words-json").map(PathBuf::from);
+    let want_txt = flag(args, "--txt");
+    let no_srt = flag(args, "--no-srt");
+    let script = arg(args, "--script");
+    let vocal_separation = flag(args, "--vocal-separation");
+    let demucs_model_dir = arg(args, "--demucs-model-dir").map(PathBuf::from);
 
     let input_path = PathBuf::from(&input);
     if !input_path.is_file() {
@@ -140,7 +151,19 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
+    settings.output_txt = want_txt;
+    settings.output_srt = !no_srt;
+    if no_srt && !want_txt {
+        eprintln!("warning: --no-srt 需要配合 --txt；已保留 SRT 输出");
+    }
+    if let Some(s) = script {
+        settings.text_script = s;
+    }
+    settings.vocal_separation = vocal_separation;
     apply_app_root_paths(&mut settings, &app_root);
+    if let Some(dir) = demucs_model_dir {
+        settings.demucs_model_dir = dir;
+    }
     settings.normalize();
 
     eprintln!("=== OneAsr CLI · transcribe ===");
@@ -150,8 +173,15 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     eprintln!("align:   {}", settings.aligner_model_dir.display());
     eprintln!("output:  {}", settings.resolved_output_dir().display());
     eprintln!(
-        "lang={} chunk={}s backend={} max_new_tokens={}",
-        settings.language, settings.chunk_target_seconds, settings.backend, settings.max_new_tokens
+        "lang={} chunk={}s backend={} max_new_tokens={} srt={} txt={} script={} vocal_sep={}",
+        settings.language,
+        settings.chunk_target_seconds,
+        settings.backend,
+        settings.max_new_tokens,
+        settings.output_srt,
+        settings.output_txt,
+        settings.text_script_choice().label(),
+        settings.vocal_separation,
     );
 
     let media_name = input_path
@@ -171,6 +201,9 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         &app_root,
         |update: StageUpdate| {
             clock.note(&update);
+            if let Some(w) = &update.warning {
+                eprintln!("[warn] {w}");
+            }
             eprintln!("[stage] {}", update.label());
         },
         export,
@@ -179,14 +212,14 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let wall = t0.elapsed();
 
     match result {
-        Ok(srt) => {
-            eprintln!("OK srt={}", srt.display());
+        Ok(primary) => {
+            eprintln!("OK output={}", primary.display());
             if let Some(dst) = output_copy {
                 if let Some(parent) = dst.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                std::fs::copy(&srt, &dst).map_err(|e| {
-                    eprintln!("copy srt failed: {e}");
+                std::fs::copy(&primary, &dst).map_err(|e| {
+                    eprintln!("copy output failed: {e}");
                     1
                 })?;
                 eprintln!("copied → {}", dst.display());
@@ -353,6 +386,10 @@ fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
     let align = models.join("Qwen3-ForcedAligner-0.6B");
     if align.is_dir() {
         settings.aligner_model_dir = align;
+    }
+    let demucs = models.join("htdemucs_ft");
+    if demucs.is_dir() {
+        settings.demucs_model_dir = demucs;
     }
     settings.output_dir = app_root.join("output");
     // Headless runs keep writing to {app_root}/output (GUI's "next to source"

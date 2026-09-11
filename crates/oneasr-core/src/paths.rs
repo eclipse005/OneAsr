@@ -17,12 +17,17 @@ pub fn default_output_dir_for(app_root: &Path) -> PathBuf {
 
 /// User-facing deliverable: `{output_dir}/{media_stem}.srt`.
 pub fn output_srt_path(output_dir: &Path, media_stem: &str) -> PathBuf {
+    output_path(output_dir, media_stem, "srt")
+}
+
+/// `{output_dir}/{media_stem}.{ext}` (`ext` without dot).
+pub fn output_path(output_dir: &Path, media_stem: &str, ext: &str) -> PathBuf {
     let stem = if media_stem.is_empty() {
         "out"
     } else {
         media_stem
     };
-    output_dir.join(format!("{stem}.srt"))
+    output_dir.join(format!("{stem}.{ext}"))
 }
 
 #[cfg(test)]
@@ -41,6 +46,10 @@ mod tests {
         let dir = PathBuf::from(r"D:\OneAsr\output");
         let p = output_srt_path(&dir, "my_video");
         assert_eq!(p, PathBuf::from(r"D:\OneAsr\output\my_video.srt"));
+        assert_eq!(
+            output_path(&dir, "my_video", "txt"),
+            PathBuf::from(r"D:\OneAsr\output\my_video.txt")
+        );
     }
 
     #[test]
