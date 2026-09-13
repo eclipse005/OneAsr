@@ -18,6 +18,8 @@
 # Local-only: packing scripts + forum draft (not for public repo)
 /scripts/
 /forum-post.md
+# Local tooling workspace: scratch files, notes, audition material (never committed)
+/.workbuddy/
 # Icon gen intermediates
 assets/icons/_t*.png
 **/*.rs.bk

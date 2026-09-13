@@ -15,8 +15,8 @@ mod widgets;
 
 use crate::widgets::{
     floating_lang_menu, timing_breakdown_popover, app_logo, btn, btn_cta, caption_btn,
-    component_install_row, icon_btn, model_download_row, popover_dismiss_layer, settings_gear_btn,
-    BtnKind, IconKind, NameTooltip,
+    component_install_row, icon_btn, model_download_row, pill, popover_dismiss_layer,
+    settings_gear_btn, BtnKind, IconKind, NameTooltip,
 };
 
 use std::collections::HashMap;
@@ -50,6 +50,13 @@ use theme::{
     ACCENT, ACCENT_MIST, ACCENT_SOFT, BG, DANGER, DANGER_SOFT, LINE, LINE_SOFT, LOGO, MEDIA_PLATE,
     MUTED, MUTED_SOFT, PANEL, ROW_HOVER, TEXT, WARN, WARN_SOFT, ZEBRA,
 };
+
+/// Version shown in the titlebar, e.g. `v0.1.9`.
+///
+/// Single source is the Cargo package version (same one `crashlog` reports at
+/// startup). Never hand-write a version string here — it will drift from the
+/// build that actually shipped.
+const APP_VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 /// Status-bar model indicator: **file probe only** (not weight load).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -684,12 +691,34 @@ impl OneAsrApp {
         self.settings_dirty
     }
 
+    /// Interaction feedback (taps, list actions), gated by the 界面音效 switch.
+    ///
+    /// Never attach this to hover: it fires tens of times a second and is the
+    /// fastest way to make an app feel noisy.
+    fn play_ui(&self, kind: sfx::Sfx) {
+        if self.settings.ui_sound {
+            sfx::play(kind);
+        }
+    }
+
+    /// Task outcome chime, gated by the 完成提醒 switch. Deliberately separate
+    /// from [`Self::play_ui`]: wanting outcome alerts without click noise (or
+    /// the reverse) is a legitimate preference.
+    fn play_notify(&self, kind: sfx::Sfx) {
+        if self.settings.task_notify {
+            sfx::play(kind);
+        }
+    }
+
     /// Write `settings.json`, re-check model files.
     fn save_settings(&mut self, cx: &mut Context<Self>) {
         match self.settings.save() {
             Ok(_) => {
                 self.settings_dirty = false;
                 self.reset_model_config(cx);
+                // Only the committed path taps. The drawer's auto-save on close
+                // is navigation, not a commit, and stays silent.
+                self.play_ui(sfx::Sfx::Click);
                 self.flash_hint(
                     match self.model_status {
                         ModelStatus::Ready => "设置已保存 · 模型就绪",
@@ -898,6 +927,10 @@ impl OneAsrApp {
                     {
                         self.active_stage = None;
                     }
+                    // Outcome chime is per task: a failure is an exception and
+                    // must be able to interrupt, a success is the "one more
+                    // file is done" tick the user listens for while away.
+                    let mut succeeded = None;
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                         t.timing = timing.has_breakdown().then_some(timing);
                         match result {
@@ -906,14 +939,22 @@ impl OneAsrApp {
                                 t.queue_seq = None;
                                 t.output_file = Some(srt);
                                 t.error = None;
+                                succeeded = Some(true);
                             }
                             Err(e) => {
                                 crashlog::log_error(format!("task {id} failed: {e}"));
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
                                 t.error = Some(e);
+                                succeeded = Some(false);
                             }
                         }
+                    }
+                    match succeeded {
+                        Some(true) => self.play_notify(sfx::Sfx::TaskDone),
+                        Some(false) => self.play_notify(sfx::Sfx::TaskError),
+                        // Row vanished (removed while running): stay silent.
+                        None => {}
                     }
                     if self.batch_mode {
                         self.batch_done = self.batch_done.saturating_add(1);
@@ -944,6 +985,9 @@ impl OneAsrApp {
                         if affected {
                             self.busy = false;
                             self.active_stage = None;
+                            // One failure chime for the whole collapse — never
+                            // one per task, that would just be a stutter.
+                            self.play_notify(sfx::Sfx::TaskError);
                             self.end_batch_if_idle(cx);
                         }
                         cx.notify();
@@ -1048,6 +1092,7 @@ impl OneAsrApp {
         // both stay overridable per row afterwards.
         let default_lang = self.settings.language.clone();
         let default_sep = self.settings.vocal_separation;
+        let before = self.tasks.len();
         for path in paths {
             let path = path.canonicalize().unwrap_or(path);
             if !accept_input_path(&path) {
@@ -1077,7 +1122,11 @@ impl OneAsrApp {
                 .entry(anim_id)
                 .or_insert_with(Instant::now);
         }
-        // Feedback = list itself (no toast).
+        // Feedback = list itself (no toast) — plus one tap for the whole drop.
+        // Deliberately NOT one per file: dropping 20 files must not stutter.
+        if self.tasks.len() > before {
+            self.play_ui(sfx::Sfx::Click);
+        }
         cx.notify();
     }
 
@@ -1304,7 +1353,7 @@ impl OneAsrApp {
             return;
         }
         task.set_vocal_separation(next);
-        sfx::play(sfx::Sfx::Click);
+        self.play_ui(sfx::Sfx::Click);
         self.flash_hint(
             if next {
                 "本任务已开启人声分离"
@@ -1344,7 +1393,7 @@ impl OneAsrApp {
         // Drawer chrome shares the list surface — drop any floating overlays.
         self.close_floating_overlays();
         if open {
-            sfx::play(sfx::Sfx::Drawer);
+            self.play_ui(sfx::Sfx::Click);
         }
         cx.notify();
     }
@@ -1576,7 +1625,7 @@ impl OneAsrApp {
             }
             return;
         }
-        sfx::play(sfx::Sfx::Click);
+        self.play_ui(sfx::Sfx::Click);
         self.begin_batch(enqueued);
         self.try_start_next(cx);
         cx.notify();
@@ -1619,7 +1668,7 @@ impl OneAsrApp {
             t.status = TaskStatus::Queued;
             t.queue_seq = Some(next_queue_seq());
         }
-        sfx::play(sfx::Sfx::Click);
+        self.play_ui(sfx::Sfx::Click);
         self.begin_batch(1);
         if slot_free {
             self.try_start_next(cx);
@@ -1767,7 +1816,7 @@ impl OneAsrApp {
         if self.is_exiting(id) {
             return;
         }
-        sfx::play(sfx::Sfx::Click);
+        self.play_ui(sfx::Sfx::Delete);
         // Tombstone in place so the row fades without jumping to the list bottom.
         self.entering.remove(id);
         self.exiting.insert(id.to_string(), Instant::now());
@@ -1799,7 +1848,7 @@ impl OneAsrApp {
         let had_proc = self.tasks.iter().any(|t| {
             t.status == TaskStatus::Processing && !self.exiting.contains_key(&t.id)
         });
-        sfx::play(sfx::Sfx::Click);
+        self.play_ui(sfx::Sfx::Delete);
         let now = Instant::now();
         for t in &self.tasks {
             if t.status == TaskStatus::Processing {
@@ -2082,10 +2131,24 @@ impl OneAsrApp {
                     .window_control_area(WindowControlArea::Drag)
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(MUTED_SOFT)
-                            .whitespace_nowrap()
-                            .child("OneAsr"),
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED_SOFT)
+                                    .whitespace_nowrap()
+                                    .child("OneAsr"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED_SOFT)
+                                    .opacity(0.72)
+                                    .whitespace_nowrap()
+                                    .child(APP_VERSION_LABEL),
+                            ),
                     ),
             )
             .child(caption_btn(
@@ -2851,6 +2914,8 @@ impl OneAsrApp {
         let output_txt = self.settings.output_txt;
         let text_script = self.settings.text_script_choice();
         let vocal_sep = self.settings.vocal_separation;
+        let ui_sound = self.settings.ui_sound;
+        let task_notify = self.settings.task_notify;
         let demucs_ready = self.demucs_ready;
         let demucs_dl = self.progress_for(ModelId::HtdemucsFt).cloned();
         let demucs_dl_busy = self.download_busy(ModelId::HtdemucsFt);
@@ -3786,6 +3851,114 @@ impl OneAsrApp {
                                     this.cancel_model_download(ModelId::CudaRuntime, cx);
                                 }),
                             ))
+                            .into_any_element(),
+                    ))
+                    // Two independent switches on purpose: wanting the finish
+                    // chime without click noise (or the reverse) is a legitimate
+                    // preference, and both must be escapable.
+                    .child(section(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("界面音效"),
+                                    )
+                                    .child(
+                                        div().flex().gap_1p5().children(
+                                            [(false, "关闭"), (true, "开启")]
+                                                .into_iter()
+                                                .map(|(on, label)| {
+                                                    let active = ui_sound == on;
+                                                    pill(
+                                                        if on {
+                                                            "sound-ui-on"
+                                                        } else {
+                                                            "sound-ui-off"
+                                                        },
+                                                        label,
+                                                        active,
+                                                        cx.listener(move |this, _, _, cx| {
+                                                            if this.settings.ui_sound == on {
+                                                                return;
+                                                            }
+                                                            this.settings.ui_sound = on;
+                                                            // Turning it on plays a
+                                                            // tick, so the effect is
+                                                            // audible immediately.
+                                                            this.play_ui(sfx::Sfx::Click);
+                                                            this.mark_settings_dirty(cx);
+                                                        }),
+                                                    )
+                                                }),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div().text_xs().text_color(MUTED).child(
+                                    "点击、开关、删除等交互反馈；关掉不影响下方的完成提醒",
+                                ),
+                            )
+                            .into_any_element(),
+                    ))
+                    .child(section(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(TEXT)
+                                            .child("完成提醒"),
+                                    )
+                                    .child(
+                                        div().flex().gap_1p5().children(
+                                            [(false, "关闭"), (true, "开启")]
+                                                .into_iter()
+                                                .map(|(on, label)| {
+                                                    let active = task_notify == on;
+                                                    pill(
+                                                        if on {
+                                                            "sound-notify-on"
+                                                        } else {
+                                                            "sound-notify-off"
+                                                        },
+                                                        label,
+                                                        active,
+                                                        cx.listener(move |this, _, _, cx| {
+                                                            if this.settings.task_notify == on {
+                                                                return;
+                                                            }
+                                                            this.settings.task_notify = on;
+                                                            this.play_notify(sfx::Sfx::TaskDone);
+                                                            this.mark_settings_dirty(cx);
+                                                        }),
+                                                    )
+                                                }),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div().text_xs().text_color(MUTED).child(
+                                    "每个任务结束时提示：成功一声，失败用另一种、更明显的声音",
+                                ),
+                            )
                             .into_any_element(),
                     )),
             )

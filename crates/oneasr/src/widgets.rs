@@ -443,6 +443,39 @@ pub fn btn(
 }
 
 
+/// Two-state pill for settings rows.
+///
+/// [`btn`] derives its element id from the label, so two different rows reusing
+/// the same "开启 / 关闭" wording would produce colliding ids. This takes the id
+/// explicitly, which is what a settings row needs.
+pub fn pill(
+    id: &'static str,
+    label: &'static str,
+    active: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_3()
+        .py_1()
+        .rounded_lg()
+        .text_sm()
+        .bg(if active { crate::ACCENT } else { crate::PANEL })
+        .text_color(if active { crate::PANEL } else { crate::TEXT })
+        .border_1()
+        .border_color(if active { crate::ACCENT } else { crate::LINE })
+        .font_weight(if active {
+            gpui::FontWeight::SEMIBOLD
+        } else {
+            gpui::FontWeight::NORMAL
+        })
+        .cursor_pointer()
+        .hover(|s| s.border_color(crate::ACCENT))
+        .child(label)
+        .on_click(on_click)
+}
+
+
 // ─── icon / button helpers ──────────────────────────────────────────
 
 /// Lightweight hover tooltip for truncated filenames.

@@ -70,8 +70,16 @@ fn table() -> &'static HashMap<&'static str, &'static [u8]> {
                 include_bytes!("../../../assets/sounds/click.wav").as_slice(),
             ),
             (
-                "sounds/drawer.wav",
-                include_bytes!("../../../assets/sounds/drawer.wav").as_slice(),
+                "sounds/delete.wav",
+                include_bytes!("../../../assets/sounds/delete.wav").as_slice(),
+            ),
+            (
+                "sounds/task-done.wav",
+                include_bytes!("../../../assets/sounds/task-done.wav").as_slice(),
+            ),
+            (
+                "sounds/task-error.wav",
+                include_bytes!("../../../assets/sounds/task-error.wav").as_slice(),
             ),
         ])
     })
