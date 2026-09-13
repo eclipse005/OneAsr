@@ -9,6 +9,8 @@
 /dll
 # User preferences (local machine paths)
 /settings.json
+# Usage ledger written next to settings.json (numbers only, per machine)
+/stats.jsonl
 # Crash/error log written next to the exe (rotated to .old)
 /oneasr-error.log
 /oneasr-error.log.old

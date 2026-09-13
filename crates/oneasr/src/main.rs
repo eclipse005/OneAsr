@@ -16,7 +16,7 @@ mod widgets;
 use crate::widgets::{
     floating_lang_menu, timing_breakdown_popover, app_logo, btn, btn_cta, caption_btn,
     component_install_row, icon_btn, model_download_row, pill, popover_dismiss_layer,
-    settings_gear_btn, BtnKind, IconKind, NameTooltip,
+    popover_menu_shadow, settings_gear_btn, BtnKind, IconKind, NameTooltip,
 };
 
 use std::collections::HashMap;
@@ -27,9 +27,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    actions, canvas, div, hsla, point, prelude::*, px, size, svg,
+    actions, canvas, deferred, div, hsla, point, prelude::*, px, size, svg,
     App, Application, Bounds, BoxShadow, Context,
-    ExternalPaths, FocusHandle, KeyBinding, MouseMoveEvent, Pixels, SharedString,
+    ExternalPaths, FocusHandle, KeyBinding, MouseMoveEvent, Pixels, Rgba, SharedString,
     Timer, Window, WindowBounds, WindowControlArea, WindowOptions,
 };
 use oneasr_core::{
@@ -38,8 +38,10 @@ use oneasr_core::{
     format_queue_status, format_process_ms, init_native_library_path, init_runtime,
     is_cuda_runtime_ready, is_model_ready, next_queue_seq, normalize_source_language,
     process_media_file_with_progress, probe_duration_async, probe_writable, resolve_app_root,
-    resolve_app_root_dir, resolve_cuda_runtime_dir, source_language_by_id, AsrStage,
-    DownloadHandle, DownloadProgress, DownloadState, ModelId, ModelKind,
+    resolve_app_root_dir, resolve_cuda_runtime_dir, source_language_by_id,
+    stats::{self, StatsRecord, StatsSummary},
+    AsrStage,
+    DownloadHandle, DownloadProgress, DownloadState, DurationState, ModelId, ModelKind,
     Settings, StageClock, StageUpdate, Task, TaskStatus, TaskTiming, CHUNK_TARGET_MAX_SEC,
     CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, SOURCE_LANGUAGES, TextScript,
 };
@@ -48,7 +50,8 @@ actions!(oneasr, [DismissMenus]);
 
 use theme::{
     ACCENT, ACCENT_MIST, ACCENT_SOFT, BG, DANGER, DANGER_SOFT, LINE, LINE_SOFT, LOGO, MEDIA_PLATE,
-    MUTED, MUTED_SOFT, PANEL, ROW_HOVER, TEXT, WARN, WARN_SOFT, ZEBRA,
+    MUTED, MUTED_SOFT, PANEL, ROW_HOVER, STATS_GHOST, STATS_L0, STATS_L1, STATS_L2, STATS_L3,
+    STATS_L4, TEXT, WARN, WARN_SOFT, ZEBRA,
 };
 
 /// Version shown in the titlebar, e.g. `v0.1.9`.
@@ -218,10 +221,13 @@ struct OneAsrApp {
     /// (tombstones keep list order — do not move to the bottom while fading).
     exiting: HashMap<String, Instant>,
     batch_mode: bool,
-    /// Jobs planned for the current batch run (for 进度 n/m).
-    batch_goal: Option<usize>,
     /// Finished (ok or err) count within the current batch.
     batch_done: usize,
+    /// Outcomes of the current run, counted as each row finishes. The run's
+    /// own tally, never the list's: rows left over from an earlier run must not
+    /// colour today's chime, and rows deleted mid-run must not colour it either.
+    batch_ok: usize,
+    batch_err: usize,
     busy: bool,
     /// One-shot: the ASR worker channel was found dead (log/recover only once).
     worker_channel_dead: bool,
@@ -236,6 +242,12 @@ struct OneAsrApp {
     /// Soft status-bar hint (no toast). Auto-clears after a few seconds.
     status_hint: Option<SharedString>,
     status_hint_until: Option<Instant>,
+    /// The live hint is a success notice (accent) rather than a notice-to-act
+    /// (amber). Only the run-complete family sets it: warnings keep the default.
+    status_hint_good: bool,
+    /// Saved time of the first task ever finished, handed to the run-complete
+    /// notice so the one moment the number is news does not pass unread.
+    nudge_saved: Option<SharedString>,
     /// Live stage label for the row currently Processing (from worker Progress).
     active_stage: Option<(String, SharedString)>,
     /// Latest download progress (settings panel).
@@ -248,6 +260,13 @@ struct OneAsrApp {
     align_dl_handle: Option<DownloadHandle>,
     cuda_dl_handle: Option<DownloadHandle>,
     demucs_dl_handle: Option<DownloadHandle>,
+    /// Stats panel open (floats above the status bar; shares MENU_Z with menus).
+    stats_open: bool,
+    /// Day cell under the pointer in the year grid, `YYYY-MM-DD`.
+    stats_hover_day: Option<String>,
+    /// Cached ledger aggregation. Recomputed on load and after every finished
+    /// task — **never per frame**, since the panel repaints on each cell hover.
+    stats: StatsSummary,
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
     /// Dedicated ASR worker (never run heavy work on the UI thread).
@@ -427,8 +446,9 @@ impl OneAsrApp {
             entering: HashMap::new(),
             exiting: HashMap::new(),
             batch_mode: false,
-            batch_goal: None,
             batch_done: 0,
+            batch_ok: 0,
+            batch_err: 0,
             busy: false,
             worker_channel_dead: false,
             picking: false,
@@ -439,6 +459,8 @@ impl OneAsrApp {
             demucs_ready: false,
             status_hint: None,
             status_hint_until: None,
+            status_hint_good: false,
+            nudge_saved: None,
             active_stage: None,
             asr_download: None,
             align_download: None,
@@ -448,6 +470,10 @@ impl OneAsrApp {
             align_dl_handle: None,
             cuda_dl_handle: None,
             demucs_dl_handle: None,
+            stats_open: false,
+            stats_hover_day: None,
+            // Read the ledger once at startup; refreshed on every finished task.
+            stats: stats::summarize(&stats::load(&app_root)),
             tx: tx.clone(),
             rx,
             job_tx,
@@ -691,23 +717,61 @@ impl OneAsrApp {
         self.settings_dirty
     }
 
-    /// Interaction feedback (taps, list actions), gated by the 界面音效 switch.
+    /// The one sound gate (「提示音」): interaction taps AND task outcome
+    /// chimes together.
     ///
     /// Never attach this to hover: it fires tens of times a second and is the
     /// fastest way to make an app feel noisy.
     fn play_ui(&self, kind: sfx::Sfx) {
-        if self.settings.ui_sound {
+        if self.settings.sound {
             sfx::play(kind);
         }
     }
 
-    /// Task outcome chime, gated by the 完成提醒 switch. Deliberately separate
-    /// from [`Self::play_ui`]: wanting outcome alerts without click noise (or
-    /// the reverse) is a legitimate preference.
-    fn play_notify(&self, kind: sfx::Sfx) {
-        if self.settings.task_notify {
-            sfx::play(kind);
+    /// Ledger root — the app folder, next to `settings.json`.
+    fn stats_root() -> PathBuf {
+        resolve_app_root_dir()
+    }
+
+    /// Re-aggregate the ledger into the cached summary.
+    ///
+    /// Called at startup, on panel open, and after each finished task — **never
+    /// per frame**: the panel repaints on every cell hover, and folding the
+    /// whole ledger per paint is exactly the mistake the settings panel's probe
+    /// cache exists to avoid.
+    fn reload_stats(&mut self) {
+        self.stats = stats::summarize(&stats::load(&Self::stats_root()));
+    }
+
+    /// Append one finished task, then refresh the cache.
+    ///
+    /// Failure is logged and swallowed: a usage ledger must never be able to
+    /// break a transcription run, and must never surface an error the user
+    /// cannot act on.
+    fn record_stats(&mut self, rec: &StatsRecord) {
+        if let Err(e) = stats::append(&Self::stats_root(), rec) {
+            crashlog::log_warn(format!("stats append failed: {e}"));
+            return;
         }
+        self.reload_stats();
+    }
+
+    fn toggle_stats(&mut self, cx: &mut Context<Self>) {
+        if self.stats_open {
+            self.stats_open = false;
+            self.stats_hover_day = None;
+        } else {
+            // Fresh numbers on open, and only one floating surface at a time
+            // (they share MENU_Z).
+            self.reload_stats();
+            self.stats_hover_day = None;
+            self.close_lang_selects();
+            self.close_timing_popover();
+            // Navigation, same rule as the gear: one tap on open.
+            self.play_ui(sfx::Sfx::Click);
+            self.stats_open = true;
+        }
+        cx.notify();
     }
 
     /// Write `settings.json`, re-check model files.
@@ -740,6 +804,7 @@ impl OneAsrApp {
             if Instant::now() >= until {
                 self.status_hint = None;
                 self.status_hint_until = None;
+                self.status_hint_good = false;
                 cx.notify();
             } else {
                 cx.notify(); // keep bar live while hint is visible
@@ -927,34 +992,68 @@ impl OneAsrApp {
                     {
                         self.active_stage = None;
                     }
-                    // Outcome chime is per task: a failure is an exception and
-                    // must be able to interrupt, a success is the "one more
-                    // file is done" tick the user listens for while away.
-                    let mut succeeded = None;
+                    // Ledger row, filled inside the borrow and appended after it.
+                    let mut ledger_row: Option<StatsRecord> = None;
+                    let mut cues: u32 = 0;
+                    let process_ms = timing.total_ms;
                     if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                        // Media seconds are what makes a saved-time claim
+                        // possible; an unknown duration just drops out of it.
+                        let media_sec = match t.duration {
+                            DurationState::Known(s) if s.is_finite() && s > 0.0 => Some(s),
+                            _ => None,
+                        };
+                        let lang = t.language.clone();
+                        let sep = t.vocal_separation;
                         t.timing = timing.has_breakdown().then_some(timing);
-                        match result {
+                        let ok = match result {
                             Ok(srt) => {
+                                cues = count_output_lines(&srt);
                                 t.status = TaskStatus::Done;
                                 t.queue_seq = None;
                                 t.output_file = Some(srt);
                                 t.error = None;
-                                succeeded = Some(true);
+                                true
                             }
                             Err(e) => {
                                 crashlog::log_error(format!("task {id} failed: {e}"));
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
                                 t.error = Some(e);
-                                succeeded = Some(false);
+                                false
+                            }
+                        };
+                        // Reaching this point means the row still exists: a row
+                        // deleted mid-run never gets an outcome recorded.
+                        ledger_row = Some(StatsRecord {
+                            v: stats::LEDGER_VERSION,
+                            day: crashlog::local_day_ymd(),
+                            media_sec,
+                            process_ms,
+                            lang,
+                            sep,
+                            ok,
+                            cues,
+                        });
+                    }
+                    // The outcome chime belongs to the end of the run, not to
+                    // each row: a 20-file batch must not stutter 20 times (see
+                    // `end_batch_if_idle`). A row deleted mid-run says nothing.
+                    if let Some(rec) = ledger_row {
+                        self.record_stats(&rec);
+                        if rec.ok {
+                            self.batch_ok = self.batch_ok.saturating_add(1);
+                        } else {
+                            self.batch_err = self.batch_err.saturating_add(1);
+                        }
+                        // First success ever: the saved number is news exactly
+                        // once, and the run-complete line is what the user is
+                        // already looking at.
+                        if rec.ok && self.stats.tasks_ok == 1 {
+                            if let Some(s) = self.stats.saved_sec() {
+                                self.nudge_saved = Some(stats::format_span_secs(s).into());
                             }
                         }
-                    }
-                    match succeeded {
-                        Some(true) => self.play_notify(sfx::Sfx::TaskDone),
-                        Some(false) => self.play_notify(sfx::Sfx::TaskError),
-                        // Row vanished (removed while running): stay silent.
-                        None => {}
                     }
                     if self.batch_mode {
                         self.batch_done = self.batch_done.saturating_add(1);
@@ -973,21 +1072,22 @@ impl OneAsrApp {
                         crashlog::log_error(
                             "worker channel disconnected — marking in-flight tasks failed",
                         );
-                        let mut affected = false;
+                        let mut affected = 0usize;
                         for t in &mut self.tasks {
                             if matches!(t.status, TaskStatus::Processing | TaskStatus::Queued) {
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
                                 t.error = Some("识别工作线程已退出".into());
-                                affected = true;
+                                affected += 1;
                             }
                         }
-                        if affected {
+                        if affected > 0 {
                             self.busy = false;
                             self.active_stage = None;
-                            // One failure chime for the whole collapse — never
-                            // one per task, that would just be a stutter.
-                            self.play_notify(sfx::Sfx::TaskError);
+                            // The whole collapse is one run ending badly: count
+                            // it as such and let the run-complete notice own the
+                            // single failure chime (never one per task).
+                            self.batch_err = self.batch_err.saturating_add(affected);
                             self.end_batch_if_idle(cx);
                         }
                         cx.notify();
@@ -1367,7 +1467,19 @@ impl OneAsrApp {
 
     /// Close language selects (Escape / click-outside scrim). Timing is hover-only.
     fn dismiss_menus(&mut self, cx: &mut Context<Self>) {
+        // Escape closes the stats panel too. It lives on MENU_Z with the menus,
+        // so it must honour the same key — even though its own dismiss layer,
+        // not a key, is what normally closes it. Behaviour when it is closed is
+        // byte-for-byte what it was.
+        let closed_stats = self.stats_open;
+        if closed_stats {
+            self.stats_open = false;
+            self.stats_hover_day = None;
+        }
         if self.lang_menu.is_none() && !self.settings_lang_open {
+            if closed_stats {
+                cx.notify();
+            }
             return;
         }
         self.close_lang_selects();
@@ -1392,6 +1504,9 @@ impl OneAsrApp {
         self.settings_open = open;
         // Drawer chrome shares the list surface — drop any floating overlays.
         self.close_floating_overlays();
+        // The stats panel shares MENU_Z with those overlays; the drawer wins.
+        self.stats_open = false;
+        self.stats_hover_day = None;
         if open {
             self.play_ui(sfx::Sfx::Click);
         }
@@ -1520,23 +1635,40 @@ impl OneAsrApp {
     ) {
         self.status_hint = Some(msg.into());
         self.status_hint_until = Some(Instant::now() + dur);
+        self.status_hint_good = false;
         cx.notify();
     }
 
+    /// Same slot, success colouring: green for "this worked", amber (the
+    /// default) for "this needs you". Tone is the whole message here — the
+    /// hint is one line of text and nothing else carries the verdict.
+    fn flash_good_hint_for(
+        &mut self,
+        msg: impl Into<SharedString>,
+        dur: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        self.status_hint = Some(msg.into());
+        self.status_hint_until = Some(Instant::now() + dur);
+        self.status_hint_good = true;
+        cx.notify();
+    }
+
+    /// Mark a batch as running.
+    ///
+    /// The progress denominator is **derived at paint time** from live rows
+    /// (`batch_done` + still-active) and never stored: deleting or adding
+    /// tasks mid-run, or clicking 开始 again, cannot leave the counter
+    /// pointing at rows that no longer exist.
     fn begin_batch(&mut self, job_count: usize) {
         if job_count == 0 {
             return;
         }
-        if self.batch_mode {
-            if let Some(g) = self.batch_goal.as_mut() {
-                *g = g.saturating_add(job_count);
-            } else {
-                self.batch_goal = Some(job_count);
-            }
-        } else {
+        if !self.batch_mode {
             self.batch_mode = true;
-            self.batch_goal = Some(job_count);
             self.batch_done = 0;
+            self.batch_ok = 0;
+            self.batch_err = 0;
         }
     }
 
@@ -1551,21 +1683,13 @@ impl OneAsrApp {
         if still {
             return;
         }
-        let done = self
-            .tasks
-            .iter()
-            .filter(|t| t.status == TaskStatus::Done)
-            .count();
-        let err = self
-            .tasks
-            .iter()
-            .filter(|t| t.status == TaskStatus::Error)
-            .count();
-        let goal = self.batch_goal.unwrap_or(self.batch_done);
+        let done = self.batch_ok;
+        let err = self.batch_err;
         self.batch_mode = false;
-        self.batch_goal = None;
         self.batch_done = 0;
-        if goal == 0 && done == 0 && err == 0 {
+        self.batch_ok = 0;
+        self.batch_err = 0;
+        if done == 0 && err == 0 {
             return;
         }
         let msg = if err == 0 {
@@ -1575,7 +1699,22 @@ impl OneAsrApp {
         } else {
             format!("批次结束 · 完成 {done} · 失败 {err}")
         };
-        self.flash_hint_for(msg, Duration::from_secs(6), cx);
+        // The first success's saved time rides the run-complete line; later runs
+        // are a plain tally.
+        let msg = match self.nudge_saved.take() {
+            Some(saved) => format!("{msg} · 已省 {saved} · 左下角看统计"),
+            None => msg,
+        };
+        // One chime per run — the same "never one sound per item" rule the
+        // click family follows. A mixed run chimes the failure: something in
+        // there wants the user's eyes.
+        if err == 0 {
+            self.play_ui(sfx::Sfx::TaskDone);
+            self.flash_good_hint_for(msg, Duration::from_secs(6), cx);
+        } else {
+            self.play_ui(sfx::Sfx::TaskError);
+            self.flash_hint_for(msg, Duration::from_secs(6), cx);
+        }
     }
 
     /// Soft gate before enqueue. Single source: [`Settings::can_start`].
@@ -1859,13 +1998,8 @@ impl OneAsrApp {
         }
         if !had_proc {
             self.batch_mode = false;
-            self.batch_goal = None;
-            self.batch_done = 0;
-        } else if let Some(g) = self.batch_goal.as_mut() {
-            // Keep only the active job in the batch goal.
-            *g = 1;
-            self.batch_done = 0;
         }
+        self.batch_done = 0;
         self.hover_row = None;
         // List select targets a row; bulk clear invalidates any open chip menu.
         self.lang_menu = None;
@@ -1953,6 +2087,7 @@ impl Render for OneAsrApp {
 
         let drawer_p = self.settings_progress();
         let menu_open = self.any_menu_open();
+        let stats_open = self.stats_open;
 
         div()
             .id("oneasr-root")
@@ -2040,9 +2175,11 @@ impl Render for OneAsrApp {
                         )
                     }),
             )
-            .child(self.render_status_bar())
-            // Full-window dismiss above toolbar / list / status; menus paint at MENU_Z.
-            .when(menu_open, |el| el.child(popover_dismiss_layer(cx)))
+            .child(self.render_status_bar(cx))
+            .when(stats_open, |el| el.child(self.render_stats_panel(cx)))
+            .when(menu_open || stats_open, |el| {
+                el.child(popover_dismiss_layer(cx))
+            })
     }
 }
 
@@ -2445,6 +2582,12 @@ impl OneAsrApp {
                     .flex_col()
                     .w_full()
                     .min_w_0()
+                    // Never shrink: the list is a scroll container, so rows
+                    // past one screenful must overflow (→ scrollbar), not
+                    // compress — every child here truncates, so Taffy's
+                    // min-content floor is ~0 and without this 11+ rows
+                    // squash into each other.
+                    .flex_shrink_0()
                     // Allow floating language / timing menus to paint outside the row box.
                     .when(!lang_open && !timing_open, |el| el.overflow_hidden())
                     .border_b_1()
@@ -2914,8 +3057,7 @@ impl OneAsrApp {
         let output_txt = self.settings.output_txt;
         let text_script = self.settings.text_script_choice();
         let vocal_sep = self.settings.vocal_separation;
-        let ui_sound = self.settings.ui_sound;
-        let task_notify = self.settings.task_notify;
+        let sound = self.settings.sound;
         let demucs_ready = self.demucs_ready;
         let demucs_dl = self.progress_for(ModelId::HtdemucsFt).cloned();
         let demucs_dl_busy = self.download_busy(ModelId::HtdemucsFt);
@@ -3853,9 +3995,7 @@ impl OneAsrApp {
                             ))
                             .into_any_element(),
                     ))
-                    // Two independent switches on purpose: wanting the finish
-                    // chime without click noise (or the reverse) is a legitimate
-                    // preference, and both must be escapable.
+                    // One switch, no essay: taps and outcome chimes together.
                     .child(section(
                         div()
                             .flex()
@@ -3871,30 +4011,29 @@ impl OneAsrApp {
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(TEXT)
-                                            .child("界面音效"),
+                                            .child("提示音"),
                                     )
                                     .child(
                                         div().flex().gap_1p5().children(
                                             [(false, "关闭"), (true, "开启")]
                                                 .into_iter()
                                                 .map(|(on, label)| {
-                                                    let active = ui_sound == on;
+                                                    let active = sound == on;
                                                     pill(
                                                         if on {
-                                                            "sound-ui-on"
+                                                            "sound-on"
                                                         } else {
-                                                            "sound-ui-off"
+                                                            "sound-off"
                                                         },
                                                         label,
                                                         active,
                                                         cx.listener(move |this, _, _, cx| {
-                                                            if this.settings.ui_sound == on {
+                                                            if this.settings.sound == on {
                                                                 return;
                                                             }
-                                                            this.settings.ui_sound = on;
-                                                            // Turning it on plays a
-                                                            // tick, so the effect is
-                                                            // audible immediately.
+                                                            this.settings.sound = on;
+                                                            // Audible the moment it
+                                                            // comes back on.
                                                             this.play_ui(sfx::Sfx::Click);
                                                             this.mark_settings_dirty(cx);
                                                         }),
@@ -3902,62 +4041,6 @@ impl OneAsrApp {
                                                 }),
                                         ),
                                     ),
-                            )
-                            .child(
-                                div().text_xs().text_color(MUTED).child(
-                                    "点击、开关、删除等交互反馈；关掉不影响下方的完成提醒",
-                                ),
-                            )
-                            .into_any_element(),
-                    ))
-                    .child(section(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(TEXT)
-                                            .child("完成提醒"),
-                                    )
-                                    .child(
-                                        div().flex().gap_1p5().children(
-                                            [(false, "关闭"), (true, "开启")]
-                                                .into_iter()
-                                                .map(|(on, label)| {
-                                                    let active = task_notify == on;
-                                                    pill(
-                                                        if on {
-                                                            "sound-notify-on"
-                                                        } else {
-                                                            "sound-notify-off"
-                                                        },
-                                                        label,
-                                                        active,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            if this.settings.task_notify == on {
-                                                                return;
-                                                            }
-                                                            this.settings.task_notify = on;
-                                                            this.play_notify(sfx::Sfx::TaskDone);
-                                                            this.mark_settings_dirty(cx);
-                                                        }),
-                                                    )
-                                                }),
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                div().text_xs().text_color(MUTED).child(
-                                    "每个任务结束时提示：成功一声，失败用另一种、更明显的声音",
-                                ),
                             )
                             .into_any_element(),
                     )),
@@ -3997,7 +4080,9 @@ impl OneAsrApp {
             )
     }
 
-    fn render_status_bar(&self) -> impl IntoElement {
+    /// Bottom status bar: queue/batch progress on the left with the persistent
+    /// stats chip, model/hint indicator on the right.
+    fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         // Exclude exit tombstones so counts do not include rows mid-fade.
         let live: Vec<&Task> = self
             .tasks
@@ -4028,10 +4113,10 @@ impl OneAsrApp {
         let queue = format_queue_status(total, pending, queued, proc, done, err);
         let batch = self.batch_mode;
         // Sequential batch: one line only — 进度 n/m (no "共 n · 处理中" echo).
+        // Denominator = finished + live unfinished rows, derived at paint time:
+        // deleting or adding tasks mid-run keeps it pointing at real rows.
         let left: SharedString = if batch {
-            self.batch_goal
-                .map(|g| format_batch_progress(self.batch_done, g))
-                .unwrap_or_else(|| "进度 …".into())
+            format_batch_progress(self.batch_done, self.batch_done + pending + queued + proc)
                 .into()
         } else {
             queue.into()
@@ -4042,6 +4127,13 @@ impl OneAsrApp {
             ModelStatus::NotReady => DANGER,
         };
         let hint = self.status_hint.clone();
+        let hint_good = self.status_hint_good;
+        let stats = &self.stats;
+        let stats_label: SharedString = match stats.saved_sec() {
+            Some(secs) => format!("已省 {}", stats::format_span_secs(secs)).into(),
+            None => "统计".into(),
+        };
+        let stats_has_data = !stats.is_empty();
 
         div()
             .h(px(34.))
@@ -4068,6 +4160,25 @@ impl OneAsrApp {
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                             })
                             .child(left),
+                    )
+                    // Persistent clickable chip: the stats entry point, and the
+                    // emotional payload itself (it changes as you use the app).
+                    .child(
+                        div()
+                            .id("stats-chip")
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .text_color(if stats_has_data { ACCENT } else { MUTED })
+                            .when(stats_has_data, |el| {
+                                el.bg(ACCENT_SOFT)
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                            })
+                            .hover(|s| s.bg(ACCENT_MIST))
+                            .child(stats_label)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_stats(cx))),
                     ),
             )
             // Right: model probe (常驻) OR transient interaction hint.
@@ -4084,14 +4195,19 @@ impl OneAsrApp {
                             .items_center()
                             .gap_2()
                             .min_w_0()
-                            .bg(WARN_SOFT)
+                            .bg(if hint_good { ACCENT_SOFT } else { WARN_SOFT })
                             .px_2()
                             .py_0p5()
                             .rounded_full()
-                            .child(div().size(px(7.)).rounded_full().bg(WARN))
                             .child(
                                 div()
-                                    .text_color(WARN)
+                                    .size(px(7.))
+                                    .rounded_full()
+                                    .bg(if hint_good { ACCENT } else { WARN }),
+                            )
+                            .child(
+                                div()
+                                    .text_color(if hint_good { ACCENT } else { WARN })
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(h),
@@ -4121,6 +4237,418 @@ impl OneAsrApp {
                             .into_any_element(),
                     }),
             )
+    }
+
+    /// Floating stats panel, anchored above the status bar (`MENU_Z`).
+    ///
+    /// Purely additive: nothing here touches task state. Every number comes
+    /// from the cached [`StatsSummary`], refreshed on open and on each finished
+    /// task — never per frame.
+    fn render_stats_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let stats = &self.stats;
+        let saved = stats.saved_sec();
+        let speed = stats.avg_speed();
+
+        // Hover card payload, resolved once here instead of per cell.
+        let hover = self.stats_hover_day.clone().map(|day| {
+            let media = stats.per_day.get(&day).copied().unwrap_or(0.0);
+            let tasks = stats.per_day_tasks.get(&day).copied().unwrap_or(0);
+            let errs = stats.per_day_err.get(&day).copied().unwrap_or(0);
+            let text = if tasks == 0 && errs == 0 {
+                format!("{} · 无任务", stats::format_day_cn(&day))
+            } else {
+                // Split outcomes, and drop the minutes when the day has none to
+                // claim (probe found no duration): "0 分" would be a number the
+                // ledger never measured.
+                let mut line = stats::format_day_cn(&day);
+                if media > 0.0 {
+                    line.push_str(&format!(" · {}", stats::format_span_secs(media)));
+                }
+                if tasks > 0 {
+                    line.push_str(&format!(" · 成功 {tasks} 个"));
+                }
+                if errs > 0 {
+                    line.push_str(&format!(" · 失败 {errs} 个"));
+                }
+                line
+            };
+            (day, text)
+        });
+
+        // ── year grid: 12 month blocks. Horizontal = months left to right;
+        // each month fills 7-day columns in order (1–7, 8–14, …), so a month
+        // spans 4 full columns plus a partial 5th (28–31 days). Rows are the
+        // position within those groups, NOT fixed weekdays — day 1 is never
+        // guaranteed to be a Monday. The 12-month frame always paints — it is
+        // the canvas the year fills in — but a cell only exists for a day this
+        // install actually lived through: before the ledger began there is no
+        // "did nothing" to report, and after today there is nothing to report
+        // yet. (This is the `first_day` the summary has always carried.) ──
+        let today = crashlog::local_day_ymd();
+        // A record stamped in the future (clock moved back) must not widen the
+        // window: fall back to today, which paints a single cell at worst.
+        let range_start = stats
+            .first_day
+            .as_deref()
+            .filter(|d| *d <= today.as_str())
+            .unwrap_or(today.as_str())
+            .to_string();
+        let year: i64 = today[..4].parse().unwrap_or(0);
+        let mut cells: Vec<gpui::AnyElement> = Vec::new();
+        let mut month_labels: Vec<gpui::AnyElement> = Vec::new();
+        let mut hover_cell: Option<(usize, usize)> = None;
+        let mut col_cursor = 0usize;
+        for m in 1..=12u32 {
+            let dim = stats::days_in_month(year, m) as usize;
+            if dim == 0 {
+                continue;
+            }
+            let first_col = col_cursor;
+            // The layout guarantees every month ≥4 columns, so its label can
+            // never collide with a neighbour's.
+            let label = div()
+                .absolute()
+                .left(px(first_col as f32 * (STATS_CELL + STATS_GAP)))
+                .text_xs()
+                .text_color(MUTED)
+                .whitespace_nowrap()
+                .child(format!("{m} 月"));
+            month_labels.push(label.into_any_element());
+            for c in 0..dim.div_ceil(7) {
+                for row in 0..7usize {
+                    let day_num = c * 7 + row + 1;
+                    if day_num > dim {
+                        continue;
+                    }
+                    let day = format!("{year:04}-{m:02}-{day_num:02}");
+                    // Frame vs data: a day the ledger cannot speak about still
+                    // holds its place in the grid, but it is not a cell anyone
+                    // can hover, and it never claims "nothing was done".
+                    let in_range =
+                        day.as_str() >= range_start.as_str() && day.as_str() <= today.as_str();
+                    if in_range && self.stats_hover_day.as_deref() == Some(day.as_str()) {
+                        hover_cell = Some((first_col + c, row));
+                    }
+                    let media = stats.per_day.get(&day).copied().unwrap_or(0.0);
+                    let color = if !in_range {
+                        STATS_GHOST
+                    } else if media > 0.0 {
+                        stats_level_color(media)
+                    } else {
+                        STATS_L0
+                    };
+                    let cell = div()
+                        .absolute()
+                        .left(px((first_col + c) as f32 * (STATS_CELL + STATS_GAP)))
+                        .top(px(row as f32 * (STATS_CELL + STATS_GAP)))
+                        .size(px(STATS_CELL))
+                        // Explicit radius: `rounded_sm` resolves larger
+                        // than half of a 7px box, which turns the cell
+                        // into a circle — dot-matrix, not GitHub.
+                        .rounded(px(1.5))
+                        .bg(color);
+                    cells.push(if in_range {
+                        cell
+                            // Stateful: on_hover in this gpui lives on stateful
+                            // elements only. Day strings are unique per cell.
+                            .id(SharedString::from(format!("stat-cell-{day}")))
+                            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                                let next = over.then(|| day.clone());
+                                if this.stats_hover_day != next {
+                                    this.stats_hover_day = next;
+                                    cx.notify();
+                                }
+                            }))
+                            .into_any_element()
+                    } else {
+                        cell.into_any_element()
+                    });
+                }
+            }
+            col_cursor += dim.div_ceil(7);
+        }
+        let grid_w = (col_cursor as f32 * (STATS_CELL + STATS_GAP) - STATS_GAP).max(0.0);
+
+        // Early on the grid is mostly canvas. Say where the record starts rather
+        // than letting a blank year read as silence — and retire the line once
+        // the span is wide enough to speak for itself.
+        let early_caption = stats
+            .first_day
+            .as_deref()
+            .and_then(|d| stats::days_between(d, &today))
+            .filter(|span| (0..84).contains(span))
+            .map(|span| {
+                format!(
+                    "记录从 {} 开始 · 已积累 {} 天",
+                    stats::format_day_cn(&range_start),
+                    span + 1
+                )
+            });
+
+        // One shared hover card for the whole grid: 371 per-cell tooltips would
+        // destroy/recreate on every cell boundary and flicker.
+        let hover_card = hover.zip(hover_cell).map(|((_day, text), (col, row))| {
+            // Right-edge columns flip the card so it cannot leave the panel.
+            let right_align = col + 16 >= col_cursor;
+            div()
+                .absolute()
+                .when(right_align, |el| {
+                    el.right(px((col_cursor.saturating_sub(1 + col) * 9) as f32))
+                })
+                .when(!right_align, |el| el.left(px((col * 9) as f32)))
+                .when(row == 0, |el| el.top(px(STATS_CELL + 4.0)))
+                .when(row > 0, |el| {
+                    el.bottom(px(STATS_GRID_H - row as f32 * 9.0 + 4.0))
+                })
+                .rounded_md()
+                .px_2()
+                .py_1()
+                .bg(hsla(0.0, 0.0, 0.13, 0.94))
+                .text_xs()
+                .text_color(hsla(0.0, 0.0, 1.0, 0.96))
+                .whitespace_nowrap()
+                .child(text)
+        });
+
+        let metric = |label: &'static str, value: String| -> gpui::AnyElement {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_xs().text_color(MUTED).child(label))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(TEXT)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child(value),
+                )
+                .into_any_element()
+        };
+        let row = |label: &'static str, value: String| -> gpui::AnyElement {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .py_0p5()
+                .child(div().text_xs().text_color(MUTED).child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(TEXT)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(value),
+                )
+                .into_any_element()
+        };
+        let legend = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(MUTED)
+            .child("少")
+            .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L0))
+            .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L1))
+            .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L2))
+            .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L3))
+            .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L4))
+            .child("多");
+
+        let mut panel = div()
+            .absolute()
+            .left(px(14.))
+            .bottom(px(34.))
+            .w(px(STATS_PANEL_W))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(LINE)
+            .bg(PANEL)
+            .shadow(popover_menu_shadow())
+            .occlude()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(TEXT)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("统计"),
+            );
+
+        if stats.is_empty() {
+            // An empty panel must not be a wall of zeros — that reads as an
+            // accusation, not an invitation.
+            panel = panel.child(
+                div()
+                    .py_2()
+                    .text_xs()
+                    .text_color(MUTED)
+                    .child("完成第一个任务后，这里开始记账。"),
+            );
+        } else {
+            let mut rows: Vec<gpui::AnyElement> = Vec::new();
+            rows.push(row(
+                "完成任务",
+                if stats.tasks_err == 0 {
+                    format!("{} 个 · 全部成功", stats.tasks_ok)
+                } else {
+                    format!(
+                        "{} 个 · 成功 {} · 失败 {}",
+                        stats.tasks_total(),
+                        stats.tasks_ok,
+                        stats.tasks_err
+                    )
+                },
+            ));
+            if stats.cues > 0 {
+                rows.push(row(
+                    "输出文本",
+                    format!("{} 行", format_thousands(stats.cues)),
+                ));
+            }
+            if !stats.langs.is_empty() {
+                let lang_label = |id: &str| {
+                    source_language_by_id(id)
+                        .map(|l| l.label.to_string())
+                        .unwrap_or_else(|| id.to_string())
+                };
+                let mut line = format!("{} {}", lang_label(&stats.langs[0].0), stats.langs[0].1);
+                if let Some((id, n)) = stats.langs.get(1) {
+                    line.push_str(&format!(" · {} {}", lang_label(id), n));
+                }
+                if stats.langs.len() > 2 {
+                    line.push_str(&format!(" · 等 {} 种", stats.langs.len()));
+                }
+                rows.push(row("语种", line));
+            }
+            if stats.sep_tasks > 0 {
+                rows.push(row("人声分离", format!("{} 个任务", stats.sep_tasks)));
+            }
+            if let Some(m) = stats.longest_media_sec {
+                rows.push(row("最长一次", stats::format_span_secs(m)));
+            }
+            if let Some(f) = stats.fastest_speed {
+                rows.push(row("最快一次", format!("{f:.1}× 实时")));
+            }
+
+            panel = panel
+                // Hero is cumulative by design and never follows a time filter:
+                // the accumulation IS the value, and no "0 分" until a claim
+                // can actually be made.
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().text_xs().text_color(MUTED).child("累计省下"))
+                        .child(
+                            div()
+                                .text_size(px(20.))
+                                .text_color(TEXT)
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(match saved {
+                                    Some(s) => stats::format_span_secs(s),
+                                    None => "—".to_string(),
+                                }),
+                        )
+                        // The number is a duration; this is what it buys. Kept
+                        // to the unit the user can feel, never a second figure.
+                        .when_some(saved.and_then(saved_tale), |el, tale| {
+                            el.child(div().text_xs().text_color(MUTED_SOFT).child(tale))
+                        }),
+                )
+                .child(
+                    div().flex().gap_3().child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .gap_3()
+                            .child(metric(
+                                "素材总时长",
+                                (stats.media_sec > 0.0)
+                                    .then(|| stats::format_span_secs(stats.media_sec))
+                                    .unwrap_or_else(|| "—".into()),
+                            ))
+                            .child(metric(
+                                "机器耗时",
+                                (stats.process_ms > 0)
+                                    .then(|| stats::format_span_secs(stats.process_ms as f64 / 1000.0))
+                                    .unwrap_or_else(|| "—".into()),
+                            ))
+                            .child(metric(
+                                "平均速度",
+                                speed.map_or_else(|| "—".into(), |f| format!("{f:.1}× 实时")),
+                            )),
+                    ),
+                )
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(LINE)
+                        .pt_3()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(TEXT)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("每天处理的素材时长"),
+                                )
+                                .child(legend),
+                        )
+                        // Absolute children inside a fixed-size relative box:
+                        // the pitch (9px) is the single source of truth for
+                        // cells, labels, and the hover card alike.
+                        .child(
+                            div()
+                                .relative()
+                                .h(px(14.))
+                                .w(px(grid_w))
+                                .children(month_labels),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .w(px(grid_w))
+                                .h(px(STATS_GRID_H))
+                                .children(cells)
+                                .children(hover_card),
+                        )
+                        .when_some(early_caption, |el, caption| {
+                            el.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED_SOFT)
+                                    .child(caption),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(LINE)
+                        .pt_2()
+                        .flex()
+                        .flex_col()
+                        .children(rows),
+                );
+        }
+
+        deferred(panel).with_priority(MENU_Z)
     }
 
     fn render_empty_wave(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4214,6 +4742,83 @@ fn empty_wave_heights(t_secs: f32, cx: f32, amp: f32) -> [f32; EMPTY_WAVE_BARS] 
         let fine = (x * TAU * 11.0 + t_secs * 3.2).sin() * 0.07;
         let u = (env * (0.88 + ripple + fine)).clamp(0.0, 1.0) * amp;
         out[i] = EMPTY_WAVE_FLAT_H + u * (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H);
+    }
+    out
+}
+
+// ── Stats panel shared bits (module-level: the panel methods read them bare) ──
+
+/// Stats panel width, sized around the year grid: 12 month blocks span 59–60
+/// columns (≈538px worst case), plus the panel's own padding.
+const STATS_PANEL_W: f32 = 580.;
+/// Cell size and pitch. 7px is the smallest that still reads as a *cell*
+/// rather than noise; the width is the only thing that can buy more.
+const STATS_CELL: f32 = 7.;
+const STATS_GAP: f32 = 2.;
+/// Seven weekday rows, fixed.
+const STATS_GRID_H: f32 = 7. * STATS_CELL + 6. * STATS_GAP;
+
+/// Colour for a day that saw work. Thresholds are **absolute** (15 min / 1 h /
+/// 3 h): scaling them against the busiest day would make the same shade mean
+/// different things on different screens, which is the one thing a heat map
+/// must never do.
+fn stats_level_color(media_sec: f64) -> Rgba {
+    if media_sec >= 3.0 * 3600.0 {
+        STATS_L4
+    } else if media_sec >= 3600.0 {
+        STATS_L3
+    } else if media_sec >= 15.0 * 60.0 {
+        STATS_L2
+    } else {
+        STATS_L1
+    }
+}
+
+/// A felt yardstick for the hero number — "12 分" is a stopwatch reading, this
+/// is what it buys. Deliberately coarse and never user-facing as a conversion:
+/// the point is the shape of the amount, not a second precision. `None` under
+/// ten minutes, where every comparison would sound like flattery.
+fn saved_tale(secs: f64) -> Option<&'static str> {
+    let min = secs / 60.0;
+    match min {
+        m if m < 10.0 => None,
+        m if m < 40.0 => Some("≈ 一集播客"),
+        m if m < 100.0 => Some("≈ 一集电视剧"),
+        m if m < 240.0 => Some("≈ 一部电影"),
+        m if m < 480.0 => Some("≈ 半个工作日"),
+        _ => Some("≈ 一个工作日"),
+    }
+}
+
+/// Sentence/line count from an exported subtitle file: SRT cue blocks are
+/// bare index lines, TXT is one non-empty line per sentence — both come
+/// from the same sentence list, so either file yields the same number.
+/// 0 when the file cannot be read: the ledger tolerates gaps, never invents.
+fn count_output_lines(path: &std::path::Path) -> u32 {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    if text.contains("-->") {
+        text.lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && t.chars().all(|c| c.is_ascii_digit())
+            })
+            .count() as u32
+    } else {
+        text.lines().filter(|l| !l.trim().is_empty()).count() as u32
+    }
+}
+
+/// `12483` → `12,483`, for the 输出文本 row.
+fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
     }
     out
 }

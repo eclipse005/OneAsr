@@ -45,3 +45,28 @@ pub const WARN: Rgba = rgba_hex(0xd97706);
 pub const WARN_SOFT: Rgba = rgba_hex(0xfff7ed);
 /// Logo mark fill
 pub const LOGO: Rgba = rgba_hex(0x0f766e);
+
+// ─── stats year-grid intensity ramp ─────────────────────────────────
+//
+// Four levels plus an empty swatch, all absolute (see `oneasr_core::stats`):
+// a shade that means a different duration on every screen would be a lie, so
+// these are picked once and never normalised against the current maximum.
+
+/// A day outside the window the ledger can speak about — before it began, or
+/// still ahead. Deliberately lighter than [`STATS_L0`] so the three states stay
+/// legible at 7px: *not yours yet* (this), *yours but idle* (`L0`), *worked*.
+/// Without it the year frame is white space and reads as a panel that failed to
+/// draw; with it the frame reads as the canvas the year fills in.
+pub const STATS_GHOST: Rgba = rgba_hex(0xf1f5f9);
+/// Nothing recorded on a day inside the rendered window. Dark enough to read
+/// as a cell on the white panel (GitHub's empty swatch is `#ebedf0`); `#f1f5f9`
+/// here was invisible against `#ffffff` — it is the frame colour above instead.
+pub const STATS_L0: Rgba = rgba_hex(0xe2e8f0);
+/// Level 1 — up to 15 minutes.
+pub const STATS_L1: Rgba = rgba_hex(0xccfbf1);
+/// Level 2 — up to 1 hour.
+pub const STATS_L2: Rgba = rgba_hex(0x99f6e4);
+/// Level 3 — up to 3 hours.
+pub const STATS_L3: Rgba = rgba_hex(0x2dd4bf);
+/// Level 4 — 3 hours or more.
+pub const STATS_L4: Rgba = rgba_hex(0x0d9488);

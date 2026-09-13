@@ -1,7 +1,7 @@
 //! Shared UI building blocks: download rows, buttons, icons, tooltips, popovers.
 
 use gpui::{
-    deferred, div, hsla, linear, percentage, point, prelude::*, px, size, svg, Animation,
+    deferred, div, hsla, linear, percentage, point, prelude::*, px, radians, size, svg, Animation,
     AnimationExt as _, App, BoxShadow, ClickEvent, Context, MouseButton, SharedString,
     Transformation, Window, WindowControlArea,
 };
@@ -217,8 +217,11 @@ pub fn app_logo(hovered: bool) -> impl IntoElement {
                 let turn = (12.0 / 360.0) * wiggle;
                 // Tiny scale pulse so it feels springy, not just rotating.
                 let pulse = 1.0 + 0.06 * phase.cos().abs();
+                // `radians`, NOT `percentage`: the swing crosses negative, and
+                // `percentage()` debug-asserts on < 0 — hovering the logo in a
+                // debug build panicked the app within ~0.3s. Radians are free.
                 svg.with_transformation(
-                    Transformation::rotate(percentage(turn)).with_scaling(size(pulse, pulse)),
+                    Transformation::rotate(radians(turn * TAU)).with_scaling(size(pulse, pulse)),
                 )
             },
         )

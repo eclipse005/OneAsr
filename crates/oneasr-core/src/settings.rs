@@ -95,15 +95,10 @@ pub struct Settings {
     /// HTDemucs weights directory (default `{app}/models/htdemucs_ft`).
     #[serde(default = "default_demucs_model_dir")]
     pub demucs_model_dir: PathBuf,
-    /// Play interaction sounds: button clicks, the settings drawer.
-    /// Silences only these — outcome chimes are [`Self::task_notify`].
-    #[serde(default = "default_ui_sound")]
-    pub ui_sound: bool,
-    /// Play a chime when a task finishes or fails. This is the switch that
-    /// matters for the "I started a batch and walked away" case, so it stays
-    /// independent of [`Self::ui_sound`].
-    #[serde(default = "default_task_notify")]
-    pub task_notify: bool,
+    /// The one sound switch (「提示音」): interaction taps AND task outcome
+    /// chimes together.
+    #[serde(default = "default_sound")]
+    pub sound: bool,
 }
 
 fn default_asr_model() -> String {
@@ -147,13 +142,9 @@ fn default_demucs_model_dir() -> PathBuf {
     crate::model::default_demucs_model_dir()
 }
 
-// Sounds default on: that has been the shipped behaviour, and the user can now
-// turn either family off instead of having no lever at all.
-fn default_ui_sound() -> bool {
-    true
-}
-
-fn default_task_notify() -> bool {
+// Sounds default on: that has been the shipped behaviour, and the one switch
+// to turn them all off lives in an obvious place.
+fn default_sound() -> bool {
     true
 }
 
@@ -175,8 +166,7 @@ impl Default for Settings {
             text_script: default_text_script(),
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
-            ui_sound: default_ui_sound(),
-            task_notify: default_task_notify(),
+            sound: default_sound(),
         }
     }
 }
@@ -736,26 +726,22 @@ mod tests {
     }
 
     #[test]
-    fn sound_switches_default_on_and_normalize_keeps_them() {
+    fn sound_switch_defaults_on_and_normalize_keeps_it() {
         let s = Settings::default();
-        assert!(s.ui_sound, "interaction sounds ship on");
-        assert!(s.task_notify, "outcome chimes ship on");
+        assert!(s.sound, "sounds ship on");
 
         let mut off = Settings::default();
-        off.ui_sound = false;
-        off.task_notify = false;
+        off.sound = false;
         off.normalize();
-        assert!(!off.ui_sound, "normalize must not re-enable sounds");
-        assert!(!off.task_notify, "normalize must not re-enable sounds");
+        assert!(!off.sound, "normalize must not re-enable sounds");
     }
 
     #[test]
-    fn legacy_settings_without_sound_fields_stay_audible() {
-        // Upgrading must not silently silence an existing install: both fields
-        // are `#[serde(default)]`, so an old settings.json keeps sounds on.
+    fn legacy_settings_without_sound_field_stay_audible() {
+        // Upgrading must not silently silence an existing install: the field is
+        // `#[serde(default)]`, so an old settings.json keeps sounds on.
         let parsed: Settings =
             serde_json::from_str(r#"{"language":"en"}"#).expect("legacy config parses");
-        assert!(parsed.ui_sound, "missing ui_sound must default to on");
-        assert!(parsed.task_notify, "missing task_notify must default to on");
+        assert!(parsed.sound, "missing sound must default to on");
     }
 }

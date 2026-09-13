@@ -11,6 +11,7 @@ pub mod paths;
 pub mod runtime;
 pub mod sentence_boundary;
 pub mod settings;
+pub mod stats;
 pub mod subtitle;
 pub mod subtitle_length;
 pub mod text_script;

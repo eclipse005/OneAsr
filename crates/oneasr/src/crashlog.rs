@@ -138,6 +138,33 @@ fn stamp() -> String {
     format!("{}.{:03}", d.as_secs(), d.subsec_millis())
 }
 
+/// Local calendar day as `YYYY-MM-DD`, for the stats ledger.
+///
+/// The ledger records the day, not the clock — but it must be the *local* day
+/// the user is living in, resolved **at append time** so records stay correct
+/// across DST changes (recomputing later from a UTC stamp would need the offset
+/// history). Kept beside [`stamp`] so both read the same OS clock.
+#[cfg(windows)]
+pub fn local_day_ymd() -> String {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    // SAFETY: same contract as `stamp` — writes the OS clock into a fresh POD.
+    let st: SYSTEMTIME = unsafe { GetLocalTime() };
+    format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay)
+}
+
+#[cfg(not(windows))]
+pub fn local_day_ymd() -> String {
+    // Dev-only path: the UTC day, derived through the ledger's own calendar
+    // helpers so no extra dependency is pulled in.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| (d.as_secs() / 86_400) as i64)
+        .unwrap_or(0);
+    oneasr_core::stats::shift_days("1970-01-01", days).unwrap_or_else(|| "1970-01-01".into())
+}
+
 /// Write one entry; returns the path it actually landed on.
 ///
 /// Primary path first; on failure, retry the `%LOCALAPPDATA%` fallback and
