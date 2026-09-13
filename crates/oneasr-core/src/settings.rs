@@ -99,6 +99,15 @@ pub struct Settings {
     /// chimes together.
     #[serde(default = "default_sound")]
     pub sound: bool,
+    /// Pre-0.2.0 switch, read-only and never written back: `ui_sound` merged
+    /// into [`Self::sound`], and an install that had muted either family must
+    /// not get sound back just because the field it turned off disappeared from
+    /// the schema. Absent (the common case) means "nothing to carry over".
+    #[serde(default, rename = "ui_sound", skip_serializing_if = "Option::is_none")]
+    pub legacy_ui_sound: Option<bool>,
+    /// Pre-0.2.0 switch, read-only — see [`Self::legacy_ui_sound`].
+    #[serde(default, rename = "task_notify", skip_serializing_if = "Option::is_none")]
+    pub legacy_task_notify: Option<bool>,
 }
 
 fn default_asr_model() -> String {
@@ -167,6 +176,8 @@ impl Default for Settings {
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
             sound: default_sound(),
+            legacy_ui_sound: None,
+            legacy_task_notify: None,
         }
     }
 }
@@ -254,6 +265,20 @@ impl Settings {
         self.language = normalize_source_language(&self.language);
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
         self.normalize_output_dir();
+        // A muted install stays muted. The two switches of 0.1.9 were merged
+        // into one, so the merged switch inherits "on" only when neither family
+        // was turned off; this can only ever turn sound *off*, and once the
+        // config is saved the legacy keys are gone and `sound` is authoritative.
+        if self.sound
+            && (self.legacy_ui_sound == Some(false) || self.legacy_task_notify == Some(false))
+        {
+            self.sound = false;
+            notes.push("升级前关过界面音效 / 完成提醒 → 提示音保持关闭".into());
+        }
+        if self.legacy_ui_sound.is_some() || self.legacy_task_notify.is_some() {
+            self.legacy_ui_sound = None;
+            self.legacy_task_notify = None;
+        }
         // At least one output format must stay enabled.
         if !self.output_srt && !self.output_txt {
             self.output_srt = true;
@@ -743,5 +768,34 @@ mod tests {
         let parsed: Settings =
             serde_json::from_str(r#"{"language":"en"}"#).expect("legacy config parses");
         assert!(parsed.sound, "missing sound must default to on");
+    }
+
+    #[test]
+    fn a_muted_install_is_not_unmuted_by_the_merged_switch() {
+        // 0.1.9 had two switches. Either one being off means the user wanted
+        // quiet, and merging them must not hand the noise back.
+        let mut muted: Settings =
+            serde_json::from_str(r#"{"language":"zh","ui_sound":false,"task_notify":true}"#)
+                .expect("0.1.9 config parses");
+        muted.normalize();
+        assert!(!muted.sound, "关过的音效不能被合并开关重新打开");
+        assert!(
+            muted.legacy_ui_sound.is_none() && muted.legacy_task_notify.is_none(),
+            "legacy keys stop round-tripping after the first load"
+        );
+
+        // Both on (or neither present) keeps the shipped default.
+        let mut loud: Settings = serde_json::from_str(
+            r#"{"language":"zh","ui_sound":true,"task_notify":true}"#,
+        )
+        .expect("0.1.9 config parses");
+        loud.normalize();
+        assert!(loud.sound);
+
+        // The new switch itself is never overridden by anything.
+        let mut off: Settings =
+            serde_json::from_str(r#"{"language":"zh","sound":false}"#).expect("0.2.0 config parses");
+        off.normalize();
+        assert!(!off.sound);
     }
 }
