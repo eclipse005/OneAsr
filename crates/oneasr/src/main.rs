@@ -717,8 +717,8 @@ impl OneAsrApp {
         self.settings_dirty
     }
 
-    /// The one sound gate (「提示音」): interaction taps AND task outcome
-    /// chimes together.
+    /// The one sound gate (「提示音」): interaction taps AND the run reminder
+    /// together.
     ///
     /// Never attach this to hover: it fires tens of times a second and is the
     /// fastest way to make an app feel noisy.
@@ -1036,8 +1036,8 @@ impl OneAsrApp {
                             cues,
                         });
                     }
-                    // The outcome chime belongs to the end of the run, not to
-                    // each row: a 20-file batch must not stutter 20 times (see
+                    // The reminder belongs to the end of the run, not to each
+                    // row: a 20-file batch must not stutter 20 times (see
                     // `end_batch_if_idle`). A row deleted mid-run says nothing.
                     if let Some(rec) = ledger_row {
                         self.record_stats(&rec);
@@ -1086,7 +1086,7 @@ impl OneAsrApp {
                             self.active_stage = None;
                             // The whole collapse is one run ending badly: count
                             // it as such and let the run-complete notice own the
-                            // single failure chime (never one per task).
+                            // single reminder (never one per task).
                             self.batch_err = self.batch_err.saturating_add(affected);
                             self.end_batch_if_idle(cx);
                         }
@@ -1706,13 +1706,15 @@ impl OneAsrApp {
             None => msg,
         };
         // One chime per run — the same "never one sound per item" rule the
-        // click family follows. A mixed run chimes the failure: something in
-        // there wants the user's eyes.
+        // click family follows. Success and failure share the single reminder:
+        // the verdict is carried by the hint's colour and wording
+        // (`flash_good_hint_for` vs `flash_hint_for`), not by a second chime.
+        // A mixed run still lands on the amber hint, because something in there
+        // wants the user's eyes.
+        self.play_ui(sfx::Sfx::Reminder);
         if err == 0 {
-            self.play_ui(sfx::Sfx::TaskDone);
             self.flash_good_hint_for(msg, Duration::from_secs(6), cx);
         } else {
-            self.play_ui(sfx::Sfx::TaskError);
             self.flash_hint_for(msg, Duration::from_secs(6), cx);
         }
     }
@@ -1955,7 +1957,7 @@ impl OneAsrApp {
         if self.is_exiting(id) {
             return;
         }
-        self.play_ui(sfx::Sfx::Delete);
+        self.play_ui(sfx::Sfx::Click);
         // Tombstone in place so the row fades without jumping to the list bottom.
         self.entering.remove(id);
         self.exiting.insert(id.to_string(), Instant::now());
@@ -1987,7 +1989,7 @@ impl OneAsrApp {
         let had_proc = self.tasks.iter().any(|t| {
             t.status == TaskStatus::Processing && !self.exiting.contains_key(&t.id)
         });
-        self.play_ui(sfx::Sfx::Delete);
+        self.play_ui(sfx::Sfx::Click);
         let now = Instant::now();
         for t in &self.tasks {
             if t.status == TaskStatus::Processing {
@@ -3995,7 +3997,7 @@ impl OneAsrApp {
                             ))
                             .into_any_element(),
                     ))
-                    // One switch, no essay: taps and outcome chimes together.
+                    // One switch, no essay: taps and the run reminder together.
                     .child(section(
                         div()
                             .flex()

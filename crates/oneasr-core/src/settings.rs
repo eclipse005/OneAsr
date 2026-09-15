@@ -95,8 +95,8 @@ pub struct Settings {
     /// HTDemucs weights directory (default `{app}/models/htdemucs_ft`).
     #[serde(default = "default_demucs_model_dir")]
     pub demucs_model_dir: PathBuf,
-    /// The one sound switch (「提示音」): interaction taps AND task outcome
-    /// chimes together.
+    /// The one sound switch (「提示音」): interaction taps AND the run
+    /// reminder together.
     #[serde(default = "default_sound")]
     pub sound: bool,
     /// Pre-0.2.0 switch, read-only and never written back: `ui_sound` merged
