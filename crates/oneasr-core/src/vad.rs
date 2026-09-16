@@ -6,8 +6,8 @@
 //! ([`crate::settings::CHUNK_TARGET_MIN_SEC`]..=[`crate::settings::CHUNK_TARGET_MAX_SEC`]).
 //!
 //! Cut placement mirrors the validated Python `asr.py` pipeline; any chunk
-//! shorter than [`MIN_TAIL_SEGMENT_SEC`] is merged into a neighbor (VoxTrans
-//! merges only the tail — see [`merge_short_segments`]).
+//! shorter than `MIN_TAIL_SEGMENT_SEC` is merged into a neighbor (VoxTrans
+//! merges only the tail — see `merge_short_segments`).
 
 use std::path::Path;
 
@@ -114,14 +114,13 @@ fn abs_diff(a: f32, b: f32) -> f32 {
 
 /// Plan continuous `[start, end)` ranges covering the full timeline.
 ///
-/// Near each ~`chunk_sec` boundary, look left within `SILENCE_LOOKBACK` (~30 s):
-/// 1) prefer silences >= 0.5 s,
-/// 2) else silences >= 0.3 s,
-/// 3) else hard-cut at the nominal boundary.
-/// Among matches, prefer the longest pause, then closest to the boundary.
+/// Near each ~`chunk_sec` boundary, look left within `SILENCE_LOOKBACK` (~30 s)
+/// for the best pause: prefer >= 0.5 s, then >= 0.3 s, else hard-cut at the
+/// nominal boundary. Among matches, prefer the longest pause, then the one
+/// closest to the boundary.
 /// Cut at silence midpoint.
 ///
-/// After cuts are built, any chunk shorter than [`MIN_TAIL_SEGMENT_SEC`] is
+/// After cuts are built, any chunk shorter than `MIN_TAIL_SEGMENT_SEC` is
 /// merged into a neighbor (any position, not just the tail — the
 /// longest-silence rule can otherwise cut a sub-second sliver mid-stream).
 /// Coverage always remains continuous from `0` to `duration`.

@@ -1,10 +1,13 @@
-//! Batch task model for the list UI.
+//! Batch task model for the list rows.
+//!
+//! Lives in the GUI crate: `Task` / `TaskStatus` / `DurationState` describe the
+//! batch list, and nothing in `oneasr-core` consumes them. `TaskTiming` stays
+//! in core (it is produced by the pipeline).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::asr::TaskTiming;
-use crate::lang::normalize_source_language;
+use oneasr_core::{TaskTiming, normalize_source_language};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {

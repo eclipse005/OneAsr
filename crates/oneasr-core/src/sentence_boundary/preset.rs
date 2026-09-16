@@ -1,4 +1,10 @@
 //! Subtitle length presets (limits live on each language profile).
+//!
+//! Lives in the segmentation layer: every consumer of `SubtitleLengthPreset`
+//! is a boundary stage (`profile` / `subtitle_layout` / `watchability_merge`),
+//! and the budgets it selects are defined on [`super::profile`]. `Settings`
+//! only stores the id as a string, so this type stays off the crate's public
+//! surface — see [`subtitle_length_preset_from_id`].
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SubtitleLengthPreset {
@@ -9,14 +15,6 @@ pub enum SubtitleLengthPreset {
 }
 
 impl SubtitleLengthPreset {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Short => "short",
-            Self::Standard => "standard",
-            Self::Loose => "loose",
-        }
-    }
-
     pub fn parse(value: &str) -> Self {
         match value.trim() {
             "short" => Self::Short,

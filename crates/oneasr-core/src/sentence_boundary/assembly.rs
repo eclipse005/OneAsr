@@ -1,8 +1,10 @@
+//! Assembling finished source sentences into exported text (SRT / TXT).
+
 use crate::sentence_boundary::WordTokenDto;
 use crate::subtitle::srt::{SrtCue, to_srt_from_cues};
 
-use super::text::join_words;
-use super::timing::{gap_ms, seconds_to_ms};
+use super::util::join_words;
+use super::util::{gap_ms, seconds_to_ms};
 use super::types::{
     BoundaryDecision, BoundaryDecisionKind, MicroChunk, SourceSentence, SourceSentenceStep2,
     SplitReason,
@@ -37,70 +39,6 @@ pub fn source_sentences_to_txt(step2: &SourceSentenceStep2) -> String {
         out.push('\n');
     }
     out
-}
-
-#[cfg(test)]
-mod txt_tests {
-    use super::*;
-    use crate::sentence_boundary::SourceSentence;
-
-    fn step2(texts: &[&str]) -> SourceSentenceStep2 {
-        SourceSentenceStep2 {
-            task_id: "t".into(),
-            media_path: "m.mp4".into(),
-            source_lang: "zh".into(),
-            micro_chunk_total: 0,
-            boundary_total: 0,
-            sentence_total: texts.len(),
-            micro_chunks: Vec::new(),
-            boundaries: Vec::new(),
-            translation_sentences: texts
-                .iter()
-                .enumerate()
-                .map(|(i, text)| SourceSentence {
-                    sentence_id: i + 1,
-                    start_ms: (i as u64) * 1000,
-                    end_ms: (i as u64) * 1000 + 900,
-                    text: (*text).to_string(),
-                    word_start: 0,
-                    word_end: 1,
-                    chunk_start: 0,
-                    chunk_end: 1,
-                })
-                .collect(),
-            words: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn one_line_per_cue_without_timestamps() {
-        let txt = source_sentences_to_txt(&step2(&["第一句。", "第二句。"]));
-        assert_eq!(txt, "第一句。\n第二句。\n");
-        assert!(!txt.contains("-->"));
-        assert!(!txt.contains("00:00"));
-    }
-
-    #[test]
-    fn layout_line_breaks_are_folded_back() {
-        // CJK lines join without a space, latin lines keep one (same rule as
-        // cue assembly), so the plain-text export reads like prose.
-        let cjk = source_sentences_to_txt(&step2(&["我在这\n里等你。"]));
-        assert_eq!(cjk, "我在这里等你。\n");
-
-        let latin = source_sentences_to_txt(&step2(&["hello\nworld"]));
-        assert_eq!(latin, "hello world\n");
-    }
-
-    #[test]
-    fn empty_cues_are_skipped() {
-        let txt = source_sentences_to_txt(&step2(&["", "  ", "有内容。"]));
-        assert_eq!(txt, "有内容。\n");
-    }
-
-    #[test]
-    fn no_cues_yields_empty_body() {
-        assert!(source_sentences_to_txt(&step2(&[])).is_empty());
-    }
 }
 
 pub(super) fn build_micro_chunks(
@@ -228,4 +166,68 @@ pub(super) fn build_boundaries_from_split_points(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod txt_tests {
+    use super::*;
+    use crate::sentence_boundary::SourceSentence;
+
+    fn step2(texts: &[&str]) -> SourceSentenceStep2 {
+        SourceSentenceStep2 {
+            task_id: "t".into(),
+            media_path: "m.mp4".into(),
+            source_lang: "zh".into(),
+            micro_chunk_total: 0,
+            boundary_total: 0,
+            sentence_total: texts.len(),
+            micro_chunks: Vec::new(),
+            boundaries: Vec::new(),
+            translation_sentences: texts
+                .iter()
+                .enumerate()
+                .map(|(i, text)| SourceSentence {
+                    sentence_id: i + 1,
+                    start_ms: (i as u64) * 1000,
+                    end_ms: (i as u64) * 1000 + 900,
+                    text: (*text).to_string(),
+                    word_start: 0,
+                    word_end: 1,
+                    chunk_start: 0,
+                    chunk_end: 1,
+                })
+                .collect(),
+            words: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn one_line_per_cue_without_timestamps() {
+        let txt = source_sentences_to_txt(&step2(&["第一句。", "第二句。"]));
+        assert_eq!(txt, "第一句。\n第二句。\n");
+        assert!(!txt.contains("-->"));
+        assert!(!txt.contains("00:00"));
+    }
+
+    #[test]
+    fn layout_line_breaks_are_folded_back() {
+        // CJK lines join without a space, latin lines keep one (same rule as
+        // cue assembly), so the plain-text export reads like prose.
+        let cjk = source_sentences_to_txt(&step2(&["我在这\n里等你。"]));
+        assert_eq!(cjk, "我在这里等你。\n");
+
+        let latin = source_sentences_to_txt(&step2(&["hello\nworld"]));
+        assert_eq!(latin, "hello world\n");
+    }
+
+    #[test]
+    fn empty_cues_are_skipped() {
+        let txt = source_sentences_to_txt(&step2(&["", "  ", "有内容。"]));
+        assert_eq!(txt, "有内容。\n");
+    }
+
+    #[test]
+    fn no_cues_yields_empty_body() {
+        assert!(source_sentences_to_txt(&step2(&[])).is_empty());
+    }
 }

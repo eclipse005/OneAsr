@@ -63,7 +63,7 @@ fn trailing_singleton_digit(token: &str) -> bool {
     if trimmed.ends_with('.') || trimmed.ends_with(',') {
         return false;
     }
-    let core = trimmed.trim_end_matches(|c| matches!(c, '。' | '！' | '？' | '、' | '!' | '?'));
+    let core = trimmed.trim_end_matches(['。', '！', '？', '、', '!', '?']);
     digit_run_len(core.chars().rev()) == 1
 }
 

@@ -108,10 +108,9 @@ impl AssetSource for AppAssets {
                         names.push(s);
                     }
                 }
-            } else if let Some(rest) = k.strip_prefix(&prefix) {
-                if !rest.is_empty() && !rest.contains('/') {
-                    names.push(SharedString::from(rest.to_string()));
-                }
+            } else if let Some(rest) = k.strip_prefix(&prefix)
+                && !rest.is_empty() && !rest.contains('/') {
+                names.push(SharedString::from(rest.to_string()));
             }
         }
         names.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));

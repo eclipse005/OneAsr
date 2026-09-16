@@ -1,12 +1,17 @@
-//! 把 Punkt 在完整文本上识别出的句子边界映射回 word token 索引。
+//! Map the sentence boundaries Punkt found in the joined text back onto word
+//! token indices.
 //!
-//! Punkt 工作在拼接后的完整字符串上，返回的是字符位置；而下游的 DP 布局层
-//! 需要 word 索引来切分 `&[WordTokenDto]`。这个模块负责这个映射。
+//! Punkt works on the concatenated string and reports character offsets, while
+//! the DP layout stage downstream needs word indices into `&[WordTokenDto]`.
+//! This module is that translation.
 //!
-//! 核心思路：
-//! 1. 用 `text.find(word, search_from)` 累计每个 word 在文本中的结束字符位置
-//! 2. 对每个 Punkt 句子边界（字符位置），找到结束位置最接近的 word 索引
-//! 3. 容差 3 字符，处理 Punkt 内部 tokenization 可能造成的轻微偏移
+//! How it works:
+//! 1. Walk the words with `text.find(word, search_from)` to accumulate each
+//!    word's end offset in the text.
+//! 2. For every Punkt boundary (a character offset), pick the word whose end
+//!    lands nearest.
+//! 3. Allow a 3-character tolerance, which absorbs the slight offsets Punkt's
+//!    own tokenization can introduce.
 
 use crate::sentence_boundary::WordTokenDto;
 

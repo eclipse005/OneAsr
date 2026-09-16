@@ -1,3 +1,6 @@
+//! Readability pass over ASR words: sentence case and the small repairs that
+//! make a raw token stream read like written text.
+
 use super::segmenter::WordToken;
 
 const SENTENCE_GAP_SEC: f64 = 2.0;

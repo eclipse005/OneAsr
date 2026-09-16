@@ -1,10 +1,16 @@
+//! Where a sentence ends: Punkt when a language model is available, punctuation
+//! rules otherwise.
+//!
+//! Both paths produce split points over the same word list, so downstream stages
+//! never need to know which one ran.
+
 use crate::sentence_boundary::WordTokenDto;
 use crate::subtitle::text_rules::{ends_with_terminal_punctuation, strip_trailing_closers};
 
 use super::boundary_rules::{is_ja_turn_start_after, is_japanese_spoken_end};
-use super::language::LanguageProfile;
+use super::profile::LanguageProfile;
 use super::punkt_map::map_sentence_boundaries_to_word_indices;
-use super::text::join_words;
+use super::util::join_words;
 use super::types::SplitReason;
 
 /// Pre-split (hard boundaries): sentence-terminal punctuation (`. ! ? 。`).
@@ -233,7 +239,7 @@ fn is_single_letter_dotted(token: &str) -> bool {
 pub(super) fn build_deterministic_split_points(
     words: &[WordTokenDto],
 ) -> Vec<(usize, SplitReason)> {
-    use super::language::profile_for_lang;
+    use super::profile::profile_for_lang;
     build_split_points_from_hard_boundaries(words, &*profile_for_lang("en"))
 }
 

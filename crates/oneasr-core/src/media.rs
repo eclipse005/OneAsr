@@ -62,10 +62,9 @@ pub enum MediaError {
 /// 2. `current_dir()` and ancestors (covers tests / odd cwd)
 pub fn resolve_app_root() -> Option<PathBuf> {
     let mut starts = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            starts.push(dir.to_path_buf());
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent() {
+        starts.push(dir.to_path_buf());
     }
     if let Ok(cwd) = std::env::current_dir() {
         starts.push(cwd);
@@ -417,7 +416,7 @@ fn probe_sender() -> Sender<ProbeJob> {
     .clone()
 }
 
-/// Queue a duration probe on the process-wide pool (≤ [`PROBE_WORKERS`] concurrent).
+/// Queue a duration probe on the process-wide pool (≤ `PROBE_WORKERS` concurrent).
 ///
 /// Prefer this over unbounded `thread::spawn` when importing many files.
 pub fn probe_duration_async(path: PathBuf, on_done: impl FnOnce(Option<f64>) + Send + 'static) {

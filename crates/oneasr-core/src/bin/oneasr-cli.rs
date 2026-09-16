@@ -143,8 +143,10 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     ensure_ffmpeg(&app_root)?;
     setup_native(&app_root);
 
-    let mut settings = Settings::default();
-    settings.language = language;
+    let mut settings = Settings {
+        language,
+        ..Settings::default()
+    };
     // `Settings::normalize()` below clamps the chunk target to the product range.
     settings.chunk_target_seconds = chunk_seconds;
     settings.backend = backend;
@@ -291,9 +293,11 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
 
     setup_native(&app_root);
 
-    let mut settings = Settings::default();
-    settings.language = language;
-    settings.backend = backend_s.clone();
+    let mut settings = Settings {
+        language,
+        backend: backend_s.clone(),
+        ..Settings::default()
+    };
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }

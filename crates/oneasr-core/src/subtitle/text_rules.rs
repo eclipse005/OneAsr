@@ -1,3 +1,6 @@
+//! Terminal-punctuation rules: does this token end a sentence, or is it an
+//! abbreviation / ordinal / initial that must not be split after?
+
 pub fn should_split_after_terminal_token(
     current_token: &str,
     next_token: Option<&str>,

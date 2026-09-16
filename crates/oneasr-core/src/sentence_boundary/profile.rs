@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 
 use jieba_rs::{Jieba, TokenizeMode};
 
-use crate::subtitle_length::SubtitleLengthPreset;
+use super::preset::SubtitleLengthPreset;
 
 // ============================================================================
 // Word-boundary advisors (used by Chinese profile)
@@ -196,7 +196,6 @@ fn language_key(lang: &str) -> String {
     let end = trimmed.find(['-', '_']).unwrap_or(trimmed.len());
     trimmed[..end].to_ascii_lowercase()
 }
-
 
 /// Shared function-word guards for spaced EU/misc languages (articles,
 /// prepositions, clitics).

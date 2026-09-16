@@ -1,4 +1,7 @@
 //! Pure UI label helpers (no GPUI, unit-testable).
+//!
+//! Lives in the GUI crate: these are interface copy, not pipeline logic.
+//! Kept free of GPUI so the wording stays unit-testable.
 
 /// Short status bar text for the batch queue (no percentages).
 pub fn format_queue_status(

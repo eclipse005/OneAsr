@@ -8,11 +8,18 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::catalog::{model_definition, ModelDefinition, ModelDownloadFile, ModelId};
-use super::path::{resolve_dll_dir, resolve_exe_dir};
+use super::catalog::{model_definition, ModelDownloadFile, ModelId};
+
+use super::http::{
+    content_length_total, content_range_start, discard_part, download_client, initial_bytes,
+    is_success, modelscope_request, retry_backoff, sleep_cancellable, trace_download,
+};
+use super::ready::file_meets_ready_threshold;
+#[cfg(test)]
+use super::ready::probe_writable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadState {
@@ -172,93 +179,6 @@ impl DownloadHandle {
     }
 }
 
-/// Whether all catalog files are present at their exact pinned sizes.
-///
-/// Hashing multi-GB weights on every readiness probe would be far too slow, so
-/// readiness is size-based; SHA-256 is verified once at download time.
-pub fn is_model_ready(id: ModelId) -> bool {
-    let def = model_definition(id);
-    def.download_files.iter().all(|file| {
-        let path = def.model_dir.join(&file.file_name);
-        file_meets_ready_threshold(&path, file.expected_size)
-    })
-}
-
-/// CUDA runtime DLLs for the GPU backend.
-///
-/// Searches common layout roots so GPU works for:
-/// - install: `{exe}/dll/`
-/// - `cargo run -p oneasr`: `{target/release}/dll/`
-/// - `cargo run --example …`: walk up from `target/*/examples/` to `target/*/dll/`
-/// - project root: `{app_root}/dll/` when it contains `bin/ffmpeg`
-pub fn is_cuda_runtime_ready() -> bool {
-    cuda_runtime_search_dirs()
-        .into_iter()
-        .any(|dir| cuda_runtime_ready_in(&dir))
-}
-
-/// First directory that has a complete CUDA runtime set (for `SetDllDirectory`).
-pub fn resolve_cuda_runtime_dir() -> Option<PathBuf> {
-    cuda_runtime_search_dirs()
-        .into_iter()
-        .find(|dir| cuda_runtime_ready_in(dir))
-}
-
-fn cuda_runtime_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    let push_unique = |dirs: &mut Vec<PathBuf>, p: PathBuf| {
-        if !dirs.iter().any(|d| d == &p) {
-            dirs.push(p);
-        }
-    };
-    push_unique(&mut dirs, resolve_dll_dir());
-    // Walk up from the exe (covers target/release/examples → target/release).
-    let mut cur = resolve_exe_dir();
-    for _ in 0..6 {
-        push_unique(&mut dirs, cur.join("dll"));
-        if !cur.pop() {
-            break;
-        }
-    }
-    if let Some(root) = crate::media::resolve_app_root() {
-        push_unique(&mut dirs, root.join("dll"));
-    }
-    dirs
-}
-
-fn cuda_runtime_ready_in(dir: &Path) -> bool {
-    let def = model_definition(ModelId::CudaRuntime);
-    def.download_files.iter().all(|file| {
-        file_meets_ready_threshold(&dir.join(&file.file_name), file.expected_size)
-    })
-}
-
-/// File exists at exactly `expected_size` bytes (size read from the pinned
-/// revision). Returns `false` for missing, zero-byte, truncated, or oversized
-/// files. SHA-256 is checked separately when downloading.
-pub fn file_meets_ready_threshold(path: &Path, expected_size: u64) -> bool {
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => meta.len() == expected_size,
-        _ => false,
-    }
-}
-
-/// Probe whether `dir` accepts file writes (create → write → remove a temp file).
-///
-/// Mirrors the real download flow (`create_dir_all` then open `.part` for append),
-/// so a failure surfaces the same `io::Error` a download would hit. Used to log
-/// the environment when a download starts — with a bare OS error like
-/// `拒绝访问 (os error 5)` this is the only record of *where* it broke.
-pub fn probe_writable(dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let probe = dir.join(format!(".oneasr-write-probe-{}", std::process::id()));
-    let mut f = std::fs::File::create(&probe)?;
-    f.write_all(b"ok")?;
-    f.flush()?;
-    drop(f);
-    std::fs::remove_file(&probe)
-}
-
 /// Download (or resume) into the install-layout dir for `id`.
 ///
 /// Progress callback receives **Downloading only**. Terminal state is `DownloadOutcome`.
@@ -322,10 +242,9 @@ pub fn download_model(
             let _ = std::fs::remove_file(&target);
         }
 
-        if let Some(parent) = target.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return ctx.failed(e.to_string());
-            }
+        if let Some(parent) = target.parent()
+            && let Err(e) = std::fs::create_dir_all(parent) {
+            return ctx.failed(e.to_string());
         }
 
         let mut attempt = 1_u32;
@@ -386,7 +305,7 @@ pub fn download_model(
 }
 
 /// Shared mutable download state for the current file + progress emission.
-struct FileDownloadCtx<'a> {
+pub(super) struct FileDownloadCtx<'a> {
     client: &'a reqwest::blocking::Client,
     cancel: &'a AtomicBool,
     model_id: ModelId,
@@ -449,7 +368,7 @@ impl FileDownloadCtx<'_> {
     }
 
     /// Discard bytes that no longer count (server ignored Range and restarted).
-    fn subtract(&mut self, n: u64) {
+    pub(super) fn subtract(&mut self, n: u64) {
         self.downloaded_bytes = self.downloaded_bytes.saturating_sub(n);
         self.last_speed_bytes = self.last_speed_bytes.saturating_sub(n);
     }
@@ -462,7 +381,7 @@ impl FileDownloadCtx<'_> {
 }
 
 #[derive(Debug)]
-enum FileDownloadError {
+pub(super) enum FileDownloadError {
     Cancelled,
     /// Worth retrying (network hiccup, timeout, short body, 5xx).
     Transient(String),
@@ -476,7 +395,7 @@ const MAX_FILE_ATTEMPTS: u32 = 3;
 /// Per-read idle timeout: each `Response::read` call gets a fresh window, so a
 /// stalled connection fails within a minute while large, flowing downloads run
 /// to completion.
-const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// One HTTP attempt at downloading `file` into `part_path` (resume-aware),
 /// renaming to `target` only after both the exact size and SHA-256 match.
@@ -609,13 +528,6 @@ fn download_one_file(
     }
 }
 
-/// Delete an untrusted `.part` and remove its bytes from progress accounting
-/// (they were counted by `initial_bytes`/`add_written`).
-fn discard_part(ctx: &mut FileDownloadCtx<'_>, part_path: &Path, part_bytes: u64, expected: u64) {
-    let _ = std::fs::remove_file(part_path);
-    ctx.subtract(part_bytes.min(expected));
-}
-
 /// Compare `path`'s SHA-256 against `expected_hex` (case-insensitive).
 fn sha256_matches(path: &Path, expected_hex: &str) -> std::io::Result<bool> {
     use sha2::{Digest, Sha256};
@@ -643,113 +555,6 @@ fn finish_part_file(part_path: &Path, target: &Path) -> Result<(), FileDownloadE
         let _ = std::fs::create_dir_all(parent);
     }
     std::fs::rename(part_path, target).map_err(|e| FileDownloadError::Permanent(e.to_string()))
-}
-
-fn retry_backoff(attempt: u32) -> Duration {
-    Duration::from_secs(1 << attempt.saturating_sub(1).min(3))
-}
-
-/// Sleep in small slices so cancellation is honoured promptly.
-/// Returns `false` when cancelled.
-fn sleep_cancellable(cancel: &AtomicBool, total: Duration) -> bool {
-    let deadline = Instant::now() + total;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::Relaxed) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    !cancel.load(Ordering::Relaxed)
-}
-
-fn trace_download(msg: &str) {
-    if std::env::var_os("ONEASR_PIPELINE_TRACE").is_some() {
-        eprintln!("[download] {msg}");
-    }
-}
-
-fn content_length_total(response: &reqwest::blocking::Response, part_bytes: u64) -> Option<u64> {
-    // Content-Range: bytes start-end/total
-    if let Some(cr) = response.headers().get(reqwest::header::CONTENT_RANGE) {
-        if let Ok(s) = cr.to_str() {
-            if let Some(total) = s.rsplit('/').next() {
-                if let Ok(n) = total.parse::<u64>() {
-                    return Some(n);
-                }
-            }
-        }
-    }
-    response
-        .content_length()
-        .map(|len| part_bytes.saturating_add(len))
-}
-
-/// Start offset declared by a `Content-Range: bytes start-end/total` header.
-fn content_range_start(response: &reqwest::blocking::Response) -> Option<u64> {
-    let raw = response.headers().get(reqwest::header::CONTENT_RANGE)?;
-    let text = raw.to_str().ok()?;
-    // Skip the unit token ("bytes " / "bytes="), then parse "start-end/total".
-    let range = text.split_once(' ').map(|(_, rest)| rest).unwrap_or(text);
-    range.split('-').next()?.trim().parse().ok()
-}
-
-fn initial_bytes(definition: &ModelDefinition) -> (u64, u64) {
-    let mut downloaded = 0_u64;
-    let mut total = 0_u64;
-    for file in &definition.download_files {
-        let target = definition.model_dir.join(&file.file_name);
-        let part = definition
-            .model_dir
-            .join(format!("{}.part", file.file_name.replace('/', "_")));
-        let have = if target.is_file() {
-            std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0)
-        } else {
-            std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0)
-        };
-        downloaded = downloaded.saturating_add(have.min(file.expected_size));
-        total = total.saturating_add(file.expected_size.max(have));
-    }
-    (downloaded, total)
-}
-
-/// Process-wide reqwest client (connection reuse across sequential downloads).
-/// Build failure is sticky for the process and returned as [`DownloadOutcome::Failed`].
-fn download_client() -> Result<&'static reqwest::blocking::Client, String> {
-    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
-    match CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            // Blocking `Response::read` applies this timeout to each read call,
-            // giving stalled connections a bounded wait without capping the
-            // total duration of a large download.
-            .timeout(READ_IDLE_TIMEOUT)
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) OneAsr/0.1")
-            .build()
-            .map_err(|e| e.to_string())
-    }) {
-        Ok(client) => Ok(client),
-        Err(e) => Err(e.clone()),
-    }
-}
-
-fn modelscope_request(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    part_bytes: u64,
-) -> reqwest::blocking::RequestBuilder {
-    let req = client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "*/*")
-        .header(reqwest::header::REFERER, "https://modelscope.cn/");
-    if part_bytes > 0 {
-        req.header(reqwest::header::RANGE, format!("bytes={part_bytes}-"))
-    } else {
-        req
-    }
-}
-
-fn is_success(status: reqwest::StatusCode) -> bool {
-    status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT
 }
 
 fn format_speed(bps: u64) -> String {

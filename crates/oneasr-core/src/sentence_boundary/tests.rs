@@ -1,9 +1,19 @@
+//! Sentence-boundary tests: the corpus of transcript shapes the pipeline has to
+//! survive.
+
 use super::{
-    BoundaryDecisionKind, build_deterministic_sentence_spans, build_micro_chunks,
-    build_source_sentences_from_words,
+    BoundaryDecisionKind, build_micro_chunks, build_source_sentences_from_words,
 };
 use super::WordTokenDto;
 use crate::subtitle::text_rules::ends_with_terminal_punctuation;
+
+/// Deterministic spans for the span-shape tests: semantic pre-split only, with
+/// no DP layout. Test-only helper, deliberately kept out of the production
+/// module so `mod.rs` holds nothing `#[cfg(test)]`-gated.
+fn build_deterministic_sentence_spans(words: &[WordTokenDto]) -> Vec<(usize, usize)> {
+    let split_points = super::semantic::build_deterministic_split_points(words);
+    super::semantic::split_points_to_spans(words.len(), &split_points)
+}
 
 fn w(index: usize, text: &str) -> WordTokenDto {
     let start = index as f64 * 0.5;
@@ -238,7 +248,7 @@ fn hard_pause_does_not_split_short_sentence_without_punctuation() {
     ];
 
     // semantic.rs no longer hard-splits on VAD (only terminal punctuation).
-    let split_points = super::build_deterministic_split_points(&words);
+    let split_points = super::semantic::build_deterministic_split_points(&words);
     assert!(
         split_points.is_empty(),
         "short sentence with VAD pause must not be hard-split"
@@ -246,7 +256,6 @@ fn hard_pause_does_not_split_short_sentence_without_punctuation() {
     let spans = super::split_points_to_spans(words.len(), &split_points);
     assert_eq!(spans, vec![(0, 1)]);
 }
-
 
 /// Ported EggTranslate guard: Japanese phrase-closing particle (は) is a good
 /// cut, so an overlong unpunctuated Japanese span splits after the particle.
@@ -273,8 +282,8 @@ fn japanese_particle_guides_force_cuts() {
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
 
-    let ja_profile = super::language::profile_for_lang("ja");
-    let short_preset = crate::subtitle_length::SubtitleLengthPreset::Short;
+    let ja_profile = super::profile::profile_for_lang("ja");
+    let short_preset = super::preset::SubtitleLengthPreset::Short;
     let idx = super::vad_align::SpeechSegmentIndex::new(Vec::new());
     let semantic = vec![(0usize, words.len() - 1)];
     let dp_cuts = super::subtitle_layout::build_subtitle_layout_split_points(
@@ -1210,7 +1219,7 @@ fn vad_sustains_segmentation_when_punctuation_stripped() {
     ];
 
     // semantic.rs: no terminal punctuation → no hard split (correct).
-    let en_profile = super::language::profile_for_lang("en");
+    let en_profile = super::profile::profile_for_lang("en");
     let splits_semantic =
         super::semantic::build_split_points_from_hard_boundaries(&words_stripped, &*en_profile);
     assert!(
@@ -1221,9 +1230,9 @@ fn vad_sustains_segmentation_when_punctuation_stripped() {
     // Build semantic spans (one span: 0..19, since no hard split).
     let semantic_spans = super::split_points_to_spans(words_stripped.len(), &splits_semantic);
 
-    let en_profile = super::language::profile_for_lang("en");
+    let en_profile = super::profile::profile_for_lang("en");
     let short_preset =
-        crate::subtitle_length::subtitle_length_preset_from_id("short");
+        super::preset::subtitle_length_preset_from_id("short");
 
     // DP with VAD: overlong span must be split, and the VAD silence gap
     // (cost 2.0) should be chosen over plain word boundaries (cost 6.0).

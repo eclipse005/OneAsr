@@ -1,3 +1,8 @@
+//! Token normalization: splitting, merging and gluing the fragments ASR emits.
+//!
+//! The numeric / abbreviation merges here run **before** sentence splitting.
+//! The post-split gluing of digits lives in `crate::sentence_boundary::digit_glue`.
+
 #[derive(Debug, Clone)]
 pub struct WordToken {
     pub start: f64,

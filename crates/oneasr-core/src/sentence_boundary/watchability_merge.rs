@@ -2,7 +2,7 @@
 //! translator never sees flash/orphan cues.
 
 use crate::sentence_boundary::WordTokenDto;
-use crate::subtitle_length::SubtitleLengthPreset;
+use super::preset::SubtitleLengthPreset;
 
 use super::boundary_rules::{
     is_case_particle_before_predicate, is_connector_like, is_discourse_marker_text,
@@ -11,8 +11,8 @@ use super::boundary_rules::{
     is_japanese_lexical_bind, is_line_start_bound_particle, is_open_genitive_link,
     is_split_hai, strip_token,
 };
-use super::language::LanguageProfile;
-use super::text::join_words;
+use super::profile::LanguageProfile;
+use super::util::join_words;
 
 const FLASH_SEC: f64 = 0.8;
 const ORPHAN_TAIL_MAX_SEC: f64 = 1.5;
@@ -518,7 +518,7 @@ mod tests {
             timed("bits", 4.4, 4.6),
         ]);
         let spans = vec![(0usize, 15), (16, 18)];
-        let profile = super::super::language::profile_for_lang("en");
+        let profile = super::super::profile::profile_for_lang("en");
         let merged = merge_watchability_spans(
             &words,
             &spans,
@@ -540,7 +540,7 @@ mod tests {
             timed("bits", 2.45, 2.65),
         ]);
         let spans = vec![(0usize, 7), (8, 10)];
-        let profile = super::super::language::profile_for_lang("en");
+        let profile = super::super::profile::profile_for_lang("en");
         let merged = merge_watchability_spans(
             &words,
             &spans,
@@ -560,7 +560,7 @@ mod tests {
             timed("go.", 0.9, 1.1),
         ];
         let spans = vec![(0usize, 0), (1, 4)];
-        let profile = super::super::language::profile_for_lang("en");
+        let profile = super::super::profile::profile_for_lang("en");
         let merged = merge_watchability_spans(
             &words,
             &spans,
@@ -581,7 +581,7 @@ mod tests {
             timed("通います", 1.8, 2.3),
         ];
         let spans = vec![(0usize, 1), (2, 5)];
-        let profile = super::super::language::profile_for_lang("ja");
+        let profile = super::super::profile::profile_for_lang("ja");
         let merged = merge_watchability_spans(
             &words,
             &spans,
@@ -602,7 +602,7 @@ mod tests {
             timed("どうぞ", 1.8, 2.2),
         ];
         let spans = vec![(0usize, 1), (2, 5)];
-        let profile = super::super::language::profile_for_lang("ja");
+        let profile = super::super::profile::profile_for_lang("ja");
         let merged = merge_watchability_spans(
             &words,
             &spans,
@@ -617,7 +617,7 @@ mod tests {
         let words = vec![w(0, "hello"), w(1, "there"), w(8, "later")];
         // w(8) starts at 4.0s, w(1) ends at 0.8 — gap >> 0.8s
         let spans = vec![(0usize, 1), (2, 2)];
-        let profile = super::super::language::profile_for_lang("en");
+        let profile = super::super::profile::profile_for_lang("en");
         let merged = merge_watchability_spans(
             &words,
             &spans,

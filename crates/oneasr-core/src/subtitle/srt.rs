@@ -1,3 +1,5 @@
+//! The SRT cue model: overlap normalization and serialization to `.srt`.
+
 #[derive(Debug, Clone)]
 pub struct SrtCue {
     pub index: usize,

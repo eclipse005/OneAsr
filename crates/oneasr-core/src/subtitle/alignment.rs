@@ -1,3 +1,8 @@
+//! Aligning corrected text back onto ASR word timestamps.
+//!
+//! The text may have been edited (LLM correction), so this walks both sides and
+//! re-attaches the original timings wherever the words still match.
+
 use super::segmenter::WordToken;
 
 /// Align full text (possibly corrected by LLM) back onto ASR word timestamps.

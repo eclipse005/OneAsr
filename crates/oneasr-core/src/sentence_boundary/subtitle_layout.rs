@@ -20,7 +20,7 @@
 
 use crate::sentence_boundary::WordTokenDto;
 use crate::subtitle::text_rules::has_break_terminal_punctuation;
-use crate::subtitle_length::SubtitleLengthPreset;
+use super::preset::SubtitleLengthPreset;
 
 use super::boundary_rules::{
     COMMA_COST, CONNECTOR_COST, FORBIDDEN_COST, GLUE_GAP_SEC, GLUED_WORD_COST, GOOD_SILENCE_SEC,
@@ -34,7 +34,7 @@ use super::boundary_rules::{
     is_soft_punctuation, is_split_connector_pair, is_split_hai, is_time_glued_content,
     is_to_binding_left, lexical_cut_cost, strip_token, token_gap_sec,
 };
-use super::language::{Advisor, LanguageProfile};
+use super::profile::{Advisor, LanguageProfile};
 use super::types::SplitReason;
 use super::vad_align::SpeechSegmentIndex;
 
@@ -265,30 +265,17 @@ pub(super) fn build_subtitle_layout_split_points(
     if words.len() < 2 {
         return Vec::new();
     }
-    let limit = f64::from(profile.source_limit(preset));
-    if limit <= 0.0 {
+    let Some(budget) = SpanBudget::for_profile(profile, preset) else {
         return Vec::new();
-    }
-    let char_limit = profile.source_char_limit(preset);
-    let grace = profile.length_grace_units();
-    let force_ceiling = profile.force_unit_ceiling(limit);
+    };
 
     let mut out = Vec::<(usize, SplitReason)>::new();
     for &(span_start, span_end) in semantic_spans {
         if span_start >= words.len() || span_end >= words.len() || span_start >= span_end {
             continue;
         }
-        if let Some(cuts) = dp_split_span(
-            words,
-            span_start,
-            span_end,
-            profile,
-            limit,
-            char_limit,
-            grace,
-            force_ceiling,
-            vad_index,
-        ) {
+        if let Some(cuts) = dp_split_span(words, span_start, span_end, profile, &budget, vad_index)
+        {
             for cut in cuts {
                 out.push((cut.index, cut.reason));
             }
@@ -336,15 +323,46 @@ impl HardLimits {
 ///
 /// Returns `None` when the span must be kept intact: under target, or within
 /// the grace band with no linguistically good cut reaching the target.
+/// The length budget one layout pass runs under.
+///
+/// Derived once from the language profile + preset, then applied to every
+/// semantic span. The four numbers always travel together — passing them
+/// individually made the DP call read as a wall of floats.
+struct SpanBudget {
+    /// Target length in profile units (the profile's source limit, already
+    /// scaled by the preset).
+    limit: f64,
+    /// Character ceiling: the hard stop no unit count may override.
+    char_limit: f64,
+    /// Slack around `limit` inside which a cut still needs a linguistic reason.
+    grace: f64,
+    /// Unit count past which a cut is forced regardless of boundary quality.
+    force_ceiling: f64,
+}
+
+impl SpanBudget {
+    /// `None` when the profile asks for no limit at all — the caller then skips
+    /// layout entirely rather than splitting on a meaningless budget.
+    fn for_profile(profile: &dyn LanguageProfile, preset: SubtitleLengthPreset) -> Option<Self> {
+        let limit = f64::from(profile.source_limit(preset));
+        if limit <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            limit,
+            char_limit: profile.source_char_limit(preset),
+            grace: profile.length_grace_units(),
+            force_ceiling: profile.force_unit_ceiling(limit),
+        })
+    }
+}
+
 fn dp_split_span(
     words: &[WordTokenDto],
     start: usize,
     end: usize,
     profile: &dyn LanguageProfile,
-    limit: f64,
-    char_limit: f64,
-    grace: f64,
-    force_ceiling: f64,
+    budget: &SpanBudget,
     vad_index: &SpeechSegmentIndex,
 ) -> Option<Vec<DpCut>> {
     let n = end - start + 1;
@@ -373,9 +391,9 @@ fn dp_split_span(
 
     // Display-char accounting (only when the profile caps characters).
     let hard = HardLimits {
-        target: limit,
-        max_unit: force_ceiling.max(limit),
-        char: char_limit,
+        target: budget.limit,
+        max_unit: budget.force_ceiling.max(budget.limit),
+        char: budget.char_limit,
     };
     let span_words = words[start..=end].to_vec();
     let char_of: Box<dyn Fn(usize, usize) -> f64 + Send> = if hard.char_limited() {
@@ -395,7 +413,7 @@ fn dp_split_span(
     }
 
     // ② Grace band: only good cuts, fall back to keeping the whole line.
-    let in_grace = total_units <= hard.target + grace
+    let in_grace = total_units <= hard.target + budget.grace
         && (!hard.char_limited() || total_chars <= hard.char + LENGTH_GRACE_CHARS);
     let mode = if in_grace {
         DpMode::Quality
@@ -443,7 +461,7 @@ fn dp_split_span(
                 continue;
             }
             let length_penalty =
-                LENGTH_PENALTY_WEIGHT * (seg_units - limit).abs() / limit;
+                LENGTH_PENALTY_WEIGHT * (seg_units - budget.limit).abs() / budget.limit;
             let mut cost = dp[j] + base_cost[j] + length_penalty;
             if hard.char_limited() && hard.char > 0.0 {
                 cost += LENGTH_PENALTY_WEIGHT * 0.5 * (seg_chars - hard.char).abs() / hard.char;
@@ -612,23 +630,21 @@ fn absorb_short_fragments(
             // Merge into the FOLLOWING segment (drop the cut after this one).
             if seg_idx + 2 < bounds.len() && !keep_cut(b) {
                 let c = bounds[seg_idx + 2];
-                if hard.valid(c - a, prefix[c] - prefix[a], char_of(a, c - 1)) {
-                    if let Some(ix) = cuts_rel.iter().position(|&k| k == b) {
-                        cuts_rel.remove(ix);
-                        absorbed = true;
-                        break;
-                    }
+                if hard.valid(c - a, prefix[c] - prefix[a], char_of(a, c - 1))
+                    && let Some(ix) = cuts_rel.iter().position(|&k| k == b) {
+                    cuts_rel.remove(ix);
+                    absorbed = true;
+                    break;
                 }
             }
             // Merge into the PREVIOUS segment (drop the cut before this one).
             if seg_idx > 0 && !keep_cut(a) {
                 let z = bounds[seg_idx - 1];
-                if hard.valid(b - z, prefix[b] - prefix[z], char_of(z, b - 1)) {
-                    if let Some(ix) = cuts_rel.iter().position(|&k| k == a) {
-                        cuts_rel.remove(ix);
-                        absorbed = true;
-                        break;
-                    }
+                if hard.valid(b - z, prefix[b] - prefix[z], char_of(z, b - 1))
+                    && let Some(ix) = cuts_rel.iter().position(|&k| k == a) {
+                    cuts_rel.remove(ix);
+                    absorbed = true;
+                    break;
                 }
             }
         }
@@ -658,7 +674,9 @@ fn greedy_cuts_by_hard_limit(
         let units = prefix[i + 1] - prefix[seg_start];
         let tokens = i + 1 - seg_start;
         let chars = char_of(seg_start, i);
-        if !(tokens > 1 && !hard.valid(tokens, units, chars)) {
+        // Not an overflow: a single token cannot be split further, and a span
+        // the hard limit already accepts needs no cut.
+        if tokens <= 1 || hard.valid(tokens, units, chars) {
             i += 1;
             continue;
         }
@@ -764,7 +782,7 @@ fn is_comma(token: &str) -> bool {
 /// Display length of the joined segment text (spaces included, Latin style),
 /// matching how the subtitle line is rendered.
 fn display_chars(words: &[WordTokenDto]) -> f64 {
-    super::text::join_words(words.iter().map(|w| w.word.as_str()))
+    super::util::join_words(words.iter().map(|w| w.word.as_str()))
         .chars()
         .count() as f64
 }

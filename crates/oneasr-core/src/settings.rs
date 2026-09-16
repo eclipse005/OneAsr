@@ -1,3 +1,6 @@
+//! The persisted settings model: what the app remembers between runs, how the
+//! values are clamped, and how a damaged file is repaired rather than dropped.
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -481,17 +484,21 @@ mod tests {
 
     #[test]
     fn can_start_rejects_missing_model_dirs() {
-        let mut s = Settings::default();
-        s.asr_model_dir = PathBuf::from(r"D:\__oneasr_no_such_asr__");
-        s.aligner_model_dir = PathBuf::from(r"D:\__oneasr_no_such_align__");
+        let s = Settings {
+            asr_model_dir: PathBuf::from(r"D:\__oneasr_no_such_asr__"),
+            aligner_model_dir: PathBuf::from(r"D:\__oneasr_no_such_align__"),
+            ..Settings::default()
+        };
         assert!(s.can_start().is_err());
     }
 
     #[test]
     fn normalize_syncs_asr_model_from_catalog_path() {
-        let mut s = Settings::default();
-        s.asr_model = QWEN3_ASR_06B.into();
-        s.asr_model_dir = PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B");
+        let mut s = Settings {
+            asr_model: QWEN3_ASR_06B.into(),
+            asr_model_dir: PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B"),
+            ..Settings::default()
+        };
         s.normalize();
         assert_eq!(s.asr_model, QWEN3_ASR_17B);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
@@ -530,8 +537,10 @@ mod tests {
 
     #[test]
     fn normalize_clamps_chunk_target_seconds() {
-        let mut s = Settings::default();
-        s.chunk_target_seconds = 10;
+        let mut s = Settings {
+            chunk_target_seconds: 10,
+            ..Settings::default()
+        };
         s.normalize();
         assert_eq!(s.chunk_target_seconds, CHUNK_TARGET_MIN_SEC);
         s.chunk_target_seconds = 200;
@@ -562,8 +571,10 @@ mod tests {
 
     #[test]
     fn normalize_fills_empty_output_dir() {
-        let mut s = Settings::default();
-        s.output_dir = PathBuf::new();
+        let mut s = Settings {
+            output_dir: PathBuf::new(),
+            ..Settings::default()
+        };
         s.normalize();
         assert!(!s.output_dir.as_os_str().is_empty());
         assert_eq!(s.resolved_output_dir(), s.output_dir);
@@ -576,8 +587,10 @@ mod tests {
 
     #[test]
     fn srt_target_dir_uses_media_parent() {
-        let mut s = Settings::default();
-        s.output_dir = PathBuf::from(r"D:\App\output");
+        let s = Settings {
+            output_dir: PathBuf::from(r"D:\App\output"),
+            ..Settings::default()
+        };
         assert_eq!(
             s.srt_target_dir(Path::new(r"D:\Movies\lecture.mp4")),
             PathBuf::from(r"D:\Movies")
@@ -586,8 +599,10 @@ mod tests {
 
     #[test]
     fn srt_target_dir_falls_back_without_parent() {
-        let mut s = Settings::default();
-        s.output_dir = PathBuf::from(r"D:\App\output");
+        let s = Settings {
+            output_dir: PathBuf::from(r"D:\App\output"),
+            ..Settings::default()
+        };
         // Bare file name has no usable parent dir → configured output dir.
         assert_eq!(
             s.srt_target_dir(Path::new("lecture.mp4")),
@@ -597,9 +612,11 @@ mod tests {
 
     #[test]
     fn srt_target_dir_respects_output_dir_mode() {
-        let mut s = Settings::default();
-        s.save_next_to_source = false;
-        s.output_dir = PathBuf::from(r"D:\App\output");
+        let s = Settings {
+            save_next_to_source: false,
+            output_dir: PathBuf::from(r"D:\App\output"),
+            ..Settings::default()
+        };
         assert_eq!(
             s.srt_target_dir(Path::new(r"D:\Movies\lecture.mp4")),
             PathBuf::from(r"D:\App\output")
@@ -608,8 +625,10 @@ mod tests {
 
     #[test]
     fn normalize_absolutizes_relative_output_dir() {
-        let mut s = Settings::default();
-        s.output_dir = PathBuf::from("output");
+        let mut s = Settings {
+            output_dir: PathBuf::from("output"),
+            ..Settings::default()
+        };
         s.normalize();
         assert!(
             s.output_dir.is_absolute(),
@@ -676,9 +695,11 @@ mod tests {
 
     #[test]
     fn output_formats_never_end_up_all_off() {
-        let mut s = Settings::default();
-        s.output_srt = false;
-        s.output_txt = false;
+        let mut s = Settings {
+            output_srt: false,
+            output_txt: false,
+            ..Settings::default()
+        };
         let mut notes = Vec::new();
         s.normalize_with_notes(&mut notes);
         assert!(s.output_srt, "SRT must come back when everything is off");
@@ -689,9 +710,11 @@ mod tests {
         );
 
         // TXT-only is a legal choice and must survive normalization.
-        let mut txt_only = Settings::default();
-        txt_only.output_srt = false;
-        txt_only.output_txt = true;
+        let mut txt_only = Settings {
+            output_srt: false,
+            output_txt: true,
+            ..Settings::default()
+        };
         txt_only.normalize();
         assert!(!txt_only.output_srt);
         assert!(txt_only.output_txt);
@@ -705,8 +728,10 @@ mod tests {
             "fresh installs must not re-write the model's script"
         );
 
-        let mut s = Settings::default();
-        s.text_script = "zh-Hant".into();
+        let mut s = Settings {
+            text_script: "zh-Hant".into(),
+            ..Settings::default()
+        };
         s.normalize();
         assert_eq!(s.text_script, TextScript::TRADITIONAL_ID);
         assert_eq!(s.text_script_choice(), TextScript::Traditional);
@@ -718,8 +743,10 @@ mod tests {
 
     #[test]
     fn script_scope_is_chinese_only() {
-        let mut s = Settings::default();
-        s.text_script = TextScript::TRADITIONAL_ID.into();
+        let s = Settings {
+            text_script: TextScript::TRADITIONAL_ID.into(),
+            ..Settings::default()
+        };
         assert_eq!(s.text_script_for("zh"), Some(TextScript::Traditional));
         assert_eq!(s.text_script_for("yue"), Some(TextScript::Traditional));
         assert_eq!(s.text_script_for("ja"), None);
@@ -755,8 +782,10 @@ mod tests {
         let s = Settings::default();
         assert!(s.sound, "sounds ship on");
 
-        let mut off = Settings::default();
-        off.sound = false;
+        let mut off = Settings {
+            sound: false,
+            ..Settings::default()
+        };
         off.normalize();
         assert!(!off.sound, "normalize must not re-enable sounds");
     }

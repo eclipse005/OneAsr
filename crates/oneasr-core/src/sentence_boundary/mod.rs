@@ -1,32 +1,45 @@
+//! Sentence boundary: word stream → micro chunks → boundaries → cue spans.
+//!
+//! [`build_source_sentences_from_words`] is the single entry point. Each stage
+//! lives in its own module, in pipeline order:
+//!
+//! ```text
+//! beautify → digit glue → micro chunks → hard boundaries (rules / Punkt)
+//!          → subtitle-length DP layout → watchability merge → cue spans
+//! ```
+//!
+//! Per-language budgets that drive the DP live in `profile`; the
+//! short/standard/loose presets they are keyed by live in `preset`.
+
 use crate::subtitle::beautify::beautify_words_for_subtitle;
 use serde::{Deserialize, Serialize};
 
 mod assembly;
 mod boundary_rules;
 mod digit_glue;
-mod language;
+mod preset;
+mod profile;
 mod punkt_map;
 mod semantic;
 mod subtitle_layout;
-mod watchability_merge;
 #[cfg(test)]
 mod tests;
-mod text;
-mod timing;
 mod types;
+mod util;
 mod vad_align;
-mod words;
+mod watchability_merge;
 
 use assembly::{
     build_boundaries_from_split_points, build_micro_chunks, build_sentences_from_word_spans,
 };
+use preset::subtitle_length_preset_from_id;
 use semantic::{build_split_points_from_hard_boundaries, split_points_to_spans};
 use subtitle_layout::build_subtitle_layout_split_points;
-use watchability_merge::merge_watchability_spans;
-#[cfg(test)]
-use text::join_words;
 use types::SourceSentenceStep2;
-use words::{from_core_words, to_core_words};
+use util::{from_core_words, to_core_words};
+#[cfg(test)]
+use util::join_words;
+use watchability_merge::merge_watchability_spans;
 
 pub use assembly::{source_sentences_to_srt, source_sentences_to_txt};
 pub use types::{
@@ -57,10 +70,8 @@ pub fn build_source_sentences_from_words(
     }
 
     let vad_index = vad_align::SpeechSegmentIndex::new(request.vad_speech_segments.clone());
-    let profile = language::profile_for_lang(&request.source_lang);
-    let preset = crate::subtitle_length::subtitle_length_preset_from_id(
-        &request.subtitle_length_preset,
-    );
+    let profile = profile::profile_for_lang(&request.source_lang);
+    let preset = subtitle_length_preset_from_id(&request.subtitle_length_preset);
 
     let micro_chunks = build_micro_chunks(&normalized_words, &vad_index);
     if micro_chunks.is_empty() {
@@ -145,17 +156,4 @@ fn split_points_from_spans(
             )
         })
         .collect()
-}
-
-#[cfg(test)]
-fn build_deterministic_sentence_spans(words: &[WordTokenDto]) -> Vec<(usize, usize)> {
-    let split_points = build_deterministic_split_points(words);
-    split_points_to_spans(words.len(), &split_points)
-}
-
-#[cfg(test)]
-fn build_deterministic_split_points(
-    words: &[WordTokenDto],
-) -> Vec<(usize, types::SplitReason)> {
-    semantic::build_deterministic_split_points(words)
 }

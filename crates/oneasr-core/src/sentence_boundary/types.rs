@@ -1,3 +1,5 @@
+//! Plain data types passed between the sentence-boundary stages.
+
 use serde::{Deserialize, Serialize};
 
 use super::WordTokenDto;

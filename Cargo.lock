@@ -4407,7 +4407,6 @@ dependencies = [
 name = "oneasr-core"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "cudarc",
  "demucs-core-native",
  "ferrous-opencc",

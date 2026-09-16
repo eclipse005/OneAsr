@@ -1,9 +1,12 @@
-//! OneAsr core: Qwen ASR + ForcedAligner pipeline, sentence boundary, jobs.
+//! OneAsr core: Qwen ASR + ForcedAligner pipeline, sentence boundary, subtitles.
+//!
+//! This crate is headless by design: it holds no window, no list model, and no
+//! interface copy. The batch list (`Task` / `TaskStatus`) and UI strings live in
+//! the GUI crate.
 
 pub mod asr;
 mod diagnostics;
 pub mod engine;
-pub mod job;
 pub mod lang;
 pub mod media;
 pub mod model;
@@ -13,9 +16,7 @@ pub mod sentence_boundary;
 pub mod settings;
 pub mod stats;
 pub mod subtitle;
-pub mod subtitle_length;
 pub mod text_script;
-pub mod ui_labels;
 pub mod vad;
 
 pub use asr::{
@@ -28,7 +29,6 @@ pub use engine::{
     AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider, SeparateRequest,
     SeparationEvent, Separator, TranscribeRequest, Transcript,
 };
-pub use job::{DurationState, Task, TaskStatus, accept_input_path, next_queue_seq};
 pub use lang::{
     SOURCE_LANGUAGES, SourceLanguage, normalize_source_language, source_language_by_id,
 };
@@ -46,6 +46,3 @@ pub use settings::{
     Settings, SettingsLoadReport, clamp_chunk_target_seconds,
 };
 pub use text_script::{TextScript, applies_to_language as script_applies_to_language};
-pub use ui_labels::{
-    empty_state_subtitle, empty_state_title, format_batch_progress, format_queue_status,
-};

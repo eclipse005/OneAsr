@@ -75,10 +75,12 @@ fn main() {
     }
     init_native_library_path();
 
-    let mut settings = Settings::default();
-    settings.language = language;
-    settings.chunk_target_seconds = chunk_seconds.clamp(30, 180);
-    settings.backend = backend;
+    let mut settings = Settings {
+        language,
+        chunk_target_seconds: chunk_seconds.clamp(30, 180),
+        backend,
+        ..Settings::default()
+    };
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
