@@ -7,6 +7,9 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 
+// Ready-dir cache: sequential jobs hit the same model path; a poisoned lock
+// is a miss (re-stat) rather than a worker panic. Failures are not cached —
+// a download may complete between probes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ModelRole {
     Asr,

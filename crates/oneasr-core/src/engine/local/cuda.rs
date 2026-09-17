@@ -1,5 +1,6 @@
 //! Backend resolution: CPU vs CUDA, device probing, fallback policy.
 
+#[cfg(feature = "cuda")]
 use crate::diagnostics::trace_log;
 use crate::engine::EngineError;
 /// Resolved compute target for both ASR and Aligner (one policy).

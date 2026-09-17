@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::cell::Cell;
 use super::aligner::QwenAlignerAdapter;
-use super::cuda::{ComputeBackend, cuda_load_failure_msg, is_forced_cuda, resolve_compute_backend};
+use super::cuda::{ComputeBackend, is_forced_cuda, resolve_compute_backend};
+#[cfg(feature = "cuda")]
+use super::cuda::cuda_load_failure_msg;
 use super::demucs::DemucsSeparatorAdapter;
 use super::qwen_asr::QwenAsrAdapter;
 

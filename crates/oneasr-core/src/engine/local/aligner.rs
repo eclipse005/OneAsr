@@ -1,4 +1,4 @@
-//! Qwen3-ForcedQwen3-ForcedAligner adapter.
+//! Qwen3-ForcedAligner adapter.
 
 use std::path::Path;
 use super::cuda::ComputeBackend;
