@@ -1,17 +1,20 @@
 //! Media prep via bundled tools under `{app_root}/bin/`.
 //!
-//! Layout (install and dev share the same convention):
+//! Layout (install and dev share the same convention; a Windows build only
+//! adds the `.exe` suffix):
 //!
 //! ```text
 //! OneAsr/                 ← app root
-//!   oneasr.exe            ← (or target/debug/oneasr.exe in dev)
+//!   oneasr[.exe]          ← (or target/debug/oneasr in dev)
 //!   bin/
-//!     ffmpeg.exe
+//!     ffmpeg[.exe]
 //! ```
 //!
-//! Not user-configurable: after install, tools always live in the install
-//! directory's `bin/`. We only *locate* that directory relative to the running
-//! executable (walking up for `cargo run` from `target/debug`).
+//! Not user-configurable: after install, tools live in the install directory's
+//! `bin/`. We only *locate* that directory relative to the running executable
+//! (walking up for `cargo run` from `target/debug`). When `bin/` holds no
+//! usable binary — source checkouts, distro packages — the pipeline falls back
+//! to an `ffmpeg` on `PATH`; see [`ffmpeg_source`].
 //!
 //! **Pipeline audio contract**: ASR/Aligner/VAD all consume **16 kHz mono PCM
 //! s16le WAV**. Once converted, further work (duration, slice) stays in-process
@@ -45,14 +48,42 @@ const PROBE_WORKERS: usize = 2;
 
 #[derive(Debug, Error)]
 pub enum MediaError {
-    #[error("bundled ffmpeg not found (expected {{app}}/bin/ffmpeg; searched from {0})")]
+    #[error("ffmpeg not found: expected {0}, or install ffmpeg on PATH")]
     FfmpegMissing(String),
+    #[error("bundled ffmpeg is not executable: {0} (chmod +x, or install ffmpeg on PATH)")]
+    FfmpegNotExecutable(PathBuf),
     #[error("ffmpeg failed: {0}")]
     FfmpegFailed(String),
     #[error("wav error: {0}")]
     Wav(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Where the pipeline found ffmpeg.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FfmpegSource {
+    /// `{app_root}/bin/ffmpeg[.exe]` — the build shipped with the package.
+    Bundled(PathBuf),
+    /// `ffmpeg[.exe]` resolved from `PATH` (system install).
+    System(PathBuf),
+}
+
+impl FfmpegSource {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Bundled(path) | Self::System(path) => path,
+        }
+    }
+}
+
+impl std::fmt::Display for FfmpegSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bundled(path) => write!(f, "bundled ({})", path.display()),
+            Self::System(path) => write!(f, "system ({})", path.display()),
+        }
+    }
 }
 
 /// App root = directory that contains `bin/ffmpeg(.exe)`.
@@ -88,27 +119,87 @@ fn resolve_bin_dir() -> Option<PathBuf> {
     resolve_app_root().map(|root| root.join("bin"))
 }
 
-/// Whether the bundled ffmpeg tool is present (startup environment report).
-pub fn ffmpeg_present() -> bool {
-    resolve_bin_dir()
-        .map(|d| d.join(FFMPEG_NAME).is_file())
-        .unwrap_or(false)
+/// The ffmpeg the pipeline will run, or `None` when neither the bundled binary
+/// nor a system one on `PATH` is usable (startup environment report).
+pub fn ffmpeg_source() -> Option<FfmpegSource> {
+    locate_ffmpeg().ok()
+}
+
+/// Bundled `{app_root}/bin/ffmpeg[.exe]` first — the build the package was
+/// tested with — then the first executable `ffmpeg[.exe]` on `PATH`.
+fn locate_ffmpeg() -> Result<FfmpegSource, MediaError> {
+    let bundled = resolve_bin_dir().map(|dir| dir.join(FFMPEG_NAME));
+    let mut not_executable = None;
+
+    if let Some(path) = &bundled {
+        if path.is_file() {
+            if ensure_executable(path) {
+                return Ok(FfmpegSource::Bundled(path.clone()));
+            }
+            not_executable = Some(path.clone());
+        }
+    }
+
+    if let Some(system) = std::env::var_os("PATH").and_then(|var| find_ffmpeg_in_path(&var)) {
+        return Ok(FfmpegSource::System(system));
+    }
+
+    Err(match not_executable {
+        Some(path) => MediaError::FfmpegNotExecutable(path),
+        None => MediaError::FfmpegMissing(
+            bundled
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| format!("<app>/bin/{FFMPEG_NAME}")),
+        ),
+    })
 }
 
 fn resolve_ffmpeg() -> Result<PathBuf, MediaError> {
-    let path = resolve_bin_dir()
-        .map(|d| d.join(FFMPEG_NAME))
-        .ok_or_else(|| {
-            let hint = std::env::current_exe()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "<unknown exe>".into());
-            MediaError::FfmpegMissing(hint)
-        })?;
-    if path.is_file() {
-        Ok(path)
-    } else {
-        Err(MediaError::FfmpegMissing(path.display().to_string()))
+    locate_ffmpeg().map(|source| source.path().to_path_buf())
+}
+
+/// First `ffmpeg[.exe]` on a `PATH`-style list. Unix requires the execute bit,
+/// so a stray data file named `ffmpeg` cannot win.
+fn find_ffmpeg_in_path(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path_var)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(FFMPEG_NAME))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
     }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// Windows resolves by filename alone; Unix needs the execute bit, which a
+/// portable archive round-trip can drop. Repair it in place when the install
+/// directory is writable.
+fn ensure_executable(path: &Path) -> bool {
+    if is_executable_file(path) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.is_file()
+        {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o755);
+            return std::fs::set_permissions(path, perms).is_ok();
+        }
+    }
+    false
 }
 
 fn ffmpeg_command(ffmpeg: &Path) -> Command {
@@ -479,6 +570,39 @@ mod tests {
     fn app_root_has_bin_child() {
         let root = resolve_app_root().expect("app root");
         assert!(root.join("bin").join(FFMPEG_NAME).is_file());
+    }
+
+    #[test]
+    fn path_lookup_accepts_executable_ffmpeg() {
+        let dir = std::env::temp_dir().join(format!("oneasr_path_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join(FFMPEG_NAME);
+        std::fs::write(&fake, b"stub").unwrap();
+        assert!(ensure_executable(&fake));
+
+        assert_eq!(find_ffmpeg_in_path(dir.as_os_str()), Some(fake));
+        // Empty entries (leading/trailing separators) must be skipped, not
+        // resolved against the current directory.
+        assert_eq!(find_ffmpeg_in_path(std::ffi::OsStr::new("")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_lookup_skips_non_executable_and_repairs_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("oneasr_noexec_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join(FFMPEG_NAME);
+        std::fs::write(&fake, b"stub").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(find_ffmpeg_in_path(dir.as_os_str()), None);
+        assert!(ensure_executable(&fake));
+        assert_eq!(find_ffmpeg_in_path(dir.as_os_str()), Some(fake));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
