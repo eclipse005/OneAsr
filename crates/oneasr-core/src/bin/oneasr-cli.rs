@@ -21,7 +21,7 @@ use std::time::Instant;
 
 use oneasr_core::media::slice_wav;
 use oneasr_core::{
-    init_native_library_path, process_media_file_with_export, resolve_app_root,
+    ffmpeg_source, init_native_library_path, process_media_file_with_export, resolve_app_root,
     resolve_cuda_runtime_dir, ProcessExportOptions, StageClock, StageUpdate, Settings, ModelId,
 };
 use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
@@ -406,8 +406,21 @@ fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
     if bin.join("ffmpeg.exe").is_file() || bin.join("ffmpeg").is_file() {
         return Ok(());
     }
-    eprintln!("ffmpeg not under {}", bin.display());
-    Err(1)
+    // No bundled copy — the pipeline itself falls back to `PATH`, so only fail
+    // when that is empty too.
+    match ffmpeg_source() {
+        Some(source) => {
+            eprintln!("ffmpeg: no binary under {} — using {source}", bin.display());
+            Ok(())
+        }
+        None => {
+            eprintln!(
+                "ffmpeg not found: put a binary in {} or install ffmpeg on PATH",
+                bin.display()
+            );
+            Err(1)
+        }
+    }
 }
 
 fn setup_native(app_root: &Path) {

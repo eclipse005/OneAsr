@@ -32,7 +32,9 @@ pub use engine::{
 pub use lang::{
     SOURCE_LANGUAGES, SourceLanguage, normalize_source_language, source_language_by_id,
 };
-pub use media::{ffmpeg_present, probe_duration_async, probe_duration_sec, resolve_app_root};
+pub use media::{
+    FfmpegSource, ffmpeg_source, probe_duration_async, probe_duration_sec, resolve_app_root,
+};
 pub use model::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, HTDEMUCS_FT, ModelId,
     ModelKind, QWEN3_ASR_06B, QWEN3_ASR_17B, default_aligner_model_dir, default_asr_model_dir,

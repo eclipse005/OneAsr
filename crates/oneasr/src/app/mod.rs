@@ -366,7 +366,9 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unknown>".into()),
         app_root.display(),
-        if ffmpeg_present() { "yes" } else { "MISSING" },
+        ffmpeg_source()
+            .map(|source| source.to_string())
+            .unwrap_or_else(|| "MISSING".into()),
         settings.backend,
         settings.output_dir.display(),
         resolve_cuda_runtime_dir()
@@ -392,8 +394,9 @@ pub(crate) fn run_task(
     settings: &Settings,
     on_stage: impl FnMut(StageUpdate),
 ) -> Result<PathBuf, String> {
-    let app_root =
-        resolve_app_root().ok_or_else(|| "找不到应用目录（需含 bin/ffmpeg.exe）".to_string())?;
+    // `bin/ffmpeg` is the usual app-root marker, but a system ffmpeg on PATH
+    // leaves the install dir without one — fall back to the exe directory.
+    let app_root = resolve_app_root_dir();
     // Primary deliverable: {target_dir}/{stem}.srt, or .txt when SRT output is
     // switched off (real ASR, no stubs). Runs only on the dedicated worker thread.
     process_media_file_with_progress(path, name, settings, &app_root, on_stage)

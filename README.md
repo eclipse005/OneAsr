@@ -180,18 +180,45 @@ ffmpeg → 16 kHz mono
 
 ### 1. 准备 ffmpeg（必需）
 
-源码仓库**不含** `ffmpeg.exe`（体积约 56MB）。请从 **[构建工具 Release](https://github.com/eclipse005/OneAsr/releases/tag/tools)** 下载后放到：
+源码仓库**不含** ffmpeg 二进制。五个平台的构建都在 **[构建工具 Release](https://github.com/eclipse005/OneAsr/releases/tag/tools)**（来源 [Tyrrrz/FFmpegBin](https://github.com/Tyrrrz/FFmpegBin) 7.1.2，各平台版本一致，GPLv3 构建）：
 
-```text
-OneAsr/bin/ffmpeg.exe
-```
+| 平台 | 放置路径 | Release 产物 |
+| --- | --- | --- |
+| Windows x64 | `OneAsr/bin/ffmpeg.exe` | `ffmpeg.exe` |
+| Linux x64 | `OneAsr/bin/ffmpeg` | `ffmpeg-linux-x64` |
+| Linux arm64 | `OneAsr/bin/ffmpeg` | `ffmpeg-linux-arm64` |
+| macOS Intel | `OneAsr/bin/ffmpeg` | `ffmpeg-macos-x64` |
+| macOS Apple Silicon | `OneAsr/bin/ffmpeg` | `ffmpeg-macos-arm64` |
 
-PowerShell 一键下载示例：
+Windows：
 
 ```powershell
 New-Item -ItemType Directory -Force -Path bin | Out-Null
 Invoke-WebRequest -Uri "https://github.com/eclipse005/OneAsr/releases/download/tools/ffmpeg.exe" -OutFile "bin\ffmpeg.exe"
 ```
+
+Linux / macOS（把 `ffmpeg-linux-x64` 换成上表对应产物）：
+
+```bash
+mkdir -p bin
+curl -L -o bin/ffmpeg https://github.com/eclipse005/OneAsr/releases/download/tools/ffmpeg-linux-x64
+chmod +x bin/ffmpeg
+```
+
+`bin/` 中没有可用二进制时，运行时会回退到 `PATH` 上的系统 ffmpeg（源码开发、发行版打包场景）。
+非 Windows 平台若可执行位丢失（zip 解压等），程序会在启动时自动补上；目录只读则会明确报错而不是静默失败。
+
+<details>
+<summary>SHA256（可选校验）</summary>
+
+```text
+ffmpeg.exe           6E1C77F66726DCAFB8008D9081972D5B28590110EB7BF906EAEEF9298D366359
+ffmpeg-linux-x64     ECE002A9EEC0AC763A0A5FBC24FCCFFF6466425A8BED18D5C2836F2B79470352
+ffmpeg-linux-arm64   22F924A690E283B8907C70E6D892586A448AB1BC62013DC8D1BA7FE77E058313
+ffmpeg-macos-x64     835A915980B63A9CEC5F71C41B9CEFA1C85CC4AB2910C60C516A1756D9E48665
+ffmpeg-macos-arm64   7A6F6EDCCFB4B6E5AB2D4EA4F6882092B43933537A6819476D5361CBF6EED4DB
+```
+</details>
 
 > 安装包 / 便携包已自带 ffmpeg，**普通用户无需**这一步。
 
