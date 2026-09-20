@@ -1,5 +1,5 @@
 ; OneAsr Windows installer (Inno Setup 6)
-; Single product package — CUDA engines in binary; CUDA DLLs downloaded in-app.
+; Single product package — wgpu GPU + CPU in one binary.
 ; Stage payload: scripts/pack-release.ps1 → dist\OneAsr\
 ;
 ;   iscc /DMyAppVersion=0.1.0 installer\OneAsr.iss
@@ -18,7 +18,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-; Models/CUDA download into {app} next to the exe, so the default must stay in
+; Models download into {app} next to the exe, so the default must stay in
 ; the user profile even for elevated installs - C:\Program Files would make
 ; every model download fail with access denied (os error 5).
 DefaultDirName={localappdata}\Programs\{#MyAppName}
@@ -31,7 +31,7 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 ; Per-user only: the old dialog radio ("install for all users") sent {autopf}
-; to C:\Program Files where the app cannot write models/ or dll/.
+; to C:\Program Files where the app cannot write models/.
 PrivilegesRequiredOverridesAllowed=commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -56,7 +56,6 @@ Source: "..\dist\OneAsr\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdir
 Name: "{app}\models"; Flags: uninsalwaysuninstall
 Name: "{app}\output"; Flags: uninsalwaysuninstall
 Name: "{app}\runs"; Flags: uninsalwaysuninstall
-Name: "{app}\dll"; Flags: uninsalwaysuninstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -67,6 +66,5 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-; Keep models/output/runs for the user; only remove settings + optional CUDA components.
+; Keep models/output/runs for the user; only remove settings.
 Type: files; Name: "{app}\settings.json"
-Type: filesandordirs; Name: "{app}\dll"

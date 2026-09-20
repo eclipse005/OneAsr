@@ -13,12 +13,8 @@ pub use catalog::{
 pub use download::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, download_model,
 };
-pub use ready::{
-    file_meets_ready_threshold, is_cuda_runtime_ready, is_model_ready, probe_writable,
-    resolve_cuda_runtime_dir,
-};
+pub use ready::{file_meets_ready_threshold, is_model_ready, probe_writable};
 pub use path::{
     default_aligner_model_dir, default_asr_model_dir, default_demucs_model_dir,
-    init_native_library_path, resolve_app_root_dir, resolve_dll_dir, resolve_exe_dir,
-    resolve_model_dir, resolve_models_root,
+    resolve_app_root_dir, resolve_exe_dir, resolve_model_dir, resolve_models_root,
 };

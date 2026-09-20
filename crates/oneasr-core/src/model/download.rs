@@ -55,41 +55,19 @@ impl DownloadProgress {
         self.label_for_kind(self.model_id.kind())
     }
 
-    /// Human status; CUDA uses “组件” wording, models use “下载”.
-    pub fn label_for_kind(&self, kind: crate::model::ModelKind) -> String {
-        use crate::model::ModelKind;
-        let component = matches!(kind, ModelKind::CudaRuntime);
+    /// Human status for a model download.
+    pub fn label_for_kind(&self, _kind: crate::model::ModelKind) -> String {
         match self.state {
-            DownloadState::Idle => {
-                if component {
-                    "未安装".into()
-                } else {
-                    "未下载".into()
-                }
-            }
+            DownloadState::Idle => "未下载".into(),
             DownloadState::Downloading => {
                 let pct = self.percent();
                 let speed = format_speed(self.speed_bytes_per_sec);
-                if component {
-                    format!("安装中 {pct:.0}% · {speed}")
-                } else {
-                    format!("下载中 {pct:.0}% · {speed}")
-                }
+                format!("下载中 {pct:.0}% · {speed}")
             }
-            DownloadState::Completed => {
-                if component {
-                    "已安装".into()
-                } else {
-                    "已就绪".into()
-                }
-            }
+            DownloadState::Completed => "已就绪".into(),
             DownloadState::Failed => {
                 if self.message.is_empty() {
-                    if component {
-                        "安装失败".into()
-                    } else {
-                        "下载失败".into()
-                    }
+                    "下载失败".into()
                 } else {
                     format!("失败: {}", truncate(&self.message, 48))
                 }
@@ -593,7 +571,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("x.dll");
+        let path = dir.join("x.bin");
 
         assert!(!file_meets_ready_threshold(&path, 1000));
 

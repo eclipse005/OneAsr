@@ -866,7 +866,7 @@ pub(super) fn render_settings_demucs(
     settings_section(body)
 }
 
-/// 推理后端（auto / cuda）
+/// 推理后端（auto / gpu / cpu）
 pub(super) fn render_settings_backend(
     &mut self,
     form: &SettingsFormState,
@@ -887,7 +887,7 @@ pub(super) fn render_settings_backend(
                                         div().flex().gap_1p5().children(
                                             [
                                                 ("auto", "自动"),
-                                                ("cuda", "GPU"),
+                                                ("gpu", "GPU"),
                                                 ("cpu", "CPU"),
                                             ]
                                             .into_iter()
@@ -905,13 +905,6 @@ pub(super) fn render_settings_backend(
                                                         if this.settings.backend == id {
                                                             return;
                                                         }
-                                                        if id == "cuda" && !this.cuda_ready {
-                                                            this.flash_hint(
-                                                                "请先下载 CUDA 运行库，再选择 GPU",
-                                                                cx,
-                                                            );
-                                                            return;
-                                                        }
                                                         this.settings.backend = id.into();
                                                         this.refresh_model_probe();
                                                         this.mark_settings_dirty(cx);
@@ -920,61 +913,6 @@ pub(super) fn render_settings_backend(
                                             }),
                                         ),
                                     )
-                                    .into_any_element();
-    settings_section(body)
-}
-
-/// CUDA 运行库
-pub(super) fn render_settings_cuda(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(TEXT)
-                                                    .child("CUDA 运行库"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .size(px(8.))
-                                                    .rounded_full()
-                                                    .bg(if form.cuda_ready { ACCENT } else { DANGER }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(MUTED)
-                                            .child("需要 N 卡（NVIDIA 显卡），显存 4GB 起"),
-                                    )
-                                    .child(component_install_row(
-                                        ComponentRow {
-                                            id: "cuda-dl-btn",
-                                            cancel_id: "cuda-dl-cancel",
-                                            ready: form.cuda_ready,
-                                            busy: form.cuda_dl_busy,
-                                            progress: form.cuda_dl.as_ref(),
-                                        },
-                                        cx.listener(|this, _, _, cx| {
-                                            this.start_model_download(ModelId::CudaRuntime, cx);
-                                        }),
-                                        cx.listener(|this, _, _, cx| {
-                                            this.cancel_model_download(ModelId::CudaRuntime, cx);
-                                        }),
-                                    ))
                                     .into_any_element();
     settings_section(body)
 }

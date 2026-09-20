@@ -2,44 +2,40 @@
 
 use std::path::{Path, PathBuf};
 use std::cell::Cell;
-use super::cuda::is_forced_cuda;
 
+use super::backend::ComputeBackend;
 use crate::engine::{
     EngineError, SeparateRequest,
     SeparationEvent, Separator,
 };
-/// Weights file expected inside the configured Demucs model directory.
-pub const DEMUCS_WEIGHTS_FILE: &str = "htdemucs_ft.safetensors";
 
-/// Backend for the first separation attempt.
-///
-/// `auto` becomes an explicit GPU attempt (when this build has CUDA) so the
-/// fallback is observable and reported, instead of being hidden inside the
-/// engine's own `Auto` probing.
-pub(super) fn preferred_separator_backend(pref: &str) -> demucs_core_native::Backend {
-    use demucs_core_native::Backend;
-    match pref.trim().to_ascii_lowercase().as_str() {
-        "cpu" => Backend::Cpu,
-        #[cfg(feature = "cuda")]
-        _ => Backend::Cuda,
-        #[cfg(not(feature = "cuda"))]
-        _ => Backend::Cpu,
+/// Weights file expected inside the configured Demucs model directory.
+/// Vocals-only shard of `htdemucs_ft`, loaded as a single FourStem network.
+pub const DEMUCS_WEIGHTS_FILE: &str = "htdemucs_ft_vocals.safetensors";
+
+pub(super) fn separator_backend(backend: ComputeBackend) -> demucs_core::Backend {
+    match backend {
+        ComputeBackend::Cpu => demucs_core::Backend::Cpu,
+        ComputeBackend::Gpu => {
+            demucs_core::Backend::Gpu(demucs_core::gpu::DeviceSelector::Auto)
+        }
     }
 }
 
 pub(super) struct DemucsSeparatorAdapter {
-    inner: demucs_core_native::Demucs,
-    /// Set when `auto` had to fall back to CPU — reported once, on the first run.
+    inner: demucs_core::Demucs,
+    /// Set when GPU load had to fall back to CPU — reported once, on the first run.
     fell_back: Cell<bool>,
 }
 
 impl DemucsSeparatorAdapter {
     pub(super) fn load(
         model_dir: &Path,
-        backend_pref: &str,
+        backend: ComputeBackend,
+        forced_gpu: bool,
         log: impl Fn(String),
     ) -> Result<Self, EngineError> {
-        use demucs_core_native::{Demucs, LoadOptions, ModelVariant, StemId, StemSelection};
+        use demucs_core::{Demucs, LoadOptions, ModelVariant, StemId, StemSelection};
 
         let weights = model_dir.join(DEMUCS_WEIGHTS_FILE);
         if !weights.is_file() {
@@ -50,31 +46,22 @@ impl DemucsSeparatorAdapter {
         }
 
         let opts = LoadOptions {
-            variant: ModelVariant::FineTuned,
+            // Single-stem shard, not the four-network `htdemucs_ft` bag.
+            variant: ModelVariant::FourStem,
             stems: StemSelection::Some(vec![StemId::Vocals]),
         };
-        let attempt = preferred_separator_backend(backend_pref);
-        let mut fell_back = false;
+        let attempt = separator_backend(backend);
+        log(format!("人声分离后端 {}", attempt.tag()));
 
-        let inner = match Demucs::load(&weights, opts.clone(), attempt) {
-            Ok(d) => d,
-            Err(e)
-                if attempt != demucs_core_native::Backend::Cpu && !is_forced_cuda(backend_pref) =>
-            {
-                log(format!(
-                    "人声分离 GPU 不可用（{e}），按「自动」改用 CPU（会慢很多）"
-                ));
-                fell_back = true;
-                Demucs::load(&weights, opts, demucs_core_native::Backend::Cpu)
-                    .map_err(|e2| EngineError::new(format!("加载人声分离模型失败（cpu）: {e2}")))?
-            }
-            Err(e) if is_forced_cuda(backend_pref) => {
-                return Err(EngineError::new(format!(
-                    "加载人声分离模型失败（{}）: {e}\n\
-                     已按设置强制使用 GPU，不会自动改用 CPU；\
-                     可在设置中把「推理后端」改为「自动」或「CPU」",
-                    attempt.tag()
-                )));
+        let (inner, fell_back) = match Demucs::load(&weights, opts.clone(), attempt.clone()) {
+            Ok(inner) => (inner, false),
+            Err(e) if backend == ComputeBackend::Gpu && !forced_gpu => {
+                log(format!("人声分离 GPU 加载失败，改用 CPU: {e}"));
+                let inner = Demucs::load(&weights, opts, demucs_core::Backend::Cpu)
+                    .map_err(|cpu_e| {
+                        EngineError::new(format!("加载人声分离模型失败（cpu）: {cpu_e}"))
+                    })?;
+                (inner, true)
             }
             Err(e) => {
                 return Err(EngineError::new(format!(
@@ -83,6 +70,7 @@ impl DemucsSeparatorAdapter {
                 )));
             }
         };
+        log(format!("人声分离已加载 {}", inner.backend_tag()));
 
         Ok(Self {
             inner,
@@ -97,7 +85,7 @@ impl Separator for DemucsSeparatorAdapter {
         req: SeparateRequest<'_>,
         on_event: &mut dyn FnMut(SeparationEvent),
     ) -> Result<PathBuf, EngineError> {
-        use demucs_core_native::{SeparationProgress, StemId};
+        use demucs_core::{SeparationProgress, StemId};
 
         if self.fell_back.replace(false) {
             on_event(SeparationEvent::FellBackToCpu {

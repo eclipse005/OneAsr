@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use oneasr_core::{check_aligner_model_dir, check_asr_model_dir, Settings};
+use oneasr_core::{
+    check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir, Settings,
+};
 
 #[test]
 fn default_settings_have_distinct_asr_and_aligner_dirs() {
@@ -17,4 +19,5 @@ fn check_dirs_honest_on_missing() {
     let missing = PathBuf::from(r"D:\__oneasr_no_such_model__");
     assert!(check_asr_model_dir(&missing).is_err());
     assert!(check_aligner_model_dir(&missing).is_err());
+    assert!(check_demucs_model_dir(&missing).is_err());
 }

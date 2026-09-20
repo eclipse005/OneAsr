@@ -5,17 +5,6 @@ edition.workspace = true
 license.workspace = true
 description = "Qwen ASR + align pipeline and subtitle segmentation for OneAsr"
 
-[features]
-# Default includes CUDA engines so one installer covers GPU + CPU backends.
-# Without CUDA DLLs next to the exe, runtime Auto/CPU still works.
-default = ["cuda"]
-cuda = [
-    "qwen3-asr/cuda",
-    "qwen-forced-aligner-rs/cuda",
-    "demucs-core-native/cuda",
-    "dep:cudarc",
-]
-
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,16 +17,11 @@ sha2 = "0.10"
 # dictionaries compiled into the binary at build time — no runtime files).
 ferrous-opencc = "0.4"
 punkt = { git = "https://github.com/eclipse005/rust-punkt.git", rev = "ca9187276d9478c0bc67c1cc3cd787de88f6e293" }
-# Pin same revs as VoxTrans for a known-good Qwen stack.
-qwen3-asr = { git = "https://github.com/eclipse005/qwen3-asr-rs.git", rev = "c6c98e2eb69d9892c43e650ebda297b1472443c7", default-features = false }
-qwen-forced-aligner-rs = { git = "https://github.com/eclipse005/qwen-aligner-rs.git", rev = "bb8c73ba670d65b3f5fddc5f5b8791bc07d4392a", default-features = false, features = ["cpu"] }
+qwen3-asr-wgpu = { git = "https://github.com/eclipse005/qwen3-asr-wgpu.git" }
+qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.git" }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
-# Native HTDemucs v4 (CPU + optional CUDA) for optional vocal separation before
-# ASR. Same maintainer as the ASR/aligner engines; no Python / demucs.exe.
-demucs-core-native = { git = "https://github.com/eclipse005/demucs-native-rs.git", rev = "37c31bbf0310728810df4631d4b8ffdf6717bd86", default-features = false }
-# Same cudarc build as qwen3-asr (feature-unified) — used only for the
-# lightweight GPU probe (name / VRAM / compute capability) in auto mode.
-cudarc = { version = "0.19", default-features = false, features = ["driver", "cuda-version-from-build-system", "cuda-12080"], optional = true }
+# HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
+demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
 
 [[bin]]

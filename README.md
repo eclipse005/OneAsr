@@ -19,7 +19,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 | **完全本地** | 识别与对齐均在本机完成，素材不出机 |
 | **批量友好** | 列表队列一次丢多个文件，进度与阶段一目了然 |
 | **时间轴可靠** | ForcedAligner 词级对齐 + 字幕长度预设，不是“整段瞎估时间” |
-| **一安装包两后端** | 同一二进制含 CUDA 引擎；无 N 卡自动走 CPU |
+| **一安装包两后端** | 同一二进制走 wgpu GPU（N/A/Intel 独显）或 CPU；只需显卡驱动 |
 | **轻量界面** | 原生 GPUI 亮色列表，无 Electron 臃肿壳 |
 
 ---
@@ -33,13 +33,13 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 - **VAD 智能分段**：目标段长 **30–180 秒**（默认 60），长音频更稳
 - **输出格式可选**：SRT 字幕 / TXT 纯文本（逐句一行）可同时选，至少保留一种
 - **中文字形可选**：原文（默认，保持模型输出）/ 简体 / 繁体，仅对中文、粤语素材生效；转换在导出前完成，不影响时间轴
-- **人声分离（可选）**：内置 HTDemucs v4 原生推理，转录前压掉背景音乐 / 噪声；跟随设置里的「推理后端」，「自动」档在 GPU 不可用时回退 CPU 并在状态栏提示，显式选 GPU 则直接报错
+- **人声分离（可选）**：内置 HTDemucs v4（人声权重）原生推理，转录前压掉背景音乐 / 噪声；与识别/对齐同一套 wgpu GPU / CPU 后端
 - **字幕长度预设**：短 / 标准 / 松，控制单行信息量
 - **处理明细**：各阶段耗时可看，方便对比机器与参数
 - **字幕输出位置**：默认与视频同目录，设置里可切换到指定文件夹（如 `{安装目录}/output/`）
 - **提示音**：一个开关管全部（交互反馈 + 整批处理完成的提醒，设置 → 提示音），默认开启；提醒音约 3.7 秒，成功与失败同一个音，结果看提示条颜色与文字
 - **本地统计**：状态栏常驻「已省 X」，点开是累计省下的时间、年内每天的处理时长与明细；账本只记数字（时长、语种、句数），不含文件名与路径，也不上传
-- **无卡可用**：无 NVIDIA 时走 CPU（更慢，但功能完整）
+- **无卡可用**：无可用 GPU 时走 CPU（更慢，但功能完整）
 
 ---
 
@@ -56,9 +56,8 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 1. 运行 `oneasr.exe`
 2. **设置** → 下载 **ASR**（建议先 0.6B）+ **ForcedAligner**（必下）
-3. 有 N 卡 → 再装 **CUDA 运行库**（约 820MB，仅需较新显卡驱动，**不必**装 CUDA Toolkit）
-4. 选好源语言 → 添加音视频 → 开始
-5. 完成后在输出目录查看同名 `.srt`
+3. 选好源语言 → 添加音视频 → 开始
+4. 完成后在输出目录查看同名 `.srt`
 
 ---
 
@@ -68,13 +67,12 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 | 组件 | 名称 | 约体积 | 说明 |
 |------|------|--------|------|
-| ASR（二选一） | Qwen3-ASR-0.6B | ~1.8 GB | 默认推荐 |
-| | Qwen3-ASR-1.7B | ~4.4 GB | 更高精度 |
-| 对齐（必需） | Qwen3-ForcedAligner-0.6B | ~1.7 GB | 所有 ASR 共用 |
-| 人声分离（可选） | HTDemucs v4 (htdemucs_ft) | ~336 MB | 带 BGM / 噪声素材启用 |
-| GPU（可选） | CUDA 12.x 运行库 | ~820 MB | cudart / cublas 等 |
+| ASR（二选一） | Qwen3-ASR-0.6B-hf | ~1.6 GB | 默认推荐 |
+| | Qwen3-ASR-1.7B-hf | ~4.1 GB | 更高精度 |
+| 对齐（必需） | Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | 所有 ASR 共用 |
+| 人声分离（可选） | HTDemucs v4 vocals (htdemucs_ft) | ~84 MB | 带 BGM / 噪声素材启用 |
 
-常用组合约 **3.5～6.9 GB**，另建议预留任务临时空间。
+常用组合约 **3.5～6.0 GB**，另建议预留任务临时空间。
 
 路径约定：
 
@@ -83,8 +81,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
   oneasr.exe
   oneasr-cli.exe      # 无界面命令行，与 GUI 同一套流水线
   bin/ffmpeg.exe      # 安装包已带；源码开发需自行放置
-  dll/                # CUDA 运行库（设置内下载）
-  models/             # ASR / Aligner 权重
+  models/             # ASR / Aligner 权重（官方 Qwen `-hf`）
   output/             # 可选的统一输出目录（默认字幕存视频同目录）
   runs/               # 中间文件（任务结束自动清理）
   oneasr-error.log    # 崩溃/错误日志（闪退时可附上）
@@ -97,10 +94,10 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 | 项目 | 说明 |
 |------|------|
 | 系统 | Windows 10 / 11（64 位） |
-| 显卡 | 推荐 NVIDIA，**4GB+** 显存（0.6B）；1.7B 建议 **6GB+** |
+| 显卡 | 推荐独显，**4GB+** 显存（0.6B）；1.7B 建议 **6GB+**。NVIDIA / AMD / Intel 均可 |
 | 无独显 | 可用 CPU，速度明显更慢 |
-| 驱动 | 保持较新即可（能正常玩游戏一般够用） |
-| 网络 | 仅首次下模型 / CUDA 库需要；识别过程可离线 |
+| 驱动 | 保持较新即可（能正常玩游戏一般够用）；**不必**装 CUDA Toolkit |
+| 网络 | 仅首次下模型需要；识别过程可离线 |
 
 ---
 
@@ -108,14 +105,14 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 - **语种选错**是时间轴/识别异常的最常见原因；粤语用「粤语」，其它中文方言一般选「中文普通话」
 - 同一时刻只加载一个大模型，内存友好，但长队列会按文件串行处理
-- 速度慢：检查是否已装 CUDA 运行库、后端是否为 Auto/GPU、驱动是否过旧
+- 速度慢：检查后端是否为 Auto/GPU、显卡驱动是否过旧
 - 失败任务可在列表中重试；`runs/` 任务结束会自动清理（排查问题可设 `ONEASR_KEEP_SCRATCH=1` 保留）
 
 ---
 
 ## 命令行 / Python
 
-安装包和便携包都带 `oneasr-cli.exe`，与 GUI 同一条流水线。先用 GUI 把模型（和可选的 CUDA 组件）下载到安装目录，再调用 CLI。默认 `--app-root` 就是 exe 所在目录。
+安装包和便携包都带 `oneasr-cli.exe`，与 GUI 同一条流水线。先用 GUI 把模型下载到安装目录，再调用 CLI。默认 `--app-root` 就是 exe 所在目录。
 
 ```powershell
 oneasr-cli.exe transcribe --input "C:\path\to\video.mp4" --language zh --backend auto --output "C:\path\to\out.srt"
@@ -169,14 +166,14 @@ ffmpeg → 16 kHz mono
 
 | 组件 | 仓库 |
 |------|------|
-| ASR | [qwen3-asr-rs](https://github.com/eclipse005/qwen3-asr-rs) |
-| Aligner | [qwen-aligner-rs](https://github.com/eclipse005/qwen-aligner-rs) |
+| ASR | [qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) |
+| Aligner | [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) |
 
 ---
 
 ## 从源码构建
 
-**环境：** Rust（edition 2024）· [VS 2022 C++ 生成工具](https://visualstudio.microsoft.com/downloads/) · 可选 CUDA Toolkit 12.x（仅本机编 CUDA 特性时）
+**环境：** Rust（edition 2024）· [VS 2022 C++ 生成工具](https://visualstudio.microsoft.com/downloads/)（wgpu 引擎会编一份 soxr）
 
 ### 1. 准备 ffmpeg（必需）
 
@@ -239,7 +236,7 @@ cargo build -p oneasr --release
 cargo build -p oneasr-core --release --bin oneasr-cli
 ```
 
-默认 feature 含 CUDA 引擎；运行时无 DLL / 无 GPU 时仍可走 CPU。
+同一二进制含 wgpu GPU 与 CPU；无可用 GPU 时自动走 CPU。
 
 ---
 

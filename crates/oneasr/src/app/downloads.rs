@@ -1,4 +1,4 @@
-//! The four model downloads — ASR, aligner, CUDA runtime, Demucs — and the
+//! The three model downloads — ASR, aligner, Demucs — and the
 //! progress state machine behind each one.
 //!
 //! The lanes are independent: the drawer shows a row per component, and one
@@ -33,7 +33,6 @@ impl OneAsrApp {
         match id.kind() {
             ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
-            ModelKind::CudaRuntime => self.cuda_dl_handle = Some(handle.clone()),
             ModelKind::Demucs => self.demucs_dl_handle = Some(handle.clone()),
         }
         self.set_download_progress(
@@ -83,7 +82,6 @@ impl OneAsrApp {
         let handle = match id.kind() {
             ModelKind::Asr => self.asr_dl_handle.as_ref(),
             ModelKind::Align => self.align_dl_handle.as_ref(),
-            ModelKind::CudaRuntime => self.cuda_dl_handle.as_ref(),
             ModelKind::Demucs => self.demucs_dl_handle.as_ref(),
         };
         if let Some(h) = handle
@@ -100,10 +98,6 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle.as_ref().is_some_and(|h| h.model_id == id),
             ModelKind::Align => self
                 .align_dl_handle
-                .as_ref()
-                .is_some_and(|h| h.model_id == id),
-            ModelKind::CudaRuntime => self
-                .cuda_dl_handle
                 .as_ref()
                 .is_some_and(|h| h.model_id == id),
             ModelKind::Demucs => self
@@ -132,13 +126,6 @@ impl OneAsrApp {
                         .as_ref()
                         .is_some_and(|p| p.state == DownloadState::Downloading)
             }
-            ModelKind::CudaRuntime => {
-                self.cuda_dl_handle.is_some()
-                    || self
-                        .cuda_download
-                        .as_ref()
-                        .is_some_and(|p| p.state == DownloadState::Downloading)
-            }
             ModelKind::Demucs => {
                 self.demucs_dl_handle.is_some()
                     || self
@@ -149,11 +136,10 @@ impl OneAsrApp {
         }
     }
 
-    /// Any model / CUDA component download in flight (drives settings gear spin).
+    /// Any model download in flight (drives settings gear spin).
     pub(crate) fn any_download_busy(&self) -> bool {
         self.download_kind_busy(ModelKind::Asr)
             || self.download_kind_busy(ModelKind::Align)
-            || self.download_kind_busy(ModelKind::CudaRuntime)
             || self.download_kind_busy(ModelKind::Demucs)
     }
 
@@ -162,7 +148,6 @@ impl OneAsrApp {
         let p = match id.kind() {
             ModelKind::Asr => self.asr_download.as_ref(),
             ModelKind::Align => self.align_download.as_ref(),
-            ModelKind::CudaRuntime => self.cuda_download.as_ref(),
             ModelKind::Demucs => self.demucs_download.as_ref(),
         }?;
         if p.model_id == id {
@@ -176,7 +161,6 @@ impl OneAsrApp {
         match progress.model_id.kind() {
             ModelKind::Asr => self.asr_download = Some(progress),
             ModelKind::Align => self.align_download = Some(progress),
-            ModelKind::CudaRuntime => self.cuda_download = Some(progress),
             ModelKind::Demucs => self.demucs_download = Some(progress),
         }
     }
@@ -185,7 +169,6 @@ impl OneAsrApp {
         match id.kind() {
             ModelKind::Asr => self.asr_dl_handle = None,
             ModelKind::Align => self.align_dl_handle = None,
-            ModelKind::CudaRuntime => self.cuda_dl_handle = None,
             ModelKind::Demucs => self.demucs_dl_handle = None,
         }
     }

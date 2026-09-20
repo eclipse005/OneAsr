@@ -371,11 +371,10 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Extract the audio track to a PCM s16le **stereo** WAV at its native sample
-/// rate — the input format HTDemucs expects. ffmpeg does a proper downmix for
-/// multi-channel sources (mono is duplicated), so we never have to guess which
-/// channels carry the dialogue; the engine resamples to 44.1 kHz internally and
-/// restores the original rate on output.
+/// Extract the audio track to a PCM s16le **stereo** WAV at 44.1 kHz — the
+/// sample rate HTDemucs inference requires. ffmpeg downmixes multi-channel
+/// sources (mono is duplicated) and resamples; the vocals WAV is later
+/// transcoded to the 16 kHz mono master.
 pub fn extract_audio_wav(input: &Path, out_wav: &Path) -> Result<PathBuf, MediaError> {
     if let Some(parent) = out_wav.parent() {
         std::fs::create_dir_all(parent)?;
@@ -385,7 +384,7 @@ pub fn extract_audio_wav(input: &Path, out_wav: &Path) -> Result<PathBuf, MediaE
     let mut cmd = ffmpeg_command(&ffmpeg);
     cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(input)
-        .args(["-vn", "-ac", "2", "-c:a", "pcm_s16le"])
+        .args(["-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le"])
         .arg(out_wav);
     let output = cmd.output()?;
 

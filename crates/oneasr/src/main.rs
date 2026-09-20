@@ -1,7 +1,7 @@
 //! OneAsr — light-themed batch list for local Qwen ASR + align.
 //!
-//! This file is the process entry point only: it registers the native library
-//! path, installs the runtime and panic hooks, and opens the window. The
+//! This file is the process entry point only: it installs the runtime and
+//! panic hooks, and opens the window. The
 //! window's state and logic live in [`app`]; its rendering lives in `app::ui`.
 
 // Release / portable: GUI PE subsystem (no black console on double-click).
@@ -22,16 +22,13 @@ use gpui::{
     App, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, actions, prelude::*,
     px, size,
 };
-use oneasr_core::{init_native_library_path, init_runtime};
+use oneasr_core::init_runtime;
 
 use crate::app::OneAsrApp;
 
 actions!(oneasr, [DismissMenus]);
 
 fn main() {
-    // Native DLL dir must be registered before any worker threads exist.
-    // (`SetDllDirectoryW` only — no PATH mutation; see oneasr_core::model::path.)
-    init_native_library_path();
     // Cap rayon before any model load so the UI thread keeps a free core.
     init_runtime();
     // Install-dir error log + panic capture (see `oneasr-error.log`).

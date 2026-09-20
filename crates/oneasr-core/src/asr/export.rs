@@ -79,8 +79,8 @@ pub(super) const MIN_ALIGN_SEC: f32 = 0.1;
 
 /// The Qwen aligner strips punctuation before tokenizing, so a chunk whose
 /// text is punctuation-only yields zero words → zero `<timestamp>` slots →
-/// the CUDA timestamp gather launches with a 0-sized grid and dies with
-/// `CUDA_ERROR_INVALID_VALUE`. Detect such chunks and skip the model call.
+/// the timestamp gather would run on an empty set of slots. Detect such
+/// chunks and skip the model call.
 pub(super) fn has_alignable_word(text: &str) -> bool {
     text.chars().any(char::is_alphanumeric)
 }

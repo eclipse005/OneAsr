@@ -40,7 +40,7 @@ pub fn clamp_chunk_target_seconds(value: u32) -> u32 {
 /// Persisted as `{app_root}/settings.json` when possible.
 ///
 /// # ASR selection model
-/// - [`Self::asr_model`] is the **active** catalog id (`Qwen3-ASR-0.6B` | `1.7B`).
+/// - [`Self::asr_model`] is the **active** catalog id (`Qwen3-ASR-0.6B-hf` | `1.7B-hf`).
 /// - [`Self::asr_model_dir`] is the path loaded at runtime.
 /// - Switching size via [`Self::select_asr_model`] always binds install-layout
 ///   `{app}/models/{name}`.
@@ -49,7 +49,7 @@ pub fn clamp_chunk_target_seconds(value: u32) -> u32 {
 ///   [`Self::bind_download_if_active`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// Active ASR catalog id (`Qwen3-ASR-0.6B` | `Qwen3-ASR-1.7B`).
+    /// Active ASR catalog id (`Qwen3-ASR-0.6B-hf` | `Qwen3-ASR-1.7B-hf`).
     #[serde(default = "default_asr_model")]
     pub asr_model: String,
     /// Directory loaded for inference (install layout or user-picked).
@@ -58,7 +58,7 @@ pub struct Settings {
     /// Qwen3-ForcedAligner directory.
     #[serde(default = "default_aligner_model_dir")]
     pub aligner_model_dir: PathBuf,
-    /// `auto` | `cuda` | `cpu`
+    /// `auto` | `gpu` | `cpu`
     #[serde(default = "default_backend")]
     pub backend: String,
     #[serde(default = "default_max_new_tokens")]
@@ -444,7 +444,6 @@ impl Settings {
             // Weights always land in the install-layout dir the settings
             // already point at; nothing to re-bind.
             ModelKind::Demucs => false,
-            ModelKind::CudaRuntime => false,
         }
     }
 }
@@ -493,10 +492,55 @@ mod tests {
     }
 
     #[test]
+    fn can_start_requires_demucs_only_when_separation_on() {
+        let root = std::env::temp_dir().join(format!(
+            "oneasr_can_start_demucs_{}",
+            std::process::id()
+        ));
+        let asr = root.join("asr-test");
+        let align = root.join("align-test");
+        let demucs = root.join("demucs-test");
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in [&asr, &align, &demucs] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let blob = vec![0u8; 4096];
+        std::fs::write(asr.join("config.json"), &blob).unwrap();
+        std::fs::write(asr.join("tokenizer.json"), &blob).unwrap();
+        std::fs::write(asr.join("model.safetensors"), &blob).unwrap();
+        std::fs::write(align.join("config.json"), &blob).unwrap();
+        std::fs::write(align.join("tokenizer.json"), &blob).unwrap();
+        std::fs::write(align.join("tokenizer_config.json"), &blob).unwrap();
+        std::fs::write(align.join("model.safetensors"), &blob).unwrap();
+
+        let mut s = Settings {
+            asr_model_dir: asr,
+            aligner_model_dir: align,
+            demucs_model_dir: demucs.clone(),
+            vocal_separation: false,
+            ..Settings::default()
+        };
+        assert!(s.can_start().is_ok(), "{:?}", s.can_start());
+
+        s.vocal_separation = true;
+        let err = s.can_start().unwrap_err();
+        assert!(err.contains("人声分离"), "{err}");
+        assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
+
+        std::fs::write(
+            demucs.join(crate::engine::local::DEMUCS_WEIGHTS_FILE),
+            vec![0u8; 4096],
+        )
+        .unwrap();
+        assert!(s.can_start().is_ok(), "{:?}", s.can_start());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn normalize_syncs_asr_model_from_catalog_path() {
         let mut s = Settings {
             asr_model: QWEN3_ASR_06B.into(),
-            asr_model_dir: PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B"),
+            asr_model_dir: PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B-hf"),
             ..Settings::default()
         };
         s.normalize();
@@ -508,12 +552,12 @@ mod tests {
     fn bind_download_only_when_selected() {
         let mut s = Settings::default();
         s.select_asr_model(ModelId::Qwen3Asr17B);
-        let dir_06 = PathBuf::from(r"C:\App\models\Qwen3-ASR-0.6B");
+        let dir_06 = PathBuf::from(r"C:\App\models\Qwen3-ASR-0.6B-hf");
         assert!(!s.bind_download_if_active(ModelId::Qwen3Asr06B, dir_06));
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
-        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B"));
+        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-hf"));
 
-        let dir_17 = PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B");
+        let dir_17 = PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B-hf");
         assert!(s.bind_download_if_active(ModelId::Qwen3Asr17B, dir_17.clone()));
         assert_eq!(s.asr_model_dir, dir_17);
     }
@@ -523,7 +567,7 @@ mod tests {
         let mut s = Settings::default();
         s.select_asr_model(ModelId::Qwen3Asr17B);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
-        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B"));
+        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-hf"));
     }
 
     #[test]

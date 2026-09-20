@@ -93,7 +93,6 @@ pub(crate) struct OneAsrApp {
     /// Cached settings-panel readiness (refreshed in [`Self::refresh_model_probe`], not per frame).
     asr_ready: bool,
     align_ready: bool,
-    cuda_ready: bool,
     /// Optional HTDemucs weights present (vocal separation).
     demucs_ready: bool,
     /// Soft status-bar hint (no toast). Auto-clears after a few seconds.
@@ -110,12 +109,10 @@ pub(crate) struct OneAsrApp {
     /// Latest download progress (settings panel).
     asr_download: Option<DownloadProgress>,
     align_download: Option<DownloadProgress>,
-    cuda_download: Option<DownloadProgress>,
     demucs_download: Option<DownloadProgress>,
     /// Active download cancel handles.
     asr_dl_handle: Option<DownloadHandle>,
     align_dl_handle: Option<DownloadHandle>,
-    cuda_dl_handle: Option<DownloadHandle>,
     demucs_dl_handle: Option<DownloadHandle>,
     /// Stats panel open (floats above the status bar; shares MENU_Z with menus).
     stats_open: bool,
@@ -135,7 +132,7 @@ impl OneAsrApp {
         let (tx, rx, job_tx) = spawn_asr_worker();
         Self::start_worker_poller(cx);
 
-        let (settings, cuda_fallback_hint) = load_settings_or_fallback();
+        let settings = load_settings_or_fallback();
         let app_root = resolve_app_root_dir();
         log_environment_snapshot(&settings, &app_root);
 
@@ -177,7 +174,6 @@ impl OneAsrApp {
             model_status: ModelStatus::NotReady,
             asr_ready: false,
             align_ready: false,
-            cuda_ready: false,
             demucs_ready: false,
             status_hint: None,
             status_hint_until: None,
@@ -186,11 +182,9 @@ impl OneAsrApp {
             active_stage: None,
             asr_download: None,
             align_download: None,
-            cuda_download: None,
             demucs_download: None,
             asr_dl_handle: None,
             align_dl_handle: None,
-            cuda_dl_handle: None,
             demucs_dl_handle: None,
             stats_open: false,
             stats_hover_day: None,
@@ -201,7 +195,7 @@ impl OneAsrApp {
             job_tx,
         };
 
-        app.finish_startup(cuda_fallback_hint);
+        app.finish_startup();
         app
     }
 
@@ -219,13 +213,9 @@ impl OneAsrApp {
     }
 
     /// Startup probes that need a constructed app, because they write state.
-    fn finish_startup(&mut self, cuda_fallback_hint: Option<String>) {
+    fn finish_startup(&mut self) {
         // Probe files only — never load multi-GB weights on startup.
         self.refresh_model_probe();
-        if let Some(hint) = cuda_fallback_hint {
-            self.status_hint = Some(SharedString::from(hint));
-            self.status_hint_until = Some(Instant::now() + Duration::from_secs(5));
-        }
     }
 }
 
@@ -290,25 +280,10 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
     (tx, rx, job_tx)
 }
 
-/// Load settings, and make sure the persisted backend can actually run.
-///
-/// A forced `cuda` without the runtime DLLs is invalid, so it falls back to
-/// `auto`, persists that, and hands back a status hint so the user learns why
-/// rather than finding the setting quietly changed.
-fn load_settings_or_fallback() -> (Settings, Option<String>) {
-    let (mut settings, report) = Settings::load_with_report();
-    let mut cuda_fallback_hint: Option<String> = None;
-    if settings.backend.eq_ignore_ascii_case("cuda") && !is_cuda_runtime_ready() {
-        crashlog::log_warn("backend forced cuda but CUDA runtime missing — reset to auto");
-        settings.backend = "auto".into();
-        if let Err(e) = settings.save() {
-            crashlog::log_error(format!("cuda→auto fallback save failed: {e}"));
-        }
-        cuda_fallback_hint =
-            Some("未检测到 CUDA 运行库，已改用自动（可在设置中安装组件后选 GPU）".into());
-    }
+fn load_settings_or_fallback() -> Settings {
+    let (settings, report) = Settings::load_with_report();
     log_settings_report(&report);
-    (settings, cuda_fallback_hint)
+    settings
 }
 
 /// Log why settings were repaired or fell back to defaults. A user report of
@@ -350,7 +325,6 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
         ModelId::Qwen3Asr17B,
         ModelId::QwenAlign06B,
         ModelId::HtdemucsFt,
-        ModelId::CudaRuntime,
     ]
     .map(|id| {
         format!(
@@ -361,7 +335,7 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
     })
     .join(" ");
     crashlog::log_info(format!(
-        "environment:\n  settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  cuda dir: {}\n  models: {models_line}",
+        "environment:\n  settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  models: {models_line}",
         Settings::config_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unknown>".into()),
@@ -371,9 +345,6 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
             .unwrap_or_else(|| "MISSING".into()),
         settings.backend,
         settings.output_dir.display(),
-        resolve_cuda_runtime_dir()
-            .map(|d| d.display().to_string())
-            .unwrap_or_else(|| "<none>".into()),
     ));
 }
 

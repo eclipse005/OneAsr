@@ -9,7 +9,6 @@ impl OneAsrApp {
         self.asr_ready = check_asr_model_dir(&self.settings.asr_model_dir).is_ok();
         self.align_ready =
             oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
-        self.cuda_ready = is_cuda_runtime_ready();
         self.demucs_ready =
             oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir())
                 .is_ok();

@@ -1,44 +1,46 @@
-//! Qwen3-ForcedAligner adapter.
+//! Qwen3-ForcedAligner adapter (wgpu).
 
 use std::path::Path;
-use super::cuda::ComputeBackend;
+use std::sync::Mutex;
 
-use qwen_forced_aligner_rs::{
-    AlignRequest as QwenAlignRequest, AudioInput, DeviceRequest, ModelOptions, Qwen3ForcedAligner,
-    TextInput,
-};
+use super::backend::ComputeBackend;
+
+use qwen3_aligner_wgpu::align_inference::Aligner as WgpuAligner;
+use qwen3_aligner_wgpu::gpu::DeviceSelector;
 
 use crate::engine::{
     AlignRequest, AlignedToken, Aligner, EngineError,
 };
+
 pub(super) struct QwenAlignerAdapter {
-    inner: Qwen3ForcedAligner,
+    /// wgpu `align` takes `&mut self`; the pipeline trait is `&self`.
+    inner: Mutex<WgpuAligner>,
 }
 
 impl QwenAlignerAdapter {
     pub(super) fn load(model_dir: &Path, backend: ComputeBackend) -> Result<Self, EngineError> {
-        let device = match backend {
-            ComputeBackend::Cpu => DeviceRequest::Cpu,
-            ComputeBackend::Cuda => DeviceRequest::Cuda(0),
+        let selector = match backend {
+            ComputeBackend::Cpu => DeviceSelector::Cpu,
+            ComputeBackend::Gpu => DeviceSelector::Auto,
         };
-        Qwen3ForcedAligner::load(model_dir, ModelOptions { device })
-            .map(|inner| Self { inner })
+        WgpuAligner::load(selector, model_dir)
+            .map(|inner| Self {
+                inner: Mutex::new(inner),
+            })
             .map_err(|e| EngineError::new(format!("{e:#}")))
     }
 }
 
 impl Aligner for QwenAlignerAdapter {
     fn align(&self, req: AlignRequest<'_>) -> Result<Vec<AlignedToken>, EngineError> {
-        let result = self
+        let mut inner = self
             .inner
-            .align(QwenAlignRequest::new(
-                AudioInput::Path(req.wav.to_path_buf()),
-                TextInput::Text(req.text.to_string()),
-                req.language.to_string(),
-            ))
+            .lock()
+            .map_err(|_| EngineError::new("对齐器被占用"))?;
+        let items = inner
+            .align(req.wav, req.text, Some(req.language))
             .map_err(|e| EngineError::new(format!("{e:#}")))?;
-        Ok(result
-            .items
+        Ok(items
             .into_iter()
             .map(|item| AlignedToken {
                 text: item.text,

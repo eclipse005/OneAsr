@@ -3,20 +3,19 @@
 //! Prefer: `oneasr-cli asr-chunk ...` (same options).
 //!
 //! ```powershell
-//! cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
+//! cargo run -p oneasr-core --release --bin oneasr-cli -- `
 //!   asr-chunk --wav "D:\OneAsr\runs\...\input_16k.wav" --start 722.75 --end 842.75 --language zh
 //!
-//! cargo run -p oneasr-core --release --example asr_dump_chunk --features cuda -- `
+//! cargo run -p oneasr-core --release --example asr_dump_chunk -- `
 //!   --wav "D:\OneAsr\runs\...\input_16k.wav" --start 722.75 --end 842.75 --language zh
 //! ```
 
 use std::env;
 use std::path::PathBuf;
 
-use oneasr_core::init_native_library_path;
 use oneasr_core::media::slice_wav;
-use oneasr_core::{resolve_cuda_runtime_dir, Settings};
-use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
+use oneasr_core::Settings;
+use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
@@ -34,13 +33,8 @@ fn main() {
     let language = arg(&args, "--language").unwrap_or_else(|| "zh".into());
     let out = arg(&args, "--out").map(PathBuf::from);
 
-    if let Some(dll) = resolve_cuda_runtime_dir() {
-        register_dll_dir(&dll);
-    }
-    init_native_library_path();
-
     let mut settings = Settings::default();
-    let asr_dir = PathBuf::from(r"D:\OneAsr\models\Qwen3-ASR-0.6B");
+    let asr_dir = PathBuf::from(r"D:\OneAsr\models\Qwen3-ASR-0.6B-hf");
     if asr_dir.is_dir() {
         settings.asr_model_dir = asr_dir;
     }
@@ -60,7 +54,7 @@ fn main() {
         tmp.display()
     );
 
-    let asr = AsrInference::load(&settings.asr_model_dir, AsrBackend::Cuda)
+    let asr = AsrInference::load(&settings.asr_model_dir, AsrBackend::Auto)
         .expect("load ASR");
     let lang = oneasr_core::lang::to_qwen_language_label(&settings.language);
     let opts = TranscribeOptions::default()
@@ -83,20 +77,4 @@ fn main() {
     let _ = std::fs::remove_file(&tmp);
 }
 
-fn register_dll_dir(dll_dir: &std::path::Path) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = dll_dir
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        unsafe extern "system" {
-            fn SetDllDirectoryW(path: *const u16) -> i32;
-        }
-        unsafe {
-            let _ = SetDllDirectoryW(wide.as_ptr());
-        }
-    }
-}
+

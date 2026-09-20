@@ -1,13 +1,11 @@
 //! Headless OneAsr CLI — same pipeline as the GUI worker.
 //!
 //! ```powershell
-//! # Full media → SRT (CUDA)
-//! cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
+//! cargo run -p oneasr-core --release --bin oneasr-cli -- `
 //!   transcribe --input "C:\path\to\video.mp4" --app-root "D:\OneAsr" `
-//!   --language zh --chunk-seconds 60 --backend cuda
+//!   --language zh --chunk-seconds 60 --backend auto
 //!
-//! # Diagnose a single time range (ASR text only)
-//! cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
+//! cargo run -p oneasr-core --release --bin oneasr-cli -- `
 //!   asr-chunk --wav "D:\OneAsr\runs\...\input_16k.wav" `
 //!   --start 722.75 --end 842.75 --language zh
 //! ```
@@ -21,10 +19,10 @@ use std::time::Instant;
 
 use oneasr_core::media::slice_wav;
 use oneasr_core::{
-    ffmpeg_source, init_native_library_path, process_media_file_with_export, resolve_app_root,
-    resolve_cuda_runtime_dir, ProcessExportOptions, StageClock, StageUpdate, Settings, ModelId,
+    ffmpeg_source, process_media_file_with_export, resolve_app_root, ProcessExportOptions,
+    StageClock, StageUpdate, Settings, ModelId,
 };
-use qwen3_asr::{AsrInference, Backend as AsrBackend, TranscribeOptions};
+use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -79,10 +77,10 @@ Commands:
 
 transcribe options:
   --input <path>           Media file (required)
-  --app-root <dir>         App root with bin/ffmpeg, models/, dll/  (default: this exe's install dir)
+  --app-root <dir>         App root with bin/ffmpeg, models/  (default: this exe's install dir)
   --language <code>        zh|en|yue|ja|ko|...  (default: zh)
   --chunk-seconds <30-180> VAD chunk target (default: 60)
-  --backend <cuda|cpu|auto>  Default: auto (CUDA if runtime + GPU, else CPU)
+  --backend <gpu|cpu|auto> Default: auto (GPU if a driver is present, else CPU)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy the primary result (SRT, else TXT) to this path
   --txt                    Also write {{stem}}.txt (one transcript line per cue)
@@ -90,7 +88,7 @@ transcribe options:
   --script <simplified|traditional>
                            Chinese output script for zh / yue (default: simplified)
   --vocal-separation       Run HTDemucs vocal separation before ASR
-  --demucs-model-dir <dir> Directory holding htdemucs_ft.safetensors
+  --demucs-model-dir <dir> Directory holding htdemucs_ft_vocals.safetensors
   --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
 
 asr-chunk options:
@@ -100,13 +98,13 @@ asr-chunk options:
   --app-root <dir>
   --max-new-tokens <n>
   --out <path>             Write ASR text to file
-  --backend <cuda|cpu|auto>
+  --backend <gpu|cpu|auto>
 
 Env:
   ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
 
 Examples:
-  oneasr-cli transcribe --input video.mp4 --app-root D:\\OneAsr --chunk-seconds 120 --backend cuda
+  oneasr-cli transcribe --input video.mp4 --app-root D:\\OneAsr --chunk-seconds 120 --backend auto
   oneasr-cli asr-chunk --wav runs\\x\\input_16k.wav --start 722 --end 843 --language zh
 "
     );
@@ -141,7 +139,6 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         return Err(1);
     }
     ensure_ffmpeg(&app_root)?;
-    setup_native(&app_root);
 
     let mut settings = Settings {
         language,
@@ -167,6 +164,10 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         settings.demucs_model_dir = dir;
     }
     settings.normalize();
+    if let Err(e) = settings.can_start() {
+        eprintln!("{e}");
+        return Err(1);
+    }
 
     eprintln!("=== OneAsr CLI · transcribe ===");
     eprintln!("input:   {}", input_path.display());
@@ -282,7 +283,7 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     }
     let language = arg(args, "--language").unwrap_or_else(|| "zh".into());
     let out = arg(args, "--out").map(PathBuf::from);
-    let backend_s = arg(args, "--backend").unwrap_or_else(|| "cuda".into());
+    let backend_s = arg(args, "--backend").unwrap_or_else(|| "auto".into());
     let max_new_tokens = arg(args, "--max-new-tokens").and_then(|s| s.parse().ok());
     let app_root = parse_app_root(args).unwrap_or_else(|_| default_app_root());
 
@@ -290,8 +291,6 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
         eprintln!("wav not found: {}", wav.display());
         return Err(1);
     }
-
-    setup_native(&app_root);
 
     let mut settings = Settings {
         language,
@@ -323,7 +322,7 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
 
     let backend = match settings.backend.to_ascii_lowercase().as_str() {
         "cpu" => AsrBackend::Cpu,
-        "cuda" => AsrBackend::Cuda,
+        "gpu" => AsrBackend::Gpu,
         _ => AsrBackend::Auto,
     };
     let asr = AsrInference::load(&settings.asr_model_dir, backend).map_err(|e| {
@@ -387,7 +386,7 @@ fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
         settings.asr_model = id.as_str().into();
         settings.asr_model_dir = models.join(id.as_str());
     }
-    let align = models.join("Qwen3-ForcedAligner-0.6B");
+    let align = models.join("Qwen3-ForcedAligner-0.6B-hf");
     if align.is_dir() {
         settings.aligner_model_dir = align;
     }
@@ -421,15 +420,6 @@ fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
             Err(1)
         }
     }
-}
-
-fn setup_native(app_root: &Path) {
-    if let Some(dll) = resolve_cuda_runtime_dir() {
-        register_dll_dir(&dll);
-    } else {
-        register_dll_dir(&app_root.join("dll"));
-    }
-    init_native_library_path();
 }
 
 fn default_app_root() -> PathBuf {
@@ -471,22 +461,4 @@ fn is_help(s: &str) -> bool {
     matches!(s, "--help" | "-h" | "help")
 }
 
-fn register_dll_dir(dll_dir: &Path) {
-    let _ = std::fs::create_dir_all(dll_dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = dll_dir
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        unsafe extern "system" {
-            fn SetDllDirectoryW(path: *const u16) -> i32;
-        }
-        unsafe {
-            let _ = SetDllDirectoryW(wide.as_ptr());
-        }
-        eprintln!("dll_dir: {}", dll_dir.display());
-    }
-}
+

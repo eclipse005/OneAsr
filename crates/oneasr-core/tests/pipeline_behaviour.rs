@@ -58,9 +58,11 @@ fn install_fake_models(root: &Path, with_demucs: bool) -> (PathBuf, PathBuf, Pat
     std::fs::write(asr.join("tokenizer.json"), &blob).unwrap();
     std::fs::write(asr.join("model.safetensors"), &blob).unwrap();
     std::fs::write(align.join("config.json"), &blob).unwrap();
+    std::fs::write(align.join("tokenizer.json"), &blob).unwrap();
+    std::fs::write(align.join("tokenizer_config.json"), &blob).unwrap();
     std::fs::write(align.join("model.safetensors"), &blob).unwrap();
     if with_demucs {
-        std::fs::write(demucs.join("htdemucs_ft.safetensors"), &blob).unwrap();
+        std::fs::write(demucs.join("htdemucs_ft_vocals.safetensors"), &blob).unwrap();
     }
     (asr, align, demucs)
 }

@@ -221,13 +221,7 @@ impl OneAsrApp {
             ));
             // Install layout already has files. Bind active selection only
             // when this download is for the currently selected ASR (or Align).
-            // CUDA never binds settings paths (`bind_download_if_active` → false);
-            // dll/ was registered at process start so no re-init is needed.
             match id.kind() {
-                ModelKind::CudaRuntime => {
-                    self.refresh_model_probe();
-                    self.flash_hint(format!("{} 已安装", id.label()), cx);
-                }
                 ModelKind::Demucs => {
                     self.refresh_model_probe();
                     self.flash_hint(format!("{} 已就绪", id.label()), cx);
@@ -257,11 +251,7 @@ impl OneAsrApp {
                 }
             }
         } else if progress.state == DownloadState::Failed {
-            let fail = if id.kind() == ModelKind::CudaRuntime {
-                format!("{} 安装失败: {}", id.label(), progress.message)
-            } else {
-                format!("{} 下载失败: {}", id.label(), progress.message)
-            };
+            let fail = format!("{} 下载失败: {}", id.label(), progress.message);
             // Byte counters separate dir-create failures (0 bytes)
             // from mid-file / rename failures for bare OS errors.
             crashlog::log_error(format!(

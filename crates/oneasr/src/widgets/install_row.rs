@@ -45,27 +45,6 @@ pub fn model_download_row(
     )
 }
 
-/// CUDA / native runtime components → `{exe}/dll/`, button「安装组件」.
-pub fn component_install_row(
-    row: ComponentRow<'_>,
-    on_install: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    download_action_row(
-        row,
-        ActionCopy {
-            ready_status: "已安装",
-            idle_status: "未安装",
-            busy_btn: "安装中…",
-            idle_btn: "安装组件",
-            ready_btn: "重新安装",
-            kind: ModelKind::CudaRuntime,
-        },
-        on_install,
-        on_cancel,
-    )
-}
-
 struct ActionCopy {
     ready_status: &'static str,
     idle_status: &'static str,

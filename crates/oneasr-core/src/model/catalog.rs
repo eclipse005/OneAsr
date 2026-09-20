@@ -1,13 +1,13 @@
-//! File lists + ModelScope URLs (VoxTrans-aligned).
+//! File lists + ModelScope URLs for the official Qwen `-hf` checkpoints.
 
 use std::path::PathBuf;
 
-use super::path::{resolve_dll_dir, resolve_model_dir};
+use super::path::resolve_model_dir;
 
-pub const QWEN3_ASR_06B: &str = "Qwen3-ASR-0.6B";
-pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B";
-pub const QWEN_ALIGN_06B: &str = "Qwen3-ForcedAligner-0.6B";
-/// HTDemucs v4 fine-tuned weights (optional vocal separation stage).
+pub const QWEN3_ASR_06B: &str = "Qwen3-ASR-0.6B-hf";
+pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B-hf";
+pub const QWEN_ALIGN_06B: &str = "Qwen3-ForcedAligner-0.6B-hf";
+/// HTDemucs v4 vocals weights (optional vocal separation stage).
 pub const HTDEMUCS_FT: &str = "htdemucs_ft";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,8 +16,6 @@ pub enum ModelKind {
     Align,
     /// Optional HTDemucs vocal-separation weights.
     Demucs,
-    /// User-mode CUDA 12.x DLLs next to the app (not under models/).
-    CudaRuntime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,10 +23,8 @@ pub enum ModelId {
     Qwen3Asr06B,
     Qwen3Asr17B,
     QwenAlign06B,
-    /// HTDemucs v4 fine-tuned (`htdemucs_ft.safetensors`).
+    /// HTDemucs v4 vocals shard (`htdemucs_ft_vocals.safetensors`).
     HtdemucsFt,
-    /// cudart / cublas / cublasLt / curand (scheme B, no NVRTC).
-    CudaRuntime,
 }
 
 impl ModelId {
@@ -38,7 +34,6 @@ impl ModelId {
             Self::Qwen3Asr17B => QWEN3_ASR_17B,
             Self::QwenAlign06B => QWEN_ALIGN_06B,
             Self::HtdemucsFt => HTDEMUCS_FT,
-            Self::CudaRuntime => "cuda-runtime-12.8",
         }
     }
 
@@ -47,7 +42,6 @@ impl ModelId {
             Self::Qwen3Asr06B | Self::Qwen3Asr17B => ModelKind::Asr,
             Self::QwenAlign06B => ModelKind::Align,
             Self::HtdemucsFt => ModelKind::Demucs,
-            Self::CudaRuntime => ModelKind::CudaRuntime,
         }
     }
 
@@ -57,7 +51,6 @@ impl ModelId {
             Self::Qwen3Asr17B => "Qwen3-ASR 1.7B",
             Self::QwenAlign06B => "ForcedAligner 0.6B",
             Self::HtdemucsFt => "人声分离 HTDemucs",
-            Self::CudaRuntime => "CUDA 运行库",
         }
     }
 
@@ -68,7 +61,6 @@ impl ModelId {
             Self::Qwen3Asr17B => "1.7B",
             Self::QwenAlign06B => "0.6B",
             Self::HtdemucsFt => "Demucs",
-            Self::CudaRuntime => "CUDA",
         }
     }
 
@@ -76,8 +68,8 @@ impl ModelId {
 
     /// Parse a catalog name / settings field into an ASR model id.
     ///
-    /// Only exact folder names match (`Qwen3-ASR-0.6B` / `Qwen3-ASR-1.7B`);
-    /// unknown strings fall back to 0.6B.
+    /// Only the install-layout folder names match (`Qwen3-ASR-0.6B-hf` /
+    /// `Qwen3-ASR-1.7B-hf`). Unknown strings fall back to 0.6B.
     pub fn parse_asr(raw: &str) -> Self {
         Self::try_parse_asr(raw).unwrap_or(Self::Qwen3Asr06B)
     }
@@ -107,7 +99,7 @@ impl ModelId {
     }
 
     /// Infer the aligner model from an install-layout folder name only
-    /// (`Qwen3-ForcedAligner-0.6B`); custom dir names return `None`.
+    /// (`Qwen3-ForcedAligner-0.6B-hf`); custom dir names return `None`.
     pub fn try_from_aligner_dir(path: &std::path::Path) -> Option<Self> {
         path.file_name()
             .and_then(|n| n.to_str())
@@ -145,32 +137,41 @@ struct CatalogFile {
 
 pub fn model_definition(id: ModelId) -> ModelDefinition {
     match id {
-        ModelId::Qwen3Asr06B => {
-            model_def(id, resolve_model_dir(QWEN3_ASR_06B), qwen3_asr_06b_files())
-        }
-        ModelId::Qwen3Asr17B => {
-            model_def(id, resolve_model_dir(QWEN3_ASR_17B), qwen3_asr_17b_files())
-        }
-        ModelId::QwenAlign06B => {
-            model_def(id, resolve_model_dir(QWEN_ALIGN_06B), qwen_align_files())
-        }
-        // ModelScope repo name differs from the install-layout folder name.
-        ModelId::HtdemucsFt => model_def_with_repo(
+        ModelId::Qwen3Asr06B => model_def(
             id,
+            "Qwen",
+            QWEN3_ASR_06B,
+            resolve_model_dir(QWEN3_ASR_06B),
+            qwen3_asr_06b_files(),
+        ),
+        ModelId::Qwen3Asr17B => model_def(
+            id,
+            "Qwen",
+            QWEN3_ASR_17B,
+            resolve_model_dir(QWEN3_ASR_17B),
+            qwen3_asr_17b_files(),
+        ),
+        ModelId::QwenAlign06B => model_def(
+            id,
+            "Qwen",
+            QWEN_ALIGN_06B,
+            resolve_model_dir(QWEN_ALIGN_06B),
+            qwen_align_files(),
+        ),
+        // ModelScope repo name differs from the install-layout folder name.
+        ModelId::HtdemucsFt => model_def(
+            id,
+            "eclipse005",
             "htdemucs",
             resolve_model_dir(HTDEMUCS_FT),
             htdemucs_ft_files(),
         ),
-        ModelId::CudaRuntime => model_def(id, resolve_dll_dir(), cuda_runtime_files()),
     }
 }
 
-fn model_def(id: ModelId, model_dir: PathBuf, files: Vec<CatalogFile>) -> ModelDefinition {
-    model_def_with_repo(id, id.as_str(), model_dir, files)
-}
-
-fn model_def_with_repo(
+fn model_def(
     id: ModelId,
+    owner: &str,
     repo: &str,
     model_dir: PathBuf,
     files: Vec<CatalogFile>,
@@ -185,7 +186,7 @@ fn model_def_with_repo(
                 file_name: f.file_name.to_string(),
                 // Revision-pinned: content cannot drift with the `master` branch.
                 url: format!(
-                    "https://modelscope.cn/models/eclipse005/{repo}/resolve/{}/{file}",
+                    "https://modelscope.cn/models/{owner}/{repo}/resolve/{}/{file}",
                     f.revision,
                     file = f.file_name
                 ),
@@ -196,141 +197,92 @@ fn model_def_with_repo(
     }
 }
 
-/// HTDemucs v4 fine-tuned weights (~336 MB) used by the optional vocal
-/// separation stage. Single file; revision-pinned to the ModelScope commit
-/// that last changed it.
+/// HTDemucs v4 vocals-only shard (~84 MB). The fine-tuned bag's vocals
+/// specialist loaded as a single FourStem network — same output as the
+/// full bag's vocals lane, ~4× smaller. Revision-pinned to the ModelScope
+/// commit that uploaded `htdemucs_ft_vocals.safetensors`.
 fn htdemucs_ft_files() -> Vec<CatalogFile> {
     vec![CatalogFile {
-        file_name: "htdemucs_ft.safetensors",
-        size: 336_125_008,
-        sha256: "255c2650d26537ce4887c9c4cf08c6d4896fad2fecc0b78dc5b875b117bcc575",
-        revision: "49a2f695826675edc10dbfc93185739daf7d0b13",
+        file_name: crate::engine::local::DEMUCS_WEIGHTS_FILE,
+        size: 84_025_440,
+        sha256: "68854b0d7c2b3274723b5761f6fd9f5aec5f1bcd3f0de7c1669546fdb7871b7c",
+        revision: "d7057b07a0432fede79326e7d56f50c031d9cb50",
     }]
 }
 
 fn qwen3_asr_06b_files() -> Vec<CatalogFile> {
-    const REV: &str = "4b5b4c660dbfad71602d7bf63d4fc5139857a42e";
+    const REV: &str = "c4650525d0d40f32f1517abe624a89be04386bef";
     vec![
         CatalogFile {
             file_name: "config.json",
-            size: 6_193,
-            sha256: "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c",
+            size: 2_398,
+            sha256: "9eecf6f1b383e343889c2e6010e632590fa57d4bc678e151c7d6a160a0dfb04a",
             revision: REV,
         },
         CatalogFile {
             file_name: "model.safetensors",
-            size: 1_876_091_704,
-            sha256: "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
-            revision: "c278b22bb38f6e3bd93b30693865569fd8632d25",
+            size: 1_564_928_088,
+            sha256: "d3f212dd20abecd315d830bc54ae3865e56ebfc3276484e57b771288ba27fd35",
+            revision: REV,
         },
         CatalogFile {
             file_name: "tokenizer.json",
-            size: 4_760_186,
-            sha256: "2b8bff9d37f1cac4599d1cbef31ea00dc7bc00ecd2a6a33df569d8370ac52c74",
+            size: 11_429_653,
+            sha256: "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05",
             revision: REV,
         },
     ]
 }
 
 fn qwen3_asr_17b_files() -> Vec<CatalogFile> {
-    const REV: &str = "4ccc9bcc722a92fc5a7ac7388ea8afe269816728";
+    const REV: &str = "d4c6c75bbebe9a9730445a33b6cc105dd9873c90";
     vec![
         CatalogFile {
             file_name: "config.json",
-            size: 6_194,
-            sha256: "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f",
+            size: 2_399,
+            sha256: "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63",
             revision: REV,
         },
         CatalogFile {
-            file_name: "model-00001-of-00002.safetensors",
-            size: 4_220_320_824,
-            sha256: "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "model-00002-of-00002.safetensors",
-            size: 478_200_688,
-            sha256: "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "model.safetensors.index.json",
-            size: 64_821,
-            sha256: "f994739fe38e5210b9e3e8ce6c6307315e2ceac3cb630e7b7414d69dce520f60",
+            file_name: "model.safetensors",
+            size: 4_076_193_080,
+            sha256: "2db53c7d81bd9b8cbc6a074e89be2c968a0d373fb4ee68bb1b1e14f7042dfee1",
             revision: REV,
         },
         CatalogFile {
             file_name: "tokenizer.json",
-            size: 4_760_186,
-            sha256: "2b8bff9d37f1cac4599d1cbef31ea00dc7bc00ecd2a6a33df569d8370ac52c74",
+            size: 11_429_653,
+            sha256: "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05",
             revision: REV,
         },
     ]
 }
 
 fn qwen_align_files() -> Vec<CatalogFile> {
-    const REV: &str = "9500b256a7f795c532e6d28e9a6670c0298b2544";
+    const REV: &str = "053506a54ad1c9deea6105050330d7c500b9f098";
     vec![
         CatalogFile {
             file_name: "config.json",
-            size: 5_982,
-            sha256: "d616c65d46c4b90bdc651b0a0963ea932732241140f337f9bb6b0335a9c8ef09",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "merges.txt",
-            size: 1_671_853,
-            sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+            size: 248_029,
+            sha256: "82ac390b36a8f80c5a0c4e202367debd149e5d8c30abe4cf5eed439101b1c5ce",
             revision: REV,
         },
         CatalogFile {
             file_name: "model.safetensors",
-            size: 1_835_544_544,
-            sha256: "47831d0e82f96b20e9034dba01a075ee06436654719f6a68289e49f1b65ce0e7",
+            size: 1_835_545_960,
+            sha256: "00568245ceca5af1991d28562a75fe1ddc9bfeb041c27fda66947ea05c47fb86",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "tokenizer.json",
+            size: 11_429_842,
+            sha256: "cadfb9cbd9ff8f4e309075ec6a71b063295ff796afb4b5dbc0fd2873fbb301f2",
             revision: REV,
         },
         CatalogFile {
             file_name: "tokenizer_config.json",
-            size: 12_666,
-            sha256: "3ab80063f8511deb9566e6ad438d17b7a6277fcffd52d92854112f19d36bd81c",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "vocab.json",
-            size: 2_776_833,
-            sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
-            revision: REV,
-        },
-    ]
-}
-
-/// Same four DLLs as VoxTrans (no NVRTC — engines use precompiled PTX),
-/// pinned to the revision the local installs were verified against.
-fn cuda_runtime_files() -> Vec<CatalogFile> {
-    const REV: &str = "c466fe32e0095f42a8a764f8df7ae8067dd7e590";
-    vec![
-        CatalogFile {
-            file_name: "cudart64_12.dll",
-            size: 573_952,
-            sha256: "c2c9a9c22a9bcba90e261825968836787b331038047a26770cffb7a583c28344",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "cublas64_12.dll",
-            size: 113_716_224,
-            sha256: "9513540e4ec4c51ee9e7304138c2cc255c29a8c181f9e80c38efa25738becd99",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "cublasLt64_12.dll",
-            size: 674_667_520,
-            sha256: "b199d1ff892a81b7fd3d57ba1781549609b41500b36008fef326038393ad46c7",
-            revision: REV,
-        },
-        CatalogFile {
-            file_name: "curand64_10.dll",
-            size: 71_955_968,
-            sha256: "3465fd1b46e551339b8f44c455756a0f2cba8bd846562eb659040d48edb7aaac",
+            size: 998,
+            sha256: "945e980986de2ca7768f3326bfdbb4fbea3406f972b8ae0be233089f2b253c11",
             revision: REV,
         },
     ]
@@ -341,39 +293,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn asr_and_align_catalogs_are_distinct() {
+    fn asr_and_align_catalogs_are_official_qwen_hf() {
         let asr = model_definition(ModelId::Qwen3Asr06B);
         let align = model_definition(ModelId::QwenAlign06B);
-        assert!(asr.download_files.iter().all(|f| f.url.contains("Qwen3-ASR")));
+        assert!(asr
+            .download_files
+            .iter()
+            .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-0.6B-hf/")));
         assert!(align
             .download_files
             .iter()
-            .all(|f| f.url.contains("ForcedAligner")));
-    }
-
-    #[test]
-    fn cuda_runtime_uses_voxtrans_modelscope_repo() {
-        let c = model_definition(ModelId::CudaRuntime);
-        assert_eq!(c.required_files.len(), 4);
-        assert!(c
+            .all(|f| f.url.contains("models/Qwen/Qwen3-ForcedAligner-0.6B-hf/")));
+        let asr17 = model_definition(ModelId::Qwen3Asr17B);
+        assert!(asr17
             .download_files
             .iter()
-            .all(|f| f.url.contains("cuda-runtime-12.8")));
-        assert!(c.download_files.iter().any(|f| f.file_name == "cudart64_12.dll"));
-        assert!(c
-            .download_files
-            .iter()
-            .any(|f| f.file_name == "cublasLt64_12.dll"));
-    }
-
-    #[test]
-    fn cuda_runtime_dir_is_dll_subdir_not_models() {
-        use crate::model::path::{resolve_dll_dir, resolve_model_dir};
-        let c = model_definition(ModelId::CudaRuntime);
-        let models = resolve_model_dir("Qwen3-ASR-0.6B");
-        assert_eq!(c.model_dir, resolve_dll_dir());
-        assert!(c.model_dir.ends_with("dll"));
-        assert_ne!(c.model_dir, models);
+            .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-1.7B-hf/")));
     }
 
     #[test]
@@ -383,7 +318,6 @@ mod tests {
             ModelId::Qwen3Asr17B,
             ModelId::QwenAlign06B,
             ModelId::HtdemucsFt,
-            ModelId::CudaRuntime,
         ] {
             let def = model_definition(id);
             assert!(!def.download_files.is_empty(), "{id:?}");
@@ -411,15 +345,45 @@ mod tests {
     }
 
     #[test]
+    fn demucs_catalog_is_vocals_shard() {
+        let def = model_definition(ModelId::HtdemucsFt);
+        let weights = crate::engine::local::DEMUCS_WEIGHTS_FILE;
+        assert_eq!(def.required_files, [weights]);
+        let file = &def.download_files[0];
+        assert_eq!(file.file_name, weights);
+        assert!(file.url.contains("models/eclipse005/htdemucs/"));
+        assert!(file.url.contains("/resolve/d7057b07a0432fede79326e7d56f50c031d9cb50/"));
+        assert!(
+            file.url.ends_with(&format!("/{weights}")),
+            "{}",
+            file.url
+        );
+        assert_eq!(file.expected_size, 84_025_440);
+        assert_eq!(
+            file.sha256,
+            "68854b0d7c2b3274723b5761f6fd9f5aec5f1bcd3f0de7c1669546fdb7871b7c"
+        );
+    }
+
+    #[test]
     fn parse_asr_is_exact_catalog_name_only() {
         assert_eq!(ModelId::parse_asr(QWEN3_ASR_17B), ModelId::Qwen3Asr17B);
         assert_eq!(ModelId::parse_asr(QWEN3_ASR_06B), ModelId::Qwen3Asr06B);
         // No substring heuristics — "1.7" alone is not a catalog id.
         assert_eq!(ModelId::try_parse_asr("1.7"), None);
-        assert_eq!(ModelId::parse_asr("something-1.7-else"), ModelId::Qwen3Asr06B);
         assert_eq!(
-            ModelId::try_from_asr_dir(std::path::Path::new(r"C:\m\Qwen3-ASR-1.7B")),
+            ModelId::parse_asr("something-1.7-else"),
+            ModelId::Qwen3Asr06B
+        );
+        assert_eq!(
+            ModelId::try_from_asr_dir(std::path::Path::new(r"C:\m\Qwen3-ASR-1.7B-hf")),
             Some(ModelId::Qwen3Asr17B)
+        );
+        assert_eq!(
+            ModelId::try_from_aligner_dir(std::path::Path::new(
+                r"C:\m\Qwen3-ForcedAligner-0.6B-hf"
+            )),
+            Some(ModelId::QwenAlign06B)
         );
     }
 }

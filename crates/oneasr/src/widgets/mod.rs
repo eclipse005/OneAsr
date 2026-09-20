@@ -12,7 +12,7 @@ pub use button::{
     BtnKind, IconKind, NameTooltip, btn, btn_cta, caption_btn, icon_btn, pill,
     settings_gear_btn,
 };
-pub use install_row::{ComponentRow, component_install_row, model_download_row};
+pub use install_row::{ComponentRow, model_download_row};
 pub use logo::app_logo;
 pub use popover::{
     floating_lang_menu, popover_dismiss_layer, popover_menu_shadow,

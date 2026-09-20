@@ -62,7 +62,11 @@ pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Aligner, model_dir, || {
         match crate::model::ModelId::try_from_aligner_dir(model_dir) {
             Some(id) => check_model_dir_against_catalog("对齐", model_dir, id),
-            None => check_model_dir_inner("对齐", model_dir, &["config.json"]),
+            None => check_model_dir_inner(
+                "对齐",
+                model_dir,
+                &["config.json", "tokenizer.json", "tokenizer_config.json"],
+            ),
         }
     })
 }

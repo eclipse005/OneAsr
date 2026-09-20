@@ -55,7 +55,7 @@ pub enum BtnKind {
 }
 
 /// Settings gear.
-/// - **Spin**: only while any model / CUDA DLL download is in flight (open or closed).
+/// - **Spin**: only while any model download is in flight (open or closed).
 /// - **Tint**: settings drawer open, or download running (so closed-panel DL is still visible).
 pub fn settings_gear_btn(
     open: bool,

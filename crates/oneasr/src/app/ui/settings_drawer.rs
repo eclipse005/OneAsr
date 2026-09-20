@@ -61,9 +61,7 @@ impl OneAsrApp {
                     .child(self.render_settings_aligner(&form, cx))
                     // 人声分离（可选）：HTDemucs 原生 Rust 推理，转录前压掉 BGM
                     .child(self.render_settings_demucs(&form, cx))
-                    // Compute: form.backend first, then CUDA pack (only needed for GPU).
                     .child(self.render_settings_backend(&form, cx))
-                    .child(self.render_settings_cuda(&form, cx))
                     // One switch, no essay: taps and the run reminder together.
                     .child(self.render_settings_sound(&form, cx)),
             )
@@ -133,14 +131,11 @@ pub(super) struct SettingsFormState {
     pub(super) dirty: bool,
     pub(super) asr_ready: bool,
     pub(super) align_ready: bool,
-    pub(super) cuda_ready: bool,
     pub(super) asr_dl: Option<DownloadProgress>,
     pub(super) align_dl: Option<DownloadProgress>,
-    pub(super) cuda_dl: Option<DownloadProgress>,
     pub(super) asr_dl_busy: bool,
     pub(super) asr_size_locked: bool,
     pub(super) align_dl_busy: bool,
-    pub(super) cuda_dl_busy: bool,
 }
 
 impl OneAsrApp {
@@ -176,15 +171,12 @@ impl OneAsrApp {
         // Use probe cache — never re-stat model dirs on every scroll paint.
         let asr_ready = self.asr_ready;
         let align_ready = self.align_ready;
-        let cuda_ready = self.cuda_ready;
         // Progress is keyed by model id — never show another size’s snapshot here.
         let asr_dl = self.progress_for(asr_id).cloned();
         let align_dl = self.progress_for(ModelId::QwenAlign06B).cloned();
-        let cuda_dl = self.progress_for(ModelId::CudaRuntime).cloned();
         let asr_dl_busy = self.download_busy(asr_id);
         let asr_size_locked = self.download_kind_busy(ModelKind::Asr);
         let align_dl_busy = self.download_busy(ModelId::QwenAlign06B);
-        let cuda_dl_busy = self.download_busy(ModelId::CudaRuntime);
         SettingsFormState {
             backend,
             language,
@@ -211,14 +203,11 @@ impl OneAsrApp {
             dirty,
             asr_ready,
             align_ready,
-            cuda_ready,
             asr_dl,
             align_dl,
-            cuda_dl,
             asr_dl_busy,
             asr_size_locked,
             align_dl_busy,
-            cuda_dl_busy,
         }
     }
 }

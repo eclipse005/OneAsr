@@ -38,9 +38,8 @@ pub use media::{
 pub use model::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, HTDEMUCS_FT, ModelId,
     ModelKind, QWEN3_ASR_06B, QWEN3_ASR_17B, default_aligner_model_dir, default_asr_model_dir,
-    default_demucs_model_dir, download_model, init_native_library_path, is_cuda_runtime_ready,
-    is_model_ready, probe_writable, resolve_app_root_dir, resolve_cuda_runtime_dir,
-    resolve_dll_dir, resolve_models_root,
+    default_demucs_model_dir, download_model, is_model_ready, probe_writable, resolve_app_root_dir,
+    resolve_models_root,
 };
 pub use runtime::{demote_current_thread, init_runtime};
 pub use settings::{

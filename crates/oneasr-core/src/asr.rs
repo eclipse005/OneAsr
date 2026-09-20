@@ -472,7 +472,7 @@ impl<'a> Pipeline<'a> {
 
     /// Build the master WAV the rest of the pipeline consumes.
     ///
-    /// With separation on, the input is decoded **once** at its native rate for
+    /// With separation on, the input is decoded **once** at 44.1 kHz for
     /// HTDemucs and the vocals are transcoded to the 16 kHz master; without it
     /// the input is transcoded directly. Either way exactly one full decode
     /// feeds the run.
@@ -511,8 +511,8 @@ impl<'a> Pipeline<'a> {
         Ok(conv)
     }
 
-    /// Separate the vocals stem (HTDemucs v4, native Rust inference) and return
-    /// the vocals WAV. Runs before VAD so chunk planning and ASR both see the
+    /// Separate the vocals stem (HTDemucs v4, wgpu/CPU) and return the vocals
+    /// WAV. Runs before VAD so chunk planning and ASR both see the
     /// music-suppressed audio.
     fn stage_separate_vocals(&self, input: &Path, work_dir: &Path) -> Result<PathBuf, AsrError> {
         self.emit(StageUpdate::new(AsrStage::Separating));
@@ -1089,16 +1089,69 @@ mod tests {
     }
 
     #[test]
+    fn check_demucs_rejects_legacy_merged_weights() {
+        let parent = std::env::temp_dir().join(format!(
+            "oneasr_demucs_legacy_{}",
+            std::process::id()
+        ));
+        let dir = parent.join("htdemucs_ft");
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Old CUDA-era merged bag must not count as ready.
+        std::fs::write(dir.join("htdemucs_ft.safetensors"), vec![0u8; 4096]).unwrap();
+        let err = check_demucs_model_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
+        assert!(err.contains("人声分离"), "{err}");
+
+        // Wrong size of the vocals shard is still incomplete.
+        std::fs::write(
+            dir.join(crate::engine::local::DEMUCS_WEIGHTS_FILE),
+            vec![0u8; 4096],
+        )
+        .unwrap();
+        let err = check_demucs_model_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
+        assert!(err.contains("字节"), "{err}");
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn check_demucs_custom_dir_looks_for_vocals_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr_demucs_custom_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("htdemucs_ft.safetensors"), vec![0u8; 4096]).unwrap();
+        let err = check_demucs_model_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
+
+        std::fs::write(
+            dir.join(crate::engine::local::DEMUCS_WEIGHTS_FILE),
+            vec![0u8; 2048],
+        )
+        .unwrap();
+        assert!(
+            check_demucs_model_dir(&dir).is_ok(),
+            "{:?}",
+            check_demucs_model_dir(&dir)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn asr_and_aligner_ready_caches_do_not_alias() {
         let dir = std::env::temp_dir().join(format!("oneasr_role_cache_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), vec![0u8; 2048]).unwrap();
         std::fs::write(dir.join("model.safetensors"), vec![0u8; 2048]).unwrap();
 
-        assert!(check_aligner_model_dir(&dir).is_ok());
-        let err = check_asr_model_dir(&dir).unwrap_err().to_string();
-        assert!(err.contains("tokenizer.json"), "{err}");
+        assert!(check_asr_model_dir(&dir).is_ok());
+        let err = check_aligner_model_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains("tokenizer_config.json"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

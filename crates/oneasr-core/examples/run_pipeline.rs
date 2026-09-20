@@ -2,15 +2,15 @@
 //!
 //! Prefer the dedicated binary when possible:
 //! ```powershell
-//! cargo run -p oneasr-core --release --bin oneasr-cli --features cuda -- `
+//! cargo run -p oneasr-core --release --bin oneasr-cli -- `
 //!   transcribe --input "C:\path\to\video.mp4" --app-root "D:\OneAsr" `
-//!   --language zh --chunk-seconds 60 --backend cuda
+//!   --language zh --chunk-seconds 60 --backend auto
 //! ```
 //!
 //! This example remains for backward-compatible scripts:
 //! ```powershell
-//! cargo run -p oneasr-core --release --example run_pipeline --features cuda -- `
-//!   --input "C:\path\to\video.mp4" --app-root "D:\OneAsr" --chunk-seconds 60 --backend cuda
+//! cargo run -p oneasr-core --release --example run_pipeline -- `
+//!   --input "C:\path\to\video.mp4" --app-root "D:\OneAsr" --chunk-seconds 60 --backend auto
 //! ```
 
 use std::env;
@@ -18,14 +18,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use oneasr_core::{
-    init_native_library_path, process_media_file_with_progress, StageClock, StageUpdate,
-    Settings,
+    process_media_file_with_progress, StageClock, StageUpdate, Settings,
 };
 
 fn usage() -> ! {
     eprintln!(
         "Usage: run_pipeline --input <media> [--app-root <dir>] [--language zh] \
-         [--chunk-seconds 60] [--backend cuda|cpu|auto] [--max-new-tokens N] [--output <srt>]\n\
+         [--chunk-seconds 60] [--backend gpu|cpu|auto] [--max-new-tokens N] [--output <srt>]\n\
          Prefer: cargo run -p oneasr-core --release --bin oneasr-cli -- transcribe ..."
     );
     std::process::exit(2);
@@ -51,7 +50,7 @@ fn main() {
     let chunk_seconds: u32 = arg_value(&args, "--chunk-seconds")
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
-    let backend = arg_value(&args, "--backend").unwrap_or_else(|| "cuda".into());
+    let backend = arg_value(&args, "--backend").unwrap_or_else(|| "auto".into());
     let max_new_tokens = arg_value(&args, "--max-new-tokens").and_then(|s| s.parse().ok());
     let output_copy = arg_value(&args, "--output").map(PathBuf::from);
 
@@ -68,13 +67,6 @@ fn main() {
         std::process::exit(1);
     }
 
-    if let Some(dll) = oneasr_core::resolve_cuda_runtime_dir() {
-        register_dll_dir(&dll);
-    } else {
-        register_dll_dir(&app_root_path.join("dll"));
-    }
-    init_native_library_path();
-
     let mut settings = Settings {
         language,
         chunk_target_seconds: chunk_seconds.clamp(30, 180),
@@ -84,8 +76,8 @@ fn main() {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
-    let asr_06 = app_root_path.join("models").join("Qwen3-ASR-0.6B");
-    let align = app_root_path.join("models").join("Qwen3-ForcedAligner-0.6B");
+    let asr_06 = app_root_path.join("models").join("Qwen3-ASR-0.6B-hf");
+    let align = app_root_path.join("models").join("Qwen3-ForcedAligner-0.6B-hf");
     if asr_06.is_dir() {
         settings.asr_model_dir = asr_06;
     }
@@ -167,22 +159,4 @@ fn main() {
     }
 }
 
-fn register_dll_dir(dll_dir: &std::path::Path) {
-    let _ = std::fs::create_dir_all(dll_dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = dll_dir
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        unsafe extern "system" {
-            fn SetDllDirectoryW(path: *const u16) -> i32;
-        }
-        unsafe {
-            let _ = SetDllDirectoryW(wide.as_ptr());
-        }
-        eprintln!("dll_dir: {}", dll_dir.display());
-    }
-}
+
