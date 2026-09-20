@@ -45,15 +45,15 @@
 
 ## 下载与安装
 
-> 源码仓库不含模型与安装包。请从 **[Releases](https://github.com/eclipse005/OneAsr/releases)** 下载对应平台的包。
+当前版本 **[v1.0.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.0.0)**（点文件名即下载）：
 
-| 包 | 说明 |
-|----|------|
-| Windows 安装包 `*_windows_setup.exe` | 向导安装（GUI + CLI） |
-| Windows 便携包 `*_windows_portable.zip` | 解压后运行 `oneasr.exe` |
-| Linux 安装包 `*_linux_x64.deb` | Debian / Ubuntu |
-| Linux 便携包 `*_linux_x64.tar.gz` | 解压即用 |
-| macOS `*_macos.dmg` | Apple Silicon（M 芯片） |
+| 平台 | 下载 |
+|------|------|
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_macos.dmg) |
+
+[历史版本](https://github.com/eclipse005/OneAsr/releases)
 
 **首次使用：**
 
