@@ -6,6 +6,8 @@
 # that writes LF from fighting the checkout.
 * text=auto
 *.rs text eol=crlf
+*.sh text eol=lf
+*.yml text eol=lf
 
 # Binary assets: never touched by the end-of-line machinery.
 *.png binary

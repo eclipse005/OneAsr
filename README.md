@@ -238,6 +238,19 @@ cargo build -p oneasr-core --release --bin oneasr-cli
 
 同一二进制含 wgpu GPU 与 CPU；无可用 GPU 时自动走 CPU。
 
+### 3. 发 GitHub Release
+
+在 `wgpu`（或之后的 `main`）上改好版本并打 tag，Action 会编出各平台安装包并挂到 Release：
+
+```powershell
+# 1. Cargo.toml 的 version 改成 1.0.1（或让我改）
+# 2. 提交、推送
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+产物：`*_setup.exe` / `*_portable.zip`（Windows）、`*_linux_x64.deb` + `.tar.gz`、`*_macos_arm64.dmg` / `*_macos_x64.dmg`。macOS 包未签名，用户需右键打开。
+
 ---
 
 ## 许可

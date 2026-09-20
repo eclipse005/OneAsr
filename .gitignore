@@ -17,8 +17,7 @@
 # Release packaging output
 /dist
 /release
-# Local-only: packing scripts + forum draft (not for public repo)
-/scripts/
+# Forum draft stays local
 /forum-post.md
 # Local tooling workspace: scratch files, notes, audition material (never committed)
 /.workbuddy/
