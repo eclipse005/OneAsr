@@ -2,7 +2,7 @@
 
 **本地 · 离线 · 批量音视频 → SRT / TXT 字幕**
 
-Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 与 ForcedAligner，从音视频直接产出带时间轴的字幕文件。
+支持 Windows / Linux / macOS。不上传云端，不依赖在线 API。基于阿里通义 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 与 ForcedAligner，从音视频直接产出带时间轴的字幕文件。GPU 加速：NVIDIA、AMD、Intel、Mac M 芯片。
 
 ```text
 音视频  →  [人声分离]  →  VAD 分段  →  识别  →  对齐打轴  →  智能断句  →  *.srt / *.txt
@@ -19,7 +19,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 | **完全本地** | 识别与对齐均在本机完成，素材不出机 |
 | **批量友好** | 列表队列一次丢多个文件，进度与阶段一目了然 |
 | **时间轴可靠** | ForcedAligner 词级对齐 + 字幕长度预设，不是“整段瞎估时间” |
-| **一安装包两后端** | 同一二进制走 wgpu GPU（N/A/Intel 独显）或 CPU；只需显卡驱动 |
+| **GPU 加速** | NVIDIA、AMD、Intel、Mac M 芯片；无独显走 CPU |
 | **轻量界面** | 原生 GPUI 亮色列表，无 Electron 臃肿壳 |
 
 ---
@@ -33,7 +33,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 - **VAD 智能分段**：目标段长 **30–180 秒**（默认 60），长音频更稳
 - **输出格式可选**：SRT 字幕 / TXT 纯文本（逐句一行）可同时选，至少保留一种
 - **中文字形可选**：原文（默认，保持模型输出）/ 简体 / 繁体，仅对中文、粤语素材生效；转换在导出前完成，不影响时间轴
-- **人声分离（可选）**：内置 HTDemucs v4（人声权重）原生推理，转录前压掉背景音乐 / 噪声；与识别/对齐同一套 wgpu GPU / CPU 后端
+- **人声分离（可选）**：内置 HTDemucs v4（人声权重），转录前压掉背景音乐 / 噪声；与识别/对齐同一套 GPU / CPU
 - **字幕长度预设**：短 / 标准 / 松，控制单行信息量
 - **处理明细**：各阶段耗时可看，方便对比机器与参数
 - **字幕输出位置**：默认与视频同目录，设置里可切换到指定文件夹（如 `{安装目录}/output/`）
@@ -45,19 +45,24 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 ## 下载与安装
 
-> 源码仓库不含模型与安装包。请从 **[Releases](https://github.com/eclipse005/OneAsr/releases)** 获取 `setup` / 便携包。
+> 源码仓库不含模型与安装包。请从 **[Releases](https://github.com/eclipse005/OneAsr/releases)** 下载对应平台的包。
 
-| 包类型 | 说明 |
-|--------|------|
-| **安装包** `OneAsr_*_setup.exe` | 按向导安装（含 GUI + `oneasr-cli.exe`） |
-| **便携包** `OneAsr_*_portable.zip` | 解压后运行 `oneasr.exe`（同样含 CLI） |
+| 包 | 说明 |
+|----|------|
+| Windows 安装包 `*_setup.exe` | 向导安装（GUI + CLI） |
+| Windows 便携包 `*_portable.zip` | 解压后运行 `oneasr.exe` |
+| Linux `*_linux_x64.deb` / `.tar.gz` | 安装包或解压即用 |
+| macOS `*_macos_arm64.dmg` | Apple Silicon（M 芯片） |
+| macOS `*_macos_x64.dmg` | Intel |
 
 **首次使用：**
 
-1. 运行 `oneasr.exe`
+1. 运行主程序（Windows `oneasr.exe`，Linux / macOS `oneasr`）
 2. **设置** → 下载 **ASR**（建议先 0.6B）+ **ForcedAligner**（必下）
 3. 选好源语言 → 添加音视频 → 开始
 4. 完成后在输出目录查看同名 `.srt`
+
+macOS 包未签名，需右键打开。Linux 建议把 tar.gz 解压到用户目录（模型写入应用旁的 `models/`）。
 
 ---
 
@@ -78,13 +83,13 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 ```text
 {app}/
-  oneasr.exe
-  oneasr-cli.exe      # 无界面命令行，与 GUI 同一套流水线
-  bin/ffmpeg.exe      # 安装包已带；源码开发需自行放置
-  models/             # ASR / Aligner 权重（官方 Qwen `-hf`）
-  output/             # 可选的统一输出目录（默认字幕存视频同目录）
-  runs/               # 中间文件（任务结束自动清理）
-  oneasr-error.log    # 崩溃/错误日志（闪退时可附上）
+  oneasr / oneasr.exe
+  oneasr-cli / oneasr-cli.exe   # 无界面命令行，与 GUI 同一套流水线
+  bin/ffmpeg[.exe]              # 安装包已带；源码开发需自行放置
+  models/                       # ASR / Aligner 权重（官方 Qwen `-hf`）
+  output/                       # 可选的统一输出目录（默认字幕存视频同目录）
+  runs/                         # 中间文件（任务结束自动清理）
+  oneasr-error.log              # 崩溃/错误日志（闪退时可附上）
 ```
 
 ---
@@ -93,10 +98,9 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 | 项目 | 说明 |
 |------|------|
-| 系统 | Windows 10 / 11（64 位） |
-| 显卡 | 推荐独显，**4GB+** 显存（0.6B）；1.7B 建议 **6GB+**。NVIDIA / AMD / Intel 均可 |
-| 无独显 | 可用 CPU，速度明显更慢 |
-| 驱动 | 保持较新即可（能正常玩游戏一般够用）；**不必**装 CUDA Toolkit |
+| 系统 | Windows 10 / 11、Linux、macOS（Apple Silicon / Intel） |
+| 加速 | NVIDIA、AMD、Intel、Mac M 芯片；推荐 **4GB+** 显存（0.6B），1.7B 建议 **6GB+** |
+| 无独显 | 走 CPU，速度明显更慢 |
 | 网络 | 仅首次下模型需要；识别过程可离线 |
 
 ---
@@ -112,7 +116,7 @@ Windows 桌面端。不上传云端，不依赖在线 API。基于阿里通义 [
 
 ## 命令行 / Python
 
-安装包和便携包都带 `oneasr-cli.exe`，与 GUI 同一条流水线。先用 GUI 把模型下载到安装目录，再调用 CLI。默认 `--app-root` 就是 exe 所在目录。
+安装包都带 `oneasr-cli`（Windows 为 `oneasr-cli.exe`），与 GUI 同一条流水线。先用 GUI 把模型下载到安装目录，再调用 CLI。默认 `--app-root` 就是程序所在目录。
 
 ```powershell
 oneasr-cli.exe transcribe --input "C:\path\to\video.mp4" --language zh --backend auto --output "C:\path\to\out.srt"
@@ -168,12 +172,13 @@ ffmpeg → 16 kHz mono
 |------|------|
 | ASR | [qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) |
 | Aligner | [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) |
+| 人声分离 | [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu) |
 
 ---
 
 ## 从源码构建
 
-**环境：** Rust（edition 2024）· [VS 2022 C++ 生成工具](https://visualstudio.microsoft.com/downloads/)（wgpu 引擎会编一份 soxr）
+**环境：** Rust（edition 2024）· CMake / C 编译器（引擎会编一份 soxr）。Windows 用 [VS 2022 C++ 生成工具](https://visualstudio.microsoft.com/downloads/)；Linux / macOS 用 clang 或 gcc。
 
 ### 1. 准备 ffmpeg（必需）
 
@@ -236,11 +241,11 @@ cargo build -p oneasr --release
 cargo build -p oneasr-core --release --bin oneasr-cli
 ```
 
-同一二进制含 wgpu GPU 与 CPU；无可用 GPU 时自动走 CPU。
+同一二进制含 GPU 与 CPU；无可用 GPU 时自动走 CPU。
 
 ### 3. 发 GitHub Release
 
-在 `wgpu`（或之后的 `main`）上改好版本并打 tag，Action 会编出各平台安装包并挂到 Release：
+改好 `Cargo.toml` 版本并打 tag，Action 会编出各平台安装包并挂到 Release：
 
 ```powershell
 # 1. Cargo.toml 的 version 改成 1.0.1（或让我改）
