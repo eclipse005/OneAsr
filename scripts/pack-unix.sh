@@ -5,7 +5,7 @@
 #   ./scripts/pack-unix.sh --version 1.0.1 --os macos --arch arm64
 #
 # Linux:  OneAsr_<ver>_linux_<arch>.tar.gz  +  OneAsr_<ver>_linux_<arch>.deb
-# macOS:  OneAsr_<ver>_macos_<arch>.dmg     (OneAsr.app + Applications shortcut)
+# macOS:  OneAsr_<ver>_macos.dmg            (Apple Silicon .app + Applications shortcut)
 set -euo pipefail
 
 VERSION=""
@@ -227,7 +227,7 @@ EOF
   mkdir -p "$DMG_DIR"
   cp -R "$APP" "$DMG_DIR/OneAsr.app"
   ln -s /Applications "$DMG_DIR/Applications"
-  DMG="$ROOT/release/OneAsr_${VERSION}_macos_${ARCH}.dmg"
+  DMG="$ROOT/release/OneAsr_${VERSION}_macos.dmg"
   echo "==> $DMG"
   rm -f "$DMG"
   hdiutil create -volname "OneAsr $VERSION" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG"

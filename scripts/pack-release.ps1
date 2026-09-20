@@ -5,8 +5,8 @@
 .DESCRIPTION
   One product package:
 
-    release\OneAsr_<ver>_setup.exe
-    release\OneAsr_<ver>_portable.zip
+    release\OneAsr_<ver>_windows_setup.exe
+    release\OneAsr_<ver>_windows_portable.zip
 
   Install / portable layout:
     OneAsr/
@@ -240,7 +240,7 @@ Get-ChildItem -Recurse $stage -File | ForEach-Object {
 $releaseDir = Join-Path $Root "release"
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
-$portableZip = Join-Path $releaseDir "OneAsr_${Version}_portable.zip"
+$portableZip = Join-Path $releaseDir "OneAsr_${Version}_windows_portable.zip"
 Write-Host "==> Portable zip $portableZip"
 if (Test-Path -LiteralPath $portableZip) {
   Remove-Item -Force -LiteralPath $portableZip
@@ -266,7 +266,7 @@ if (-not $SkipInstaller) {
     Write-Host "==> ISCC $iscc"
     & $iscc "/DMyAppVersion=$Version" $iss
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE)" }
-    $setup = Join-Path $releaseDir "OneAsr_${Version}_setup.exe"
+    $setup = Join-Path $releaseDir "OneAsr_${Version}_windows_setup.exe"
     if (Test-Path -LiteralPath $setup) {
       Write-Host "    installer: $setup"
     } else {
@@ -278,5 +278,5 @@ if (-not $SkipInstaller) {
 Write-Host ""
 Write-Host "==> Done."
 Write-Host "    Portable stage: dist\OneAsr\"
-Write-Host "    Portable zip:   release\OneAsr_${Version}_portable.zip"
-Write-Host "    Installer:      release\OneAsr_${Version}_setup.exe"
+Write-Host "    Portable zip:   release\OneAsr_${Version}_windows_portable.zip"
+Write-Host "    Installer:      release\OneAsr_${Version}_windows_setup.exe"

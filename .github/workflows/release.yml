@@ -1,13 +1,12 @@
 # Tag v1.0.1 (or any v*) on this repo → build installers and attach them
 # to a GitHub Release. workflow_dispatch builds artifacts without publishing.
 #
-# Expected files on a tag:
-#   OneAsr_<ver>_setup.exe
-#   OneAsr_<ver>_portable.zip
-#   OneAsr_<ver>_linux_x64.tar.gz
+# Expected files on a tag (one artifact = one file, names match the download):
+#   OneAsr_<ver>_windows_setup.exe
+#   OneAsr_<ver>_windows_portable.zip
 #   OneAsr_<ver>_linux_x64.deb
-#   OneAsr_<ver>_macos_arm64.dmg
-#   OneAsr_<ver>_macos_x64.dmg
+#   OneAsr_<ver>_linux_x64.tar.gz
+#   OneAsr_<ver>_macos.dmg
 name: Release
 
 on:
@@ -63,10 +62,13 @@ jobs:
         run: ./scripts/pack-release.ps1 -Version ${{ needs.version.outputs.version }}
       - uses: actions/upload-artifact@v4
         with:
-          name: windows
-          path: |
-            release/OneAsr_*_setup.exe
-            release/OneAsr_*_portable.zip
+          name: OneAsr_${{ needs.version.outputs.version }}_windows_setup.exe
+          path: release/OneAsr_*_windows_setup.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OneAsr_${{ needs.version.outputs.version }}_windows_portable.zip
+          path: release/OneAsr_*_windows_portable.zip
           if-no-files-found: error
 
   linux:
@@ -94,10 +96,13 @@ jobs:
           ./scripts/pack-unix.sh --version ${{ needs.version.outputs.version }} --os linux --arch x64
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
-          path: |
-            release/OneAsr_*_linux_x64.tar.gz
-            release/OneAsr_*_linux_x64.deb
+          name: OneAsr_${{ needs.version.outputs.version }}_linux_x64.deb
+          path: release/OneAsr_*_linux_x64.deb
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OneAsr_${{ needs.version.outputs.version }}_linux_x64.tar.gz
+          path: release/OneAsr_*_linux_x64.tar.gz
           if-no-files-found: error
 
   macos-arm64:
@@ -116,32 +121,12 @@ jobs:
           ./scripts/pack-unix.sh --version ${{ needs.version.outputs.version }} --os macos --arch arm64
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: release/OneAsr_*_macos_arm64.dmg
-          if-no-files-found: error
-
-  macos-x64:
-    needs: version
-    runs-on: macos-13
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-macos-x64
-      - name: Pack
-        run: |
-          chmod +x scripts/pack-unix.sh
-          ./scripts/pack-unix.sh --version ${{ needs.version.outputs.version }} --os macos --arch x64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-x64
-          path: release/OneAsr_*_macos_x64.dmg
+          name: OneAsr_${{ needs.version.outputs.version }}_macos.dmg
+          path: release/OneAsr_*_macos.dmg
           if-no-files-found: error
 
   publish:
-    needs: [version, windows, linux, macos-arm64, macos-x64]
+    needs: [version, windows, linux, macos-arm64]
     if: ${{ always() && !cancelled() && needs.windows.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:

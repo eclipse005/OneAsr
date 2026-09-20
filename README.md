@@ -49,11 +49,11 @@
 
 | 包 | 说明 |
 |----|------|
-| Windows 安装包 `*_setup.exe` | 向导安装（GUI + CLI） |
-| Windows 便携包 `*_portable.zip` | 解压后运行 `oneasr.exe` |
-| Linux `*_linux_x64.deb` / `.tar.gz` | 安装包或解压即用 |
-| macOS `*_macos_arm64.dmg` | Apple Silicon（M 芯片） |
-| macOS `*_macos_x64.dmg` | Intel |
+| Windows 安装包 `*_windows_setup.exe` | 向导安装（GUI + CLI） |
+| Windows 便携包 `*_windows_portable.zip` | 解压后运行 `oneasr.exe` |
+| Linux 安装包 `*_linux_x64.deb` | Debian / Ubuntu |
+| Linux 便携包 `*_linux_x64.tar.gz` | 解压即用 |
+| macOS `*_macos.dmg` | Apple Silicon（M 芯片） |
 
 **首次使用：**
 
@@ -98,7 +98,7 @@ macOS 包未签名，需右键打开。Linux 建议把 tar.gz 解压到用户目
 
 | 项目 | 说明 |
 |------|------|
-| 系统 | Windows 10 / 11、Linux、macOS（Apple Silicon / Intel） |
+| 系统 | Windows 10 / 11、Linux、macOS（Apple Silicon） |
 | 加速 | NVIDIA、AMD、Intel、Mac M 芯片；推荐 **4GB+** 显存（0.6B），1.7B 建议 **6GB+** |
 | 无独显 | 走 CPU，速度明显更慢 |
 | 网络 | 仅首次下模型需要；识别过程可离线 |
@@ -189,7 +189,6 @@ ffmpeg → 16 kHz mono
 | Windows x64 | `OneAsr/bin/ffmpeg.exe` | `ffmpeg.exe` |
 | Linux x64 | `OneAsr/bin/ffmpeg` | `ffmpeg-linux-x64` |
 | Linux arm64 | `OneAsr/bin/ffmpeg` | `ffmpeg-linux-arm64` |
-| macOS Intel | `OneAsr/bin/ffmpeg` | `ffmpeg-macos-x64` |
 | macOS Apple Silicon | `OneAsr/bin/ffmpeg` | `ffmpeg-macos-arm64` |
 
 Windows：
@@ -217,7 +216,6 @@ chmod +x bin/ffmpeg
 ffmpeg.exe           6E1C77F66726DCAFB8008D9081972D5B28590110EB7BF906EAEEF9298D366359
 ffmpeg-linux-x64     ECE002A9EEC0AC763A0A5FBC24FCCFFF6466425A8BED18D5C2836F2B79470352
 ffmpeg-linux-arm64   22F924A690E283B8907C70E6D892586A448AB1BC62013DC8D1BA7FE77E058313
-ffmpeg-macos-x64     835A915980B63A9CEC5F71C41B9CEFA1C85CC4AB2910C60C516A1756D9E48665
 ffmpeg-macos-arm64   7A6F6EDCCFB4B6E5AB2D4EA4F6882092B43933537A6819476D5361CBF6EED4DB
 ```
 </details>
@@ -254,7 +252,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-产物：`*_setup.exe` / `*_portable.zip`（Windows）、`*_linux_x64.deb` + `.tar.gz`、`*_macos_arm64.dmg` / `*_macos_x64.dmg`。macOS 包未签名，用户需右键打开。
+产物：Windows 安装包 / 便携包、Linux `.deb` / `.tar.gz`、macOS `.dmg`（Apple Silicon）。macOS 包未签名，用户需右键打开。每个文件单独下载，不用下一个打包在一起的压缩包。
 
 ---
 
