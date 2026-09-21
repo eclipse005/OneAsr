@@ -7,7 +7,11 @@
 * text=auto
 *.rs text eol=crlf
 *.sh text eol=lf
+*.command text eol=lf
 *.yml text eol=lf
+
+# macOS 磁盘映像里的说明文件：原样交给用户，固定 LF。
+installer/macos/* text eol=lf
 
 # Binary assets: never touched by the end-of-line machinery.
 *.png binary

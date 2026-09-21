@@ -62,7 +62,7 @@
 3. 选好源语言 → 添加音视频 → 开始
 4. 完成后在输出目录查看同名 `.srt`
 
-macOS 包未签名，需右键打开。Linux 建议把 tar.gz 解压到用户目录（模型写入应用旁的 `models/`）。
+macOS 包未签名：磁盘映像里附有「双击我安装.command」和「安装说明.txt」，拖进去双击一次即可（它的作用是清掉下载隔离标记，否则会误报「已损坏，无法打开」，右键打开对此无效）。手动等价操作：`sudo xattr -cr /Applications/OneAsr.app`。Linux 建议把 tar.gz 解压到用户目录（模型写入应用旁的 `models/`）。
 
 ---
 
@@ -252,7 +252,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-产物：Windows 安装包 / 便携包、Linux `.deb` / `.tar.gz`、macOS `.dmg`（Apple Silicon）。macOS 包未签名，用户需右键打开。每个文件单独下载，不用下一个打包在一起的压缩包。
+产物：Windows 安装包 / 便携包、Linux `.deb` / `.tar.gz`、macOS `.dmg`（Apple Silicon）。macOS 包未签名，映像内附「双击我安装.command」+「安装说明.txt」，用户双击一次完成安装并解除 Gatekeeper 拦截。每个文件单独下载，不用下一个打包在一起的压缩包。
 
 ---
 

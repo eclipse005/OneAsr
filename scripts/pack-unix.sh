@@ -5,7 +5,8 @@
 #   ./scripts/pack-unix.sh --version 1.0.1 --os macos --arch arm64
 #
 # Linux:  OneAsr_<ver>_linux_<arch>.tar.gz  +  OneAsr_<ver>_linux_<arch>.deb
-# macOS:  OneAsr_<ver>_macos.dmg            (Apple Silicon .app + Applications shortcut)
+# macOS:  OneAsr_<ver>_macos.dmg            (Apple Silicon .app + Applications shortcut
+#                                            + 安装说明.txt + 双击我安装.command)
 set -euo pipefail
 
 VERSION=""
@@ -227,6 +228,15 @@ EOF
   mkdir -p "$DMG_DIR"
   cp -R "$APP" "$DMG_DIR/OneAsr.app"
   ln -s /Applications "$DMG_DIR/Applications"
+  # 未签名分发：Gatekeeper 会把下载的 .app 判成「已损坏」，必须在映像里
+  # 附上中文说明和一键修复脚本；脚本自己会把 App 装进「应用程序」并解除拦截。
+  MACOS_ASSETS="$ROOT/installer/macos"
+  [[ -f "$MACOS_ASSETS/install-notes.txt" && -f "$MACOS_ASSETS/fix-and-open.command" ]] || {
+    echo "missing installer/macos assets (install-notes.txt / fix-and-open.command)" >&2
+    exit 1
+  }
+  install -m 0644 "$MACOS_ASSETS/install-notes.txt" "$DMG_DIR/安装说明.txt"
+  install -m 0755 "$MACOS_ASSETS/fix-and-open.command" "$DMG_DIR/双击我安装.command"
   DMG="$ROOT/release/OneAsr_${VERSION}_macos.dmg"
   echo "==> $DMG"
   rm -f "$DMG"
