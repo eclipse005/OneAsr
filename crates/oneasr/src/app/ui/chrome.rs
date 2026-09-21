@@ -9,6 +9,23 @@ use crate::app::prelude::*;
 /// build that actually shipped.
 const APP_VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
+/// Whether the self-drawn min / max / close buttons are drawn at all.
+///
+/// Windows-only: GPUI's macOS backend implements `on_hit_test_window_control` as a
+/// no-op (`vendor/gpui/src/platform/mac/window.rs`), and these buttons deliberately
+/// carry no `on_click` (see below), so on macOS they can only be dead decoration.
+/// There the system traffic lights (top-left) do the job instead.
+const SHOW_CAPTION_BUTTONS: bool = !cfg!(target_os = "macos");
+
+/// Left padding of the title bar.
+///
+/// macOS floats the native traffic lights above the content view (transparent
+/// title bar), so without an inset the self-drawn `OneAsr v1.0.0` label sits under
+/// them and reads as a truncated version number. 78px ≈ 13px edge + three 14pt
+/// buttons + two 6pt gaps, plus a little slack — worth a one-time eyeball check on
+/// real hardware (anything within ±8px is fine).
+const TITLEBAR_PAD_LEFT: Pixels = if cfg!(target_os = "macos") { px(78.) } else { px(12.) };
+
 impl OneAsrApp {
     /// Custom title bar. GPUI never sets `WS_CAPTION`, so the "native" caption is only
     /// a DWM fallback — missing or dead on some Win10 machines (the user report:
@@ -19,6 +36,11 @@ impl OneAsrApp {
     /// GPUI maps the areas to HTCAPTION / HTMINBUTTON / HTMAXBUTTON / HTCLOSE in
     /// `WM_NCHITTEST` and the OS performs the action. Double-click on the drag strip
     /// also toggles maximize for free (DefWindowProc on HTCAPTION).
+    ///
+    /// macOS: `WindowControlArea` is ignored by the platform backend, so the caption
+    /// buttons are not drawn (see `SHOW_CAPTION_BUTTONS`) and the left inset keeps the
+    /// window title clear of the native traffic lights. Dragging still works — that
+    /// comes from the transparent title bar itself, not from `WindowControlArea::Drag`.
     pub(super) fn render_titlebar(&mut self) -> impl IntoElement {
         div()
             .h(px(32.))
@@ -37,7 +59,7 @@ impl OneAsrApp {
                     .min_w_0()
                     .flex()
                     .items_center()
-                    .pl_3()
+                    .pl(TITLEBAR_PAD_LEFT)
                     .overflow_hidden()
                     .window_control_area(WindowControlArea::Drag)
                     .child(
@@ -62,24 +84,27 @@ impl OneAsrApp {
                             ),
                     ),
             )
-            .child(caption_btn(
-                "titlebar-min",
-                "icons/win-min.svg",
-                WindowControlArea::Min,
-                false,
-            ))
-            .child(caption_btn(
-                "titlebar-max",
-                "icons/win-max.svg",
-                WindowControlArea::Max,
-                false,
-            ))
-            .child(caption_btn(
-                "titlebar-close",
-                "icons/win-close.svg",
-                WindowControlArea::Close,
-                true,
-            ))
+            // 系统红绿灯在 macOS 上负责最小化 / 全屏 / 关闭，自绘按钮只在别处出现。
+            .when(SHOW_CAPTION_BUTTONS, |el| {
+                el.child(caption_btn(
+                    "titlebar-min",
+                    "icons/win-min.svg",
+                    WindowControlArea::Min,
+                    false,
+                ))
+                .child(caption_btn(
+                    "titlebar-max",
+                    "icons/win-max.svg",
+                    WindowControlArea::Max,
+                    false,
+                ))
+                .child(caption_btn(
+                    "titlebar-close",
+                    "icons/win-close.svg",
+                    WindowControlArea::Close,
+                    true,
+                ))
+            })
     }
 
     pub(super) fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
