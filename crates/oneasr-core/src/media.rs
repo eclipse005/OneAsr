@@ -203,6 +203,8 @@ fn ensure_executable(path: &Path) -> bool {
 }
 
 fn ffmpeg_command(ffmpeg: &Path) -> Command {
+    // `mut` is only needed by the Windows-only `creation_flags` call below.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = Command::new(ffmpeg);
     #[cfg(windows)]
     {

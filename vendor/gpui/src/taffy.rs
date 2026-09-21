@@ -309,7 +309,11 @@ impl ToTaffy<taffy::style::Style> for Style {
             unit: &Option<u16>,
         ) -> Vec<taffy::GridTemplateComponent<T>> {
             // grid-template-columns: repeat(<number>, minmax(0, 1fr));
-            unit.map(|count| vec![repeat(count, vec![minmax(length(0.0), fr(1.0))])])
+            // The `_f32` suffixes are not cosmetic: `f32: From<f64>` is not
+            // satisfied, so bare `0.0` / `1.0` fall back to `f32` through the
+            // `float_literal_f32_fallback` lint — a warning today (see
+            // PATCHES.md) and a hard error in a future Rust release.
+            unit.map(|count| vec![repeat(count, vec![minmax(length(0.0_f32), fr(1.0_f32))])])
                 .unwrap_or_default()
         }
 

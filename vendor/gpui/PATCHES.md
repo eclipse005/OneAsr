@@ -12,9 +12,16 @@ the upstream original.
 2. `src/platform/windows/direct_write.rs` — font fallback.
    `select_font` no longer panics on a missing font; it walks a candidate list
    and warns once instead.
+3. `src/taffy.rs` — grid repeat shorthand.
+   `minmax(length(0.0), fr(1.0))` spells its literals `0.0_f32` / `1.0_f32`.
+   Without the suffix they fall back to `f32` through the
+   `float_literal_f32_fallback` lint (`f32: From<f64>` is not satisfied), which
+   warns on every build — and because `gpui` is a path dependency, cargo does
+   not cap its lints, so the warning shows up in OneAsr's own build log. The
+   lint is future-incompatible: it becomes a hard error in a later Rust release.
 
 Revert to crates.io `gpui = "0.2.2"` (and drop the `[patch.crates-io]` entry in
-the workspace `Cargo.toml`) once a released version contains both fixes.
+the workspace `Cargo.toml`) once a released version contains all three fixes.
 
 ## Removed from the package
 
