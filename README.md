@@ -45,13 +45,13 @@
 
 ## 下载与安装
 
-当前版本 **[v1.0.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.0.0)**（点文件名即下载）：
+当前版本 **[v1.0.1](https://github.com/eclipse005/OneAsr/releases/tag/v1.0.1)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.0.0/OneAsr_1.0.0_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.1/OneAsr_1.0.1_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.1/OneAsr_1.0.1_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.1/OneAsr_1.0.1_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.0.1/OneAsr_1.0.1_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.0.1/OneAsr_1.0.1_macos.dmg) |
 
 [历史版本](https://github.com/eclipse005/OneAsr/releases)
 
@@ -62,7 +62,7 @@
 3. 选好源语言 → 添加音视频 → 开始
 4. 完成后在输出目录查看同名 `.srt`
 
-macOS 包未签名：磁盘映像里附有「双击我安装.command」和「安装说明.txt」，拖进去双击一次即可（它的作用是清掉下载隔离标记，否则会误报「已损坏，无法打开」，右键打开对此无效）。手动等价操作：`sudo xattr -cr /Applications/OneAsr.app`。Linux 建议把 tar.gz 解压到用户目录（模型写入应用旁的 `models/`）。
+macOS 包未签名：磁盘映像里附有「安装 OneAsr.command」和「安装说明.txt」。先右键该脚本 → 打开；macOS 15 起这条路被系统封了（弹框只剩「完成」），改用终端：`bash ` 后面把脚本文件拖进终端窗口再回车，或者手动 `sudo xattr -cr /Applications/OneAsr.app`。脚本做的事就是把 App 装进「应用程序」并清掉下载隔离标记，否则会误报「已损坏，无法打开」。Linux 建议把 tar.gz 解压到用户目录（模型写入应用旁的 `models/`）。
 
 ---
 
@@ -252,7 +252,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-产物：Windows 安装包 / 便携包、Linux `.deb` / `.tar.gz`、macOS `.dmg`（Apple Silicon）。macOS 包未签名，映像内附「双击我安装.command」+「安装说明.txt」，用户双击一次完成安装并解除 Gatekeeper 拦截。每个文件单独下载，不用下一个打包在一起的压缩包。
+产物：Windows 安装包 / 便携包、Linux `.deb` / `.tar.gz`、macOS `.dmg`（Apple Silicon）。macOS 包未签名，映像内附「安装 OneAsr.command」+「安装说明.txt」：右键打开脚本，或在终端里 `bash` 它，装好即解除 Gatekeeper 拦截。每个文件单独下载，不用下一个打包在一起的压缩包。
 
 ---
 
