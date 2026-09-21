@@ -129,8 +129,9 @@ impl OneAsrApp {
 
     /// ASR model directory chosen: rebind, probe and persist it.
     fn handle_model_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
-        self.settings.asr_model = ModelId::from_asr_dir(&dir).as_str().into();
-        self.settings.asr_model_dir = dir;
+        // Also switches the active size (the folder name is the catalog id) and
+        // remembers the folder for that size — see `Settings::set_asr_dir`.
+        self.settings.set_asr_dir(dir);
         self.settings_dirty = false;
         // Probe + persist path immediately after pick.
         self.reset_model_config(cx);
