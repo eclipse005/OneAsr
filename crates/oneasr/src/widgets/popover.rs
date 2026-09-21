@@ -101,6 +101,9 @@ pub fn lang_menu_option(
 pub fn timing_breakdown_popover(
     menu_id: SharedString,
     timing: &TaskTiming,
+    // `6.5 倍速` chip for the header line, already formatted by
+    // `realtime_factor_label`; `None` hides it.
+    rtfx: Option<SharedString>,
     progress: f32,
     on_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
@@ -179,10 +182,34 @@ pub fn timing_breakdown_popover(
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(crate::theme::ACCENT)
-                            .child(total),
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            // Rate chip, left of the total it is derived from:
+                            // media length ÷ this wall clock. The plate stays
+                            // neutral on purpose — the accent-topped chips in the
+                            // app (完成 / 用时) are things you can act on, and this
+                            // one must not read as clickable.
+                            .when_some(rtfx, |el, rtfx| {
+                                el.child(
+                                    div()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded_md()
+                                        .bg(crate::theme::MEDIA_PLATE)
+                                        .text_xs()
+                                        .text_color(crate::theme::MUTED)
+                                        .whitespace_nowrap()
+                                        .child(rtfx),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(crate::theme::ACCENT)
+                                    .child(total),
+                            ),
                     ),
             )
             .child(

@@ -127,7 +127,7 @@ fn stats_totals(stats: &StatsSummary, speed: Option<f64>) -> impl IntoElement {
             ))
             .child(stats_metric(
                 "平均速度",
-                speed.map_or_else(|| "—".into(), |f| format!("{f:.1}× 实时")),
+                speed.map_or_else(|| "—".into(), |f| format!("{f:.1} 倍速")),
             )),
     )
 }
@@ -309,7 +309,7 @@ fn stats_rows_section(stats: &StatsSummary) -> impl IntoElement {
         rows.push(stats_row("最长一次", oneasr_core::stats::format_span_secs(m)));
     }
     if let Some(f) = stats.fastest_speed {
-        rows.push(stats_row("最快一次", format!("{f:.1}× 实时")));
+        rows.push(stats_row("最快一次", format!("{f:.1} 倍速")));
     }
 
     div()

@@ -295,6 +295,9 @@ pub(super) fn task_row_view(
                                                                         ),
                                                                     ),
                                                                     timing,
+                                                                    row.rtfx_label
+                                                                        .clone()
+                                                                        .map(SharedString::from),
                                                                     timing_pop_p,
                                                                     cx.listener(
                                                                         move |this,

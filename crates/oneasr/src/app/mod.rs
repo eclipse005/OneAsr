@@ -387,6 +387,9 @@ pub(crate) struct TaskRowView {
     name: String,
     size_label: String,
     duration_label: String,
+    /// `6.5 倍速` chip in the timing card header: media length ÷ this run's wall
+    /// clock. `None` when either side is unusable — see `realtime_factor_label`.
+    rtfx_label: Option<String>,
     is_video: bool,
     timing: Option<TaskTiming>,
     opacity: f32,
