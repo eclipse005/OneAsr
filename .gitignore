@@ -17,8 +17,10 @@
 # Release packaging output
 /dist
 /release
-# Forum draft stays local
-/forum-post.md
+# Forum drafts stay local (any `forum-post*.md` variant)
+/forum-post*.md
+# Local scratch: visual pages, HTML mockups, ad-hoc output (never committed)
+/tmp/
 # Local tooling workspace: scratch files, notes, audition material (never committed)
 /.workbuddy/
 # Icon gen intermediates
