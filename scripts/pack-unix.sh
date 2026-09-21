@@ -6,7 +6,7 @@
 #
 # Linux:  OneAsr_<ver>_linux_<arch>.tar.gz  +  OneAsr_<ver>_linux_<arch>.deb
 # macOS:  OneAsr_<ver>_macos.dmg            (Apple Silicon .app + Applications shortcut
-#                                            + 安装说明.txt + 双击我安装.command)
+#                                            + 安装说明.txt + 安装 OneAsr.command)
 set -euo pipefail
 
 VERSION=""
@@ -236,7 +236,7 @@ EOF
     exit 1
   }
   install -m 0644 "$MACOS_ASSETS/install-notes.txt" "$DMG_DIR/安装说明.txt"
-  install -m 0755 "$MACOS_ASSETS/fix-and-open.command" "$DMG_DIR/双击我安装.command"
+  install -m 0755 "$MACOS_ASSETS/fix-and-open.command" "$DMG_DIR/安装 OneAsr.command"
   DMG="$ROOT/release/OneAsr_${VERSION}_macos.dmg"
   echo "==> $DMG"
   rm -f "$DMG"
