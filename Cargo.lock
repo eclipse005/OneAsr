@@ -1585,7 +1585,7 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 [[package]]
 name = "demucs-core"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/demucs-wgpu.git#5fcced9e3167bf224fd68accef8267e27e540f19"
+source = "git+https://github.com/eclipse005/demucs-wgpu.git#ac088c66980c4ea55255acfb54e6c6a4d067e0b0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4634,7 +4634,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oneasr"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4646,7 +4646,7 @@ dependencies = [
 
 [[package]]
 name = "oneasr-core"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "demucs-core",
  "ferrous-opencc",
@@ -5431,7 +5431,7 @@ dependencies = [
 [[package]]
 name = "qwen3-aligner-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/qwen3-aligner-wgpu.git#0f7a529ddc59e11089a5d0c595ad210306a37d76"
+source = "git+https://github.com/eclipse005/qwen3-aligner-wgpu.git#5c4d62a4d7e515dbd38a3a3881e4f1cf6fb46e64"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5458,7 +5458,7 @@ dependencies = [
 [[package]]
 name = "qwen3-asr-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/qwen3-asr-wgpu.git#455d186a08dc0d05f8cb0aa2aaf943d63188e303"
+source = "git+https://github.com/eclipse005/qwen3-asr-wgpu.git#9811bb009108445adb13fe1eb3bcdd50c7d2af94"
 dependencies = [
  "anyhow",
  "bytemuck",
