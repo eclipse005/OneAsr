@@ -276,9 +276,20 @@ impl OneAsrApp {
 
     pub(crate) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         let open = !self.settings_open;
-        // Closing with unsaved edits → auto-save (desktop-tool default).
-        if !open && self.is_settings_dirty(cx) {
-            self.save_settings(cx);
+        if open {
+            // Snapshot on open. Closing the drawer is a cancel: unsaved edits
+            // roll back to whatever was last persisted, never auto-saved.
+            self.settings_snapshot = Some(self.settings.clone());
+        } else if self.is_settings_dirty(cx) {
+            if let Some(snap) = self.settings_snapshot.take() {
+                self.settings = snap;
+                self.settings_dirty = false;
+                // Probes followed the staged edits — re-run them on the
+                // restored paths so the status dots tell the truth again.
+                self.refresh_model_probe();
+            }
+        } else {
+            self.settings_snapshot = None;
         }
         let cur = self.settings_progress();
         self.settings_from = cur;

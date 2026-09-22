@@ -35,6 +35,9 @@ pub(crate) struct OneAsrApp {
     settings: Settings,
     /// Unsaved settings edits (backend / paths).
     settings_dirty: bool,
+    /// Settings as they were when the drawer opened. Closing the drawer
+    /// without saving is a cancel, and the edits roll back to this.
+    settings_snapshot: Option<Settings>,
     /// Desired drawer state (open / closed).
     settings_open: bool,
     /// Drawer slide progress source → target (0 = hidden, 1 = open).
@@ -141,6 +144,7 @@ impl OneAsrApp {
             ui_font: ui_font::UiFontPlan::default(),
             settings,
             settings_dirty: false,
+            settings_snapshot: None,
             settings_open: false,
             settings_from: 0.0,
             settings_to: 0.0,

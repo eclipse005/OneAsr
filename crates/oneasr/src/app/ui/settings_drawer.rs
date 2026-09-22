@@ -76,14 +76,12 @@ impl OneAsrApp {
                     .items_center()
                     .justify_between()
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(MUTED_SOFT)
-                            .child(if form.dirty {
-                                "关闭面板时将自动保存"
-                            } else {
-                                "所有更改已保存"
-                            }),
+                        div().flex_shrink_0().child(btn(
+                            "重置",
+                            BtnKind::Quiet,
+                            true,
+                            cx.listener(|this, _, _, cx| this.reset_settings(cx)),
+                        )),
                     )
                     .child(
                         div().flex_shrink_0().child(btn(

@@ -143,11 +143,16 @@ pub struct DownloadHandle {
 }
 
 impl DownloadHandle {
-    pub fn new(model_id: ModelId) -> Self {
-        let def = model_definition(model_id);
+    /// A job for `model_id` landing in `model_dir`.
+    ///
+    /// The caller passes the directory the settings currently point at for
+    /// that component — the install layout when nothing was picked, or the
+    /// user's own folder otherwise — so a download always lands where the app
+    /// will look for the weights.
+    pub fn new(model_id: ModelId, model_dir: PathBuf) -> Self {
         Self {
             model_id,
-            model_dir: def.model_dir,
+            model_dir,
             cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -157,7 +162,7 @@ impl DownloadHandle {
     }
 }
 
-/// Download (or resume) into the install-layout dir for `id`.
+/// Download (or resume) into `handle.model_dir`.
 ///
 /// Progress callback receives **Downloading only**. Terminal state is `DownloadOutcome`.
 pub fn download_model(

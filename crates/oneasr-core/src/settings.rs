@@ -42,9 +42,11 @@ pub fn clamp_chunk_target_seconds(value: u32) -> u32 {
 ///
 /// # ASR selection model
 /// - [`Self::asr_model`] is the **active** catalog id (`Qwen3-ASR-0.6B-hf` | `1.7B-hf`).
-/// - [`Self::asr_model_dir`] is the path loaded at runtime.
-/// - Switching size via [`Self::select_asr_model`] always binds install-layout
-///   `{app}/models/{name}`.
+/// - [`Self::asr_model_dir`] is the path loaded at runtime — always
+///   [`Self::asr_dir_for`] of the active size, never stored twice.
+/// - A size's directory is either a hand-picked folder (stored **verbatim** in
+///   [`Self::asr_dirs`]) or, when nothing was picked for that size, the
+///   install layout `{app}/models/{name}`. Nothing else ever resolves a path.
 /// - Completing a download for a **non-selected** size only installs files on
 ///   disk; it must not change the active selection (see
 ///   [`Self::bind_download_if_active`]).
@@ -59,11 +61,12 @@ pub struct Settings {
 
     /// Per-size ASR directories, keyed by catalog id (`Qwen3-ASR-0.6B-hf` …).
     ///
-    /// ASR has one directory per **size**: pointing the app at a custom models
-    /// root and then switching size used to throw that root away, because
-    /// [`Self::select_asr_model`] re-bound the path to the install layout. Only
-    /// deliberate choices live here — never an install-layout default, which
-    /// would pin this machine's absolute path into the config.
+    /// ASR has one directory per **size**, stored exactly as the user picked
+    /// it — what you select is what that size loads. A size with no entry
+    /// falls back to the install layout. Only deliberate choices live here:
+    /// the install-layout default is recomputed from the app location on
+    /// every read, and storing it would pin this machine's absolute path
+    /// into the config (and break a moved app).
     #[serde(default)]
     pub asr_dirs: BTreeMap<String, PathBuf>,
     /// Qwen3-ForcedAligner directory.
@@ -265,11 +268,14 @@ impl Settings {
 
     /// Reconcile language, ASR catalog id, and model path after load / edit.
     ///
-    /// Authority:
-    /// 1. If `asr_model_dir` is a known catalog folder → that name **is** `asr_model`.
-    /// 2. Else if path empty → install-layout for `asr_model`.
-    /// 3. Else custom path → keep path; clamp `asr_model` to a valid catalog id
-    ///    for the size picker only (inference still uses the custom path).
+    /// Authority — the active size plus its per-size picks:
+    /// 1. `asr_model` picks the size; `asr_dirs[id]` is that size's folder,
+    ///    stored exactly as picked.
+    /// 2. A size with no pick uses the install layout `{app}/models/{name}`.
+    /// 3. `asr_model_dir` is then derived from the two above (never stored
+    ///    twice), and a folder that vanished on disk falls back to the install
+    ///    layout. A config from before `asr_dirs` existed is seeded from its
+    ///    single folder, so a hand-picked path survives the upgrade.
     pub fn normalize(&mut self) {
         let mut notes = Vec::new();
         self.normalize_with_notes(&mut notes);
@@ -309,32 +315,39 @@ impl Settings {
             notes,
         );
 
-        if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
-            self.asr_model = id.as_str().into();
-            repair_stale_model_dir(
-                &mut self.asr_model_dir,
-                resolve_model_dir(id.as_str()),
-                notes,
-            );
-            // Migration: a config written before `asr_dirs` existed keeps its
-            // hand-picked folder once it is seeded here.
-            let dir = self.asr_model_dir.clone();
-            self.remember_asr_dir(id, &dir);
-            repair_stale_model_dir(
-                &mut self.aligner_model_dir,
-                default_aligner_model_dir(),
-                notes,
-            );
-            return;
+        // One-time migration from the root-pick shape: `asr_dirs` used to
+        // store the picked *root* while `asr_model_dir` held the sibling
+        // folder resolved from it. Rewrite the entry to the folder itself so
+        // the pick keeps meaning what the user actually selected.
+        let active = ModelId::parse_asr(&self.asr_model);
+        if let Some(pick) = self.asr_dirs.get(active.as_str()).cloned()
+            && self.asr_model_dir.parent() == Some(pick.as_path())
+            && ModelId::try_from_asr_dir(&self.asr_model_dir) == Some(active)
+        {
+            self.asr_dirs
+                .insert(active.as_str().to_string(), self.asr_model_dir.clone());
         }
-
+        // A config written before `asr_dirs` existed carries a single folder:
+        // seed it as the active size's pick so a hand-picked path survives the
+        // upgrade, and let a catalog-named folder say which size it holds.
+        if self.asr_dirs.is_empty() {
+            if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
+                self.asr_model = id.as_str().into();
+            }
+            let dir = self.asr_model_dir.clone();
+            let id = ModelId::parse_asr(&self.asr_model);
+            self.remember_asr_dir(id, &dir);
+        }
         let id = ModelId::parse_asr(&self.asr_model);
         self.asr_model = id.as_str().into();
-        if self.asr_model_dir.as_os_str().is_empty() {
-            self.asr_model_dir = resolve_model_dir(id.as_str());
-        }
-        let dir = self.asr_model_dir.clone();
-        self.remember_asr_dir(id, &dir);
+        // Derived, never stored twice: the active size's own pick, else the
+        // install layout.
+        self.asr_model_dir = self.asr_dir_for(id);
+        repair_stale_model_dir(
+            &mut self.asr_model_dir,
+            resolve_model_dir(id.as_str()),
+            notes,
+        );
         repair_stale_model_dir(
             &mut self.aligner_model_dir,
             default_aligner_model_dir(),
@@ -408,47 +421,48 @@ impl Settings {
         ModelId::parse_asr(&self.asr_model)
     }
 
-    /// Directory bound to one ASR size: what that size was given (a folder pick
-    /// or a download), else a sibling of the selected size's folder carrying the
-    /// right name, else the install-layout default.
+    /// Directory bound to one ASR size: the folder hand-picked for it, else
+    /// the install-layout default.
     ///
-    /// The sibling step is what makes a shared custom models root work: point
-    /// OneAsr at `…/models/Qwen3-ASR-0.6B-hf`, switch to 1.7B, and the 1.7B
-    /// folder beside it is used without another trip through the picker.
-    /// Lookups never persist — nothing here writes `asr_dirs`.
+    /// WYSIWYG — no folder-name guessing, no sibling lookups: what the user
+    /// picked is what that size loads, and a size nobody picked simply uses
+    /// the install layout. Lookups never persist — nothing here writes
+    /// `asr_dirs`.
     pub fn asr_dir_for(&self, id: ModelId) -> PathBuf {
-        if let Some(dir) = self.asr_dirs.get(id.as_str()) {
-            return dir.clone();
-        }
-        self.asr_model_dir
-            .parent()
-            .map(|root| root.join(id.as_str()))
-            .filter(|dir| dir.is_dir())
+        self.asr_dirs
+            .get(id.as_str())
+            .cloned()
             .unwrap_or_else(|| resolve_model_dir(id.as_str()))
     }
 
-    /// Bind a directory to the size its folder name names, and make that size
-    /// active — the folder name *is* the catalog id, so it already says which
-    /// size it holds.
+    /// Bind a hand-picked directory to the **active** size, verbatim.
+    ///
+    /// The pick is stored and loaded exactly as given. Picking never switches
+    /// the active size and never re-resolves the folder name — moving between
+    /// sizes is [`Self::select_asr_model`]'s job, and a size only ever has two
+    /// answers: its own pick or the install layout.
     pub fn set_asr_dir(&mut self, dir: PathBuf) -> ModelId {
-        let id = ModelId::from_asr_dir(&dir);
-        self.asr_model = id.as_str().into();
+        let id = self.selected_asr_id();
         self.remember_asr_dir(id, &dir);
         self.asr_model_dir = dir;
         id
     }
 
-    /// Remember `dir` for `id` — unless it is the install-layout default, which
-    /// is recomputed from the app location on every read; storing it would pin
-    /// this machine's absolute path into the config (and break a moved app).
+    /// Remember `dir` for `id` — the install-layout default is *removed*
+    /// rather than stored: it is recomputed from the app location on every
+    /// read, and keeping it would pin this machine's absolute path into the
+    /// config (and break a moved app).
     fn remember_asr_dir(&mut self, id: ModelId, dir: &Path) {
-        if dir != resolve_model_dir(id.as_str()).as_path() {
+        if dir == resolve_model_dir(id.as_str()).as_path() {
+            self.asr_dirs.remove(id.as_str());
+        } else {
             self.asr_dirs
                 .insert(id.as_str().to_string(), dir.to_path_buf());
         }
     }
 
-    /// Switch active ASR size; every size keeps its own directory.
+    /// Switch active ASR size; every size keeps its own directory — the
+    /// folder picked for it, or the install layout when it has none.
     pub fn select_asr_model(&mut self, id: ModelId) {
         if id.kind() != ModelKind::Asr {
             return;
@@ -486,7 +500,9 @@ impl Settings {
     /// selection (or is the single Align slot). Non-selected ASR installs leave
     /// selection alone — files already live under install-layout dirs.
     ///
-    /// Returns `true` when active settings changed (caller should save / re-probe).
+    /// Returns `true` when active settings changed (caller should re-probe).
+    /// Nothing here persists: downloads land in the directory the settings
+    /// already point at, so there is nothing new to save.
     pub fn bind_download_if_active(&mut self, id: ModelId, model_dir: PathBuf) -> bool {
         match id.kind() {
             ModelKind::Asr => {
@@ -650,8 +666,10 @@ mod tests {
     }
 
     #[test]
-    fn a_sibling_folder_in_the_same_root_is_picked_up() {
-        let root = std::env::temp_dir().join(format!("oneasr_sibling_{}", std::process::id()));
+    fn no_sibling_lookup_the_install_layout_is_the_only_default() {
+        // A custom root for 0.6B says nothing about 1.7B: with no pick of its
+        // own, 1.7B gets the install layout — never the folder next door.
+        let root = std::env::temp_dir().join(format!("oneasr_no_sibling_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(QWEN3_ASR_06B)).unwrap();
         std::fs::create_dir_all(root.join(QWEN3_ASR_17B)).unwrap();
@@ -659,11 +677,88 @@ mod tests {
         let mut s = Settings::default();
         s.set_asr_dir(root.join(QWEN3_ASR_06B));
         s.select_asr_model(ModelId::Qwen3Asr17B);
-        assert_eq!(s.asr_model_dir, root.join(QWEN3_ASR_17B));
-        // A lookup is not a decision: the sibling is not written down.
+        assert!(
+            s.asr_model_dir.to_string_lossy().contains(QWEN3_ASR_17B),
+            "{}",
+            s.asr_model_dir.display()
+        );
+        assert!(
+            !s.asr_model_dir.starts_with(&root),
+            "must not reach into the 0.6B root: {}",
+            s.asr_model_dir.display()
+        );
+        // A lookup is not a decision: nothing is written for 1.7B.
         assert!(!s.asr_dirs.contains_key(QWEN3_ASR_17B), "{:?}", s.asr_dirs);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_asr_dir_is_verbatim_and_keeps_the_active_size() {
+        // WYSIWYG: the pick is stored and loaded exactly as given, and it
+        // binds to the size that was active — a folder named after the other
+        // size must not hijack the selection.
+        let mut s = Settings::default();
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06B);
+        let picked = PathBuf::from(r"D:\my-models\Qwen3-ASR-1.7B-hf");
+        let id = s.set_asr_dir(picked.clone());
+        assert_eq!(id, ModelId::Qwen3Asr06B);
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06B);
+        assert_eq!(s.asr_model_dir, picked);
+        assert_eq!(s.asr_dirs.get(QWEN3_ASR_06B), Some(&picked));
+    }
+
+    #[test]
+    fn picking_the_install_layout_dir_clears_the_pick() {
+        // Pointing a size back at the install layout is "no pick" — the entry
+        // must go, or the config pins this machine's absolute path.
+        let mut s = Settings::default();
+        let custom = PathBuf::from(r"D:\my-models\Qwen3-ASR-0.6B-hf");
+        s.set_asr_dir(custom);
+        assert!(s.asr_dirs.contains_key(QWEN3_ASR_06B));
+
+        s.set_asr_dir(default_asr_model_dir());
+        assert!(!s.asr_dirs.contains_key(QWEN3_ASR_06B), "{:?}", s.asr_dirs);
+        assert_eq!(s.asr_model_dir, default_asr_model_dir());
+    }
+
+    #[test]
+    fn normalize_migrates_the_old_root_pick_to_the_resolved_folder() {
+        // The pre-1.0.3 shape: `asr_dirs` holds the picked root while
+        // `asr_model_dir` holds the sibling resolved from it. The entry is
+        // rewritten to the folder so the pick keeps meaning what was chosen.
+        let root = std::env::temp_dir().join(format!("oneasr_migrate_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join(QWEN3_ASR_06B);
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let mut s = Settings::default();
+        s.asr_dirs.insert(QWEN3_ASR_06B.to_string(), root.clone());
+        s.asr_model_dir = folder.clone();
+        s.normalize();
+        assert_eq!(s.asr_dirs.get(QWEN3_ASR_06B), Some(&folder));
+        assert_eq!(s.asr_model_dir, folder);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_seeds_a_legacy_custom_dir_instead_of_clobbering_it() {
+        // A config from before `asr_dirs` existed: one hand-picked folder
+        // with no catalog name. It survives the upgrade instead of being
+        // reset to the install layout.
+        let custom = std::env::temp_dir().join(format!("oneasr_legacy_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&custom);
+        std::fs::create_dir_all(&custom).unwrap();
+
+        let mut s = Settings::default();
+        s.asr_dirs.clear();
+        s.asr_model_dir = custom.clone();
+        s.normalize();
+        assert_eq!(s.asr_dirs.get(QWEN3_ASR_06B), Some(&custom));
+        assert_eq!(s.asr_model_dir, custom);
+
+        let _ = std::fs::remove_dir_all(&custom);
     }
 
     #[test]

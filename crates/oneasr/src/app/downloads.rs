@@ -7,8 +7,9 @@
 use crate::app::prelude::*;
 
 impl OneAsrApp {
-    /// Start ModelScope download into `{app}/models/...` (background).
-    /// Does **not** rewrite settings until `DownloadOutcome::Completed`.
+    /// Start a model download into the directory the settings currently point
+    /// at for that component (background). Does **not** rewrite settings —
+    /// the paths a completed download binds are the ones already in use.
     pub(crate) fn start_model_download(&mut self, id: ModelId, cx: &mut Context<Self>) {
         // One job per kind — 0.6B / 1.7B share the ASR slot.
         if self.download_kind_busy(id.kind()) {
@@ -16,7 +17,14 @@ impl OneAsrApp {
             return;
         }
 
-        let handle = DownloadHandle::new(id);
+        // Downloads land where the app looks for the weights: the user's own
+        // folder when one was picked, else the install layout.
+        let model_dir = match id.kind() {
+            ModelKind::Asr => self.settings.asr_model_dir.clone(),
+            ModelKind::Align => self.settings.aligner_model_dir.clone(),
+            ModelKind::Demucs => self.settings.resolved_demucs_model_dir(),
+        };
+        let handle = DownloadHandle::new(id, model_dir);
         let model_dir = handle.model_dir.clone();
         // Environment snapshot before the thread starts: when a download later
         // fails with a bare OS error (e.g. 拒绝访问 / os error 5), this pins the

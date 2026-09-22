@@ -24,7 +24,7 @@
 //!   row-level separation toggle, the gear (navigation), an explicit save.
 //! - No: toggles inside the settings drawer (instantly visible, freely
 //!   repeatable, and only the *default* for future tasks), hover, scroll,
-//!   selection, and the drawer's auto-save on close.
+//!   selection, and closing the drawer (a cancel, not a commit).
 //!
 //! One sound per operation, never one per item: dropping 20 files or clearing a
 //! 20-row list must not stutter. The reminder follows the same rule — it fires

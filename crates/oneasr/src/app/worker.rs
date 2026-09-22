@@ -127,51 +127,31 @@ impl OneAsrApp {
         cx.notify();
     }
 
-    /// ASR model directory chosen: rebind, probe and persist it.
+    /// ASR model directory chosen: rebind and probe — staged, not saved.
+    ///
+    /// Like every other settings edit, the pick only marks the drawer dirty;
+    /// it reaches `settings.json` when the user presses 保存设置, and closing
+    /// the drawer discards it.
     fn handle_model_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
-        // Also switches the active size (the folder name is the catalog id) and
-        // remembers the folder for that size — see `Settings::set_asr_dir`.
+        // Binds to the active size, verbatim — see `Settings::set_asr_dir`.
         self.settings.set_asr_dir(dir);
-        self.settings_dirty = false;
-        // Probe + persist path immediately after pick.
+        self.mark_settings_dirty(cx);
+        // Probe the staged pick right away so the status dot is truthful;
+        // the path itself only reaches settings.json on 保存设置.
         self.reset_model_config(cx);
-        if let Err(e) = self.settings.save() {
-            crashlog::log_error(format!("ASR model dir save failed: {e}"));
-            self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
-        } else {
-            self.flash_hint(
-                match self.model_status {
-                    ModelStatus::Ready => "语音识别模型目录已更新 · 就绪",
-                    ModelStatus::NotReady => "语音识别模型目录已更新 · 未就绪",
-                },
-                cx,
-            );
-        }
     }
 
-    /// Aligner directory chosen: rebind, probe and persist it.
+    /// Aligner directory chosen: rebind, probe — staged, not saved.
     fn handle_aligner_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.settings.aligner_model_dir = dir;
-        self.settings_dirty = false;
+        self.mark_settings_dirty(cx);
         self.reset_model_config(cx);
-        if let Err(e) = self.settings.save() {
-            crashlog::log_error(format!("aligner model dir save failed: {e}"));
-            self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
-        } else {
-            self.flash_hint(
-                match self.model_status {
-                    ModelStatus::Ready => "对齐模型目录已更新 · 就绪",
-                    ModelStatus::NotReady => "对齐模型目录已更新 · 未就绪",
-                },
-                cx,
-            );
-        }
     }
 
-    /// Separation weights directory chosen: rebind, probe, persist.
+    /// Separation weights directory chosen: rebind, probe — staged, not saved.
     fn handle_demucs_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.settings.demucs_model_dir = dir;
-        self.settings_dirty = false;
+        self.mark_settings_dirty(cx);
         self.refresh_model_probe();
         // A row can only have separation on while the weights are
         // present, so a dir swap that loses them also clears the
@@ -179,26 +159,12 @@ impl OneAsrApp {
         if !self.demucs_ready && self.settings.vocal_separation {
             self.settings.vocal_separation = false;
         }
-        if let Err(e) = self.settings.save() {
-            crashlog::log_error(format!("demucs model dir save failed: {e}"));
-            self.flash_hint(format!("目录已更新，但保存失败: {e}"), cx);
-        } else if self.demucs_ready {
-            self.flash_hint("人声分离模型目录已更新 · 就绪", cx);
-        } else {
-            self.flash_hint("人声分离模型目录已更新 · 未就绪", cx);
-        }
     }
 
-    /// Output directory chosen: rebind, probe and persist it.
+    /// Output directory chosen: rebind — staged, not saved.
     fn handle_output_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.settings.output_dir = dir;
-        self.settings_dirty = false;
-        if let Err(e) = self.settings.save() {
-            crashlog::log_error(format!("output dir save failed: {e}"));
-            self.flash_hint(format!("输出目录已更新，但保存失败: {e}"), cx);
-        } else {
-            self.flash_hint("字幕输出目录已更新", cx);
-        }
+        self.mark_settings_dirty(cx);
     }
 
     /// Model download progress / terminal state (background thread).
@@ -232,13 +198,10 @@ impl OneAsrApp {
                         .settings
                         .bind_download_if_active(id, progress.model_dir.clone());
                     if bound {
-                        if let Err(e) = self.settings.save() {
-                            crashlog::log_error(format!(
-                                "save after {} download: {e}",
-                                id.label()
-                            ));
-                        }
-                        self.settings_dirty = false;
+                        // No save here: a download is not a settings edit, and
+                        // the paths it binds are exactly the ones the settings
+                        // already point at (the download lands in the current
+                        // directory for that component).
                         self.reset_model_config(cx);
                         self.flash_hint(format!("{} 下载完成", id.label()), cx);
                     } else {

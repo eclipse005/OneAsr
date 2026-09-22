@@ -32,18 +32,35 @@ impl OneAsrApp {
         }
     }
 
+    /// Restore every setting to its initial value — staged like any other
+    /// edit, never written on its own.
+    ///
+    /// 保存设置 persists the reset; closing the drawer discards it, exactly
+    /// like a manual edit. Model paths fall back to the install layout, which
+    /// is what a factory reset means here.
+    pub(crate) fn reset_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings = Settings::default();
+        self.mark_settings_dirty(cx);
+        // Paths moved — re-probe so the status dots follow the reset.
+        self.refresh_model_probe();
+        cx.notify();
+    }
+
     pub(crate) fn is_settings_dirty(&self, _cx: &Context<Self>) -> bool {
         self.settings_dirty
     }
 
     /// Write `settings.json`, re-check model files.
+    ///
+    /// The one and only commit point: the drawer's 保存设置 button calls
+    /// this, and nothing else does — closing the drawer discards instead.
     pub(crate) fn save_settings(&mut self, cx: &mut Context<Self>) {
         match self.settings.save() {
             Ok(_) => {
                 self.settings_dirty = false;
+                self.settings_snapshot = Some(self.settings.clone());
                 self.reset_model_config(cx);
-                // Only the committed path taps. The drawer's auto-save on close
-                // is navigation, not a commit, and stays silent.
+                // Only a real commit earns the tap.
                 self.play_ui(sfx::Sfx::Click);
                 self.flash_hint(
                     match self.model_status {
