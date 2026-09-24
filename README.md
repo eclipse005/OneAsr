@@ -12,6 +12,8 @@
 
 任意时刻显存只驻留**一个**大模型（先 ASR，再 Aligner），4GB 级显卡也能跑通 0.6B 组合。
 
+![主界面](docs/images/main.png)
+
 ## 下载安装
 
 当前版本 **[v1.0.2](https://github.com/eclipse005/OneAsr/releases/tag/v1.0.2)**（点文件名即下载）：
@@ -28,6 +30,8 @@
 2. **设置** → 下载 **ASR**（建议先 0.6B）+ **ForcedAligner**（必需）
 3. 选好源语言 → 添加音视频 → 开始
 4. 输出目录拿同名 `.srt`
+
+![任务列表与设置](docs/images/tasks-settings.png)
 
 ## 功能
 
