@@ -208,7 +208,8 @@ Homepage: https://github.com/eclipse005/OneAsr
 Description: Local offline batch audio/video to SRT
 Depends: libc6, libgcc-s1, libegl1, libgl1, libvulkan1,
  libwayland-client0, libx11-6, libx11-xcb1, libxcb1, libxcb-xkb1,
- libxkbcommon0, libxkbcommon-x11-0
+ libxkbcommon0, libxkbcommon-x11-0,
+ libasound2t64 | libasound2
 EOF
   cat > "$DEB_ROOT/DEBIAN/postinst" <<'EOF'
 #!/bin/sh

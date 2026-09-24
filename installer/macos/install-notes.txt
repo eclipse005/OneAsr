@@ -37,7 +37,7 @@ OneAsr macOS 安装说明
     如果你更想手动打字，路径大概是（卷名以你看到的为准，
     不确定就先在终端里敲 ls /Volumes 看一眼）：
 
-        bash "/Volumes/OneAsr 1.0.1/安装 OneAsr.command"
+        bash "/Volumes/OneAsr 1.0.3/安装 OneAsr.command"
 
 脚本到底做了什么
 ----------------
