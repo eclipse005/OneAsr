@@ -172,8 +172,16 @@ fn wav_duration_ms(bytes: &[u8]) -> u64 {
     0
 }
 
+fn reminder_is_active(until: Option<Instant>, now: Instant) -> bool {
+    until.is_some_and(|until| now < until)
+}
+
 fn should_suppress_click(kind: Sfx, reminder_until: Option<Instant>, now: Instant) -> bool {
-    kind == Sfx::Click && reminder_until.is_some_and(|until| now < until)
+    kind == Sfx::Click && reminder_is_active(reminder_until, now)
+}
+
+fn should_rebuild_output(error: &rodio::cpal::StreamError) -> bool {
+    !matches!(error, rodio::cpal::StreamError::BufferUnderrun)
 }
 
 fn asset_for(kind: Sfx) -> Option<&'static [u8]> {
@@ -204,7 +212,9 @@ impl AudioOutput {
             .map_err(|error| error.to_string())?
             .with_buffer_size(rodio::cpal::BufferSize::Fixed(2048))
             .with_error_callback(move |error| {
-                callback_inbox.report_stream_fault(error.to_string());
+                if should_rebuild_output(&error) {
+                    callback_inbox.report_stream_fault(error.to_string());
+                }
             })
             .open_sink_or_fallback()
             .map_err(|error| error.to_string())?;
@@ -327,7 +337,7 @@ impl AudioWorker {
     }
 
     fn handle_stream_fault(&mut self, error: String) {
-        let reminder_was_active = self.reminder_until.is_some();
+        let reminder_was_active = reminder_is_active(self.reminder_until, Instant::now());
         self.output = None;
         self.reminder_until = None;
         self.retry_after = Some(Instant::now() + OUTPUT_RETRY_DELAY);
@@ -387,7 +397,10 @@ mod tests {
     use std::io::Cursor;
     use std::time::{Duration, Instant};
 
-    use super::{Inbox, InboxEvent, Sfx, asset_for, should_suppress_click, wav_duration_ms};
+    use super::{
+        Inbox, InboxEvent, Sfx, asset_for, reminder_is_active, should_rebuild_output,
+        should_suppress_click, wav_duration_ms,
+    };
 
     /// A minimal 16-bit mono PCM WAV: `frames` frames at `rate` Hz.
     fn wav(frames: u32, rate: u32) -> Vec<u8> {
@@ -506,6 +519,27 @@ mod tests {
             now
         ));
         assert!(!should_suppress_click(Sfx::Click, None, now));
+    }
+
+    #[test]
+    fn expired_reminder_is_not_active() {
+        let now = Instant::now();
+        let expired = now - Duration::from_millis(1);
+        assert!(!reminder_is_active(Some(expired), now));
+        assert!(!should_suppress_click(Sfx::Click, Some(expired), now));
+    }
+
+    #[test]
+    fn buffer_underrun_is_recoverable_but_device_loss_is_not() {
+        assert!(!should_rebuild_output(
+            &rodio::cpal::StreamError::BufferUnderrun
+        ));
+        assert!(should_rebuild_output(
+            &rodio::cpal::StreamError::DeviceNotAvailable
+        ));
+        assert!(should_rebuild_output(
+            &rodio::cpal::StreamError::StreamInvalidated
+        ));
     }
 
     #[test]
