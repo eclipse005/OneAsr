@@ -2,6 +2,9 @@
 
 use crate::app::prelude::*;
 
+#[cfg(target_os = "linux")]
+use gpui::MouseButton;
+
 /// Version shown in the titlebar, e.g. `v0.1.9`.
 ///
 /// Single source is the Cargo package version (same one `crashlog` reports at
@@ -30,18 +33,56 @@ impl OneAsrApp {
     /// Custom title bar. GPUI never sets `WS_CAPTION`, so the "native" caption is only
     /// a DWM fallback — missing or dead on some Win10 machines (the user report:
     /// click grays out, no drag / min / max / close). Drawing our own + routing hits
-    /// through `WindowControlArea` works regardless of DWM state.
+    /// through `WindowControlArea` works on Windows.
     ///
-    /// Windows-only contract (same as gpui-component's TitleBar): **no `on_click` here** —
-    /// GPUI maps the areas to HTCAPTION / HTMINBUTTON / HTMAXBUTTON / HTCLOSE in
-    /// `WM_NCHITTEST` and the OS performs the action. Double-click on the drag strip
-    /// also toggles maximize for free (DefWindowProc on HTCAPTION).
+    /// Linux's Wayland and X11 backends do not implement the non-client hit test
+    /// behind `WindowControlArea`, so the Linux build uses ordinary mouse events
+    /// for the same actions.
     ///
     /// macOS: `WindowControlArea` is ignored by the platform backend, so the caption
     /// buttons are not drawn (see `SHOW_CAPTION_BUTTONS`) and the left inset keeps the
     /// window title clear of the native traffic lights. Dragging still works — that
     /// comes from the transparent title bar itself, not from `WindowControlArea::Drag`.
     pub(super) fn render_titlebar(&mut self) -> impl IntoElement {
+        // Drag strip: everything left of the buttons moves the window. Wayland and
+        // X11 need an explicit mouse-down handler because their backends ignore
+        // `WindowControlArea::Drag`.
+        let drag = div()
+            .id("titlebar-drag")
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .pl(TITLEBAR_PAD_LEFT)
+            .overflow_hidden()
+            .window_control_area(WindowControlArea::Drag)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(MUTED_SOFT)
+                            .whitespace_nowrap()
+                            .child("OneAsr"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(MUTED_SOFT)
+                            .opacity(0.72)
+                            .whitespace_nowrap()
+                            .child(APP_VERSION_LABEL),
+                    ),
+            );
+        #[cfg(target_os = "linux")]
+        let drag = drag.on_mouse_down(MouseButton::Left, |_, window, _| {
+            window.start_window_move();
+        });
+
         div()
             .h(px(32.))
             .w_full()
@@ -50,40 +91,7 @@ impl OneAsrApp {
             .bg(PANEL)
             .border_b_1()
             .border_color(LINE)
-            .child(
-                // Drag strip: everything left of the buttons moves the window.
-                div()
-                    .id("titlebar-drag")
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .pl(TITLEBAR_PAD_LEFT)
-                    .overflow_hidden()
-                    .window_control_area(WindowControlArea::Drag)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(MUTED_SOFT)
-                                    .whitespace_nowrap()
-                                    .child("OneAsr"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(MUTED_SOFT)
-                                    .opacity(0.72)
-                                    .whitespace_nowrap()
-                                    .child(APP_VERSION_LABEL),
-                            ),
-                    ),
-            )
+            .child(drag)
             // 系统红绿灯在 macOS 上负责最小化 / 全屏 / 关闭，自绘按钮只在别处出现。
             .when(SHOW_CAPTION_BUTTONS, |el| {
                 el.child(caption_btn(
@@ -91,18 +99,21 @@ impl OneAsrApp {
                     "icons/win-min.svg",
                     WindowControlArea::Min,
                     false,
+                    CaptionAction::Minimize,
                 ))
                 .child(caption_btn(
                     "titlebar-max",
                     "icons/win-max.svg",
                     WindowControlArea::Max,
                     false,
+                    CaptionAction::Maximize,
                 ))
                 .child(caption_btn(
                     "titlebar-close",
                     "icons/win-close.svg",
                     WindowControlArea::Close,
                     true,
+                    CaptionAction::Close,
                 ))
             })
     }

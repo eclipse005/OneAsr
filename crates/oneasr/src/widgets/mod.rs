@@ -9,7 +9,7 @@ mod logo;
 mod popover;
 
 pub use button::{
-    BtnKind, IconKind, NameTooltip, btn, btn_cta, caption_btn, icon_btn, pill,
+    BtnKind, CaptionAction, IconKind, NameTooltip, btn, btn_cta, caption_btn, icon_btn, pill,
     settings_gear_btn,
 };
 pub use install_row::{ComponentRow, model_download_row};

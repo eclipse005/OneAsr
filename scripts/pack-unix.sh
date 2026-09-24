@@ -100,6 +100,51 @@ echo "==> downloading $ASSET"
 curl -L --fail --retry 3 -o "$STAGE/bin/ffmpeg" "$FFMPEG_BASE/$ASSET"
 chmod +x "$STAGE/bin/ffmpeg"
 
+LINUX_LAYOUT=""
+LINUX_ICON_NOTE=""
+if [[ "$OS" == "linux" ]]; then
+  # Linux does not embed an icon in the ELF executable. Ship the icon and a
+  # small user-level installer so the portable build can register a launcher
+  # with the desktop/taskbar without requiring root.
+  cp "$ROOT/assets/icons/app-icon.png" "$STAGE/oneasr.png"
+  cat > "$STAGE/install-desktop.sh" <<'INSTALL'
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+APPLICATIONS_DIR="$DATA_DIR/applications"
+ICON_DIR="$DATA_DIR/icons/hicolor/256x256/apps"
+
+mkdir -p "$APPLICATIONS_DIR" "$ICON_DIR"
+install -m 0644 "$APP_DIR/oneasr.png" "$ICON_DIR/oneasr.png"
+cat > "$APPLICATIONS_DIR/oneasr.desktop" <<EOF
+[Desktop Entry]
+Name=OneAsr
+Comment=Local offline A/V to SRT
+Exec="$APP_DIR/oneasr"
+Icon=oneasr
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;
+StartupWMClass=oneasr
+EOF
+chmod 0644 "$APPLICATIONS_DIR/oneasr.desktop"
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" >/dev/null 2>&1 || true
+fi
+
+printf 'OneAsr desktop entry and icon installed under %s\n' "$DATA_DIR"
+INSTALL
+  chmod +x "$STAGE/install-desktop.sh"
+  LINUX_LAYOUT=$'  oneasr.png           application icon\n  install-desktop.sh   register the portable app with the Linux desktop'
+  LINUX_ICON_NOTE=$'\nFor the portable Linux build, run `bash install-desktop.sh` once to register\nthe application icon and launcher with the desktop/taskbar. Linux does not\nembed an application icon inside the executable itself; the .deb package does\nthis registration automatically.'
+fi
+
 cat > "$STAGE/README.txt" <<EOF
 OneAsr $VERSION ($OS $ARCH)
 ===========================
@@ -114,9 +159,11 @@ Layout
   models/       ASR / Aligner weights (download in Settings)
   output/       exported *.srt
   runs/         intermediate work files (safe to delete)
+$LINUX_LAYOUT
 
 Put this folder somewhere you can write (home directory). Models download
 next to the app; a read-only install location will fail the first download.
+$LINUX_ICON_NOTE
 
 GPU uses the system graphics driver via wgpu (Vulkan / Metal). No CUDA Toolkit.
 EOF
@@ -148,6 +195,7 @@ Icon=oneasr
 Terminal=false
 Type=Application
 Categories=AudioVideo;Audio;
+StartupWMClass=oneasr
 DESK
   cat > "$DEB_ROOT/DEBIAN/control" <<EOF
 Package: oneasr
@@ -158,12 +206,18 @@ Architecture: $(deb_arch)
 Maintainer: OneAsr <https://github.com/eclipse005/OneAsr>
 Homepage: https://github.com/eclipse005/OneAsr
 Description: Local offline batch audio/video to SRT
-Depends: libvulkan1
+Depends: libc6, libgcc-s1, libegl1, libgl1, libvulkan1,
+ libwayland-client0, libx11-6, libx11-xcb1, libxcb1, libxcb-xkb1,
+ libxkbcommon0, libxkbcommon-x11-0
 EOF
   cat > "$DEB_ROOT/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 chmod +x /opt/OneAsr/oneasr /opt/OneAsr/oneasr-cli /opt/OneAsr/bin/ffmpeg 2>/dev/null || true
+command -v update-desktop-database >/dev/null 2>&1 && \
+  update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+  gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
 exit 0
 EOF
   chmod 755 "$DEB_ROOT/DEBIAN/postinst"

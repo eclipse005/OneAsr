@@ -82,6 +82,7 @@ oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --out
 - 带 BGM / 噪声先开「人声分离」，准得多
 - macOS 包未签名：dmg 里有「安装 OneAsr.command」+「安装说明.txt」，按说明装一次即可
 - Linux 建议把 tar.gz 解压到用户目录
+- Linux 便携包首次使用运行 `bash install-desktop.sh`，注册应用图标和启动器（Linux 不会把图标嵌入 ELF 可执行文件）
 
 ## 致谢
 

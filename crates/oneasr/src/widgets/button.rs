@@ -7,14 +7,23 @@ use gpui::{
 };
 use std::time::Duration;
 
+/// Actions used by the self-drawn caption buttons on platforms that need
+/// regular mouse handlers instead of a native non-client hit test.
+#[derive(Clone, Copy)]
+pub enum CaptionAction {
+    Minimize,
+    Maximize,
+    Close,
+}
+
 /// One caption button (min / max / close) for the custom title bar.
-/// Hit routing is via `WindowControlArea` only — no `on_click` (see `render_titlebar`).
 /// `close` gets the Windows-style red hover with a white glyph.
 pub fn caption_btn(
     id: &'static str,
     icon: &'static str,
     area: WindowControlArea,
     close: bool,
+    action: CaptionAction,
 ) -> impl IntoElement {
     let group: SharedString = format!("{id}-hover").into();
     let icon_el = svg()
@@ -24,7 +33,7 @@ pub fn caption_btn(
         .when(close, |el| {
             el.group_hover(group.clone(), |s| s.text_color(crate::theme::PANEL))
         });
-    div()
+    let button = div()
         .id(id)
         .w(px(46.))
         .h_full()
@@ -32,6 +41,7 @@ pub fn caption_btn(
         .flex()
         .items_center()
         .justify_center()
+        .cursor_pointer()
         .window_control_area(area)
         .when(close, |el| el.group(group))
         .hover(move |s| {
@@ -41,7 +51,18 @@ pub fn caption_btn(
                 s.bg(crate::theme::LINE_SOFT)
             }
         })
-        .child(icon_el)
+        .child(icon_el);
+
+    #[cfg(target_os = "linux")]
+    let button = match action {
+        CaptionAction::Minimize => button.on_click(|_, window, _| window.minimize_window()),
+        CaptionAction::Maximize => button.on_click(|_, window, _| window.zoom_window()),
+        CaptionAction::Close => button.on_click(|_, _, cx| cx.quit()),
+    };
+    #[cfg(not(target_os = "linux"))]
+    let _ = action;
+
+    button
 }
 
 #[derive(Clone, Copy)]

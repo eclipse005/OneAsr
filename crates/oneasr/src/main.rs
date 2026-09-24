@@ -54,11 +54,18 @@ fn main() {
 
             // Compact default: list + toolbar, not a full-HD empty canvas.
             let bounds = Bounds::centered(None, size(px(860.), px(560.)), cx);
-            // Custom-drawn title bar (`appears_transparent`): GPUI never sets WS_CAPTION,
-            // so the native caption is only a DWM fallback — broken on some Win10 machines
-            // (no drag / min / max / close). We draw our own and route hits through
-            // `WindowControlArea`, which works regardless of DWM state. The `title` string
-            // still feeds the taskbar / Alt-Tab label.
+            // Linux uses client-side decorations so the self-drawn title bar is the
+            // real top strip. Wayland/X11 do not implement WindowControlArea's native
+            // hit test; the title bar supplies regular mouse handlers on that path.
+            #[cfg(target_os = "linux")]
+            let window_decorations = Some(gpui::WindowDecorations::Client);
+            #[cfg(not(target_os = "linux"))]
+            let window_decorations = None;
+            // 让 Wayland / X11 的窗口管理器能用 oneasr.desktop 匹配应用图标。
+            #[cfg(target_os = "linux")]
+            let app_id = Some("oneasr".to_owned());
+            #[cfg(not(target_os = "linux"))]
+            let app_id = None;
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -67,6 +74,8 @@ fn main() {
                         appears_transparent: true,
                         ..Default::default()
                     }),
+                    window_decorations,
+                    app_id,
                     ..Default::default()
                 },
                 {
