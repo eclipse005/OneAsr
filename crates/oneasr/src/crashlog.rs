@@ -241,9 +241,8 @@ mod tests {
     use super::{stamp, write_entry};
     use std::fs;
 
-    /// stamp() must match the log-line format other tooling may parse.
-    /// We don't assert the actual time — only the shape — so this stays
-    /// stable across time zones / clock values.
+    /// Windows uses a local calendar timestamp with millisecond precision.
+    #[cfg(windows)]
     #[test]
     fn stamp_matches_log_format() {
         let s = stamp();
@@ -258,6 +257,24 @@ mod tests {
                 assert_eq!(b, want, "pos {i}: separator mismatch in {s:?}");
             }
         }
+    }
+
+    /// Non-Windows builds use the documented Unix-seconds timestamp format.
+    #[cfg(not(windows))]
+    #[test]
+    fn epoch_stamp_matches_log_format() {
+        let s = stamp();
+        let (seconds, milliseconds) = s.split_once('.').expect("missing milliseconds");
+        assert!(!seconds.is_empty(), "missing seconds in {s:?}");
+        assert!(
+            seconds.bytes().all(|b| b.is_ascii_digit()),
+            "non-digit seconds in {s:?}"
+        );
+        assert_eq!(milliseconds.len(), 3, "milliseconds precision in {s:?}");
+        assert!(
+            milliseconds.bytes().all(|b| b.is_ascii_digit()),
+            "non-digit milliseconds in {s:?}"
+        );
     }
 
     /// Entries append (headers accumulate) and missing parents are created —
