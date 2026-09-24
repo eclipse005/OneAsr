@@ -3,19 +3,12 @@
   <p>本地 · 离线 · 批量音视频 → SRT / TXT 字幕</p>
   <p>Windows / Linux / macOS · 基于 Qwen3-ASR + ForcedAligner · 不上传云端</p>
 
-  [下载安装](#下载安装) · [快速上手](#快速上手) · [CLI 命令行](#cli-命令行) · [Release](https://github.com/eclipse005/OneAsr/releases)
+  [下载安装](#下载安装) · [快速上手](#快速上手) · [界面预览](#界面预览) · [CLI 命令行](#cli-命令行) · [Release](https://github.com/eclipse005/OneAsr/releases)
 </div>
 
 ```text
 音视频 → [人声分离] → VAD 分段 → 识别 → 对齐打轴 → 智能断句 → *.srt / *.txt
 ```
-
-任意时刻显存只驻留**一个**大模型（先 ASR，再 Aligner），4GB 级显卡也能跑通 0.6B 组合。
-
-<p align="center">
-  <img src="docs/images/main.png" width="49%" alt="主界面" />
-  <img src="docs/images/tasks-settings.png" width="49%" alt="任务列表与设置" />
-</p>
 
 ## 下载安装
 
@@ -33,6 +26,14 @@
 2. **设置** → 下载 **ASR**（建议先 0.6B）+ **ForcedAligner**（必需）
 3. 选好源语言 → 添加音视频 → 开始
 4. 输出目录拿同名 `.srt`
+
+## 界面预览
+
+主界面空态与任务列表 + 设置抽屉（并排同一尺寸）：
+
+| 主界面（空态） | 任务列表与设置 |
+|---|---|
+| <img src="docs/images/main.png" width="420" alt="主界面空态" /> | <img src="docs/images/tasks-settings.png" width="420" alt="任务列表与设置抽屉" /> |
 
 ## 功能
 
