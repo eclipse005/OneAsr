@@ -161,8 +161,8 @@ jobs:
           done
       # GitHub's own generator only lists *pull requests*, and this repo commits
       # straight to the branch — that produced a bare "Full Changelog" line.
-      # So: use docs/release-notes/<tag>.md when it exists (hand-written notes
-      # win), otherwise list the commit subjects since the previous tag.
+      # So: use docs/release-notes/<tag>.md when it exists (hand-written, bilingual
+      # notes win), otherwise list the commit subjects since the previous tag.
       - name: Release body
         working-directory: src
         env:
@@ -177,13 +177,13 @@ jobs:
           fi
           PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           {
-            echo "## 本次改动"
+            echo "## Changes"
             echo
             if [[ -n "$PREV" ]]; then
-              echo "自 \`$PREV\` 起："
+              echo "Since \`$PREV\`:"
               echo
               git log --no-merges --pretty=format:'- %s (`%h`)' "$PREV..$TAG"
-              printf '\n\n**完整对比**：https://github.com/%s/compare/%s...%s\n' "$REPO" "$PREV" "$TAG"
+              printf '\n\n**Full diff**: https://github.com/%s/compare/%s...%s\n' "$REPO" "$PREV" "$TAG"
             else
               git log --no-merges --pretty=format:'- %s (`%h`)' "$TAG"
               echo
