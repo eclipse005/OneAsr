@@ -1,3 +1,92 @@
+OneAsr macOS Install Guide
+=================================
+(中文说明在下半部分 / Chinese instructions in the second half)
+
+This window contains four items:
+    安装 OneAsr.command    ← the installer script; both methods below use it
+    OneAsr.app            ← the app itself
+    安装说明.txt           ← this file
+    Applications          ← shortcut to your Applications folder
+
+Install: try Method 1 first; if macOS blocks it, use Method 2
+--------------------------------------------------------------
+
+Method 1 · Right-click Open (try this first)
+
+    1. Right-click 安装 OneAsr.command (or Control-click)
+    2. Choose "Open" in the menu, then click "Open" again in the dialog
+    3. It installs and launches OneAsr automatically, then shows a "Done" dialog
+
+    Note: do NOT click "Move to Trash" — that deletes the script.
+    Note: if the dialog only offers "Done" (no "Open"), or says
+          "Apple could not verify … malicious software", your macOS version
+          (15+) has closed this path — go straight to Method 2. Don't look
+          for "Open Anyway" in System Settings → Privacy & Security; it does
+          not work for scripts.
+
+Method 2 · Run in Terminal (most reliable, works on every macOS version)
+
+    1. Open Terminal: press Command + Space, type "Terminal", press Enter
+    2. Type four characters into Terminal:   bash
+       Leave a space after "bash", and do not press Enter yet
+    3. Drag 安装 OneAsr.command from this window into the Terminal window —
+       the full path fills in automatically (so you don't have to type it)
+    4. Press Enter
+
+    It installs and launches OneAsr, then shows a "Done" dialog.
+
+    If you prefer typing the path yourself, it looks like
+    (volume name may differ — run `ls /Volumes` to check):
+
+        bash "/Volumes/OneAsr <version>/安装 OneAsr.command"
+
+What the script does
+--------------------
+1. Copies OneAsr.app into your Applications folder (overwrites an old copy)
+2. Clears the quarantine mark macOS adds to downloaded files
+3. Applies a local ad-hoc signature to the app and its bundled tools
+4. Launches OneAsr
+
+It asks for an administrator password only if writing to the Applications
+folder requires it.
+
+Why macOS blocks it (the file itself is fine)
+---------------------------------------------
+OneAsr is not signed with an Apple Developer certificate (USD 99/year).
+Files downloaded by a browser get a quarantine mark; opening them directly
+shows messages like:
+
+    "OneAsr" is damaged and can't be opened. You should move it to the Trash.
+    Apple could not verify "…" is free of malware that may harm your Mac…
+
+The file is fine — it's a false positive. Both methods above do the same
+thing: clear the mark for you. After installing once, later launches are
+not blocked.
+
+Fully manual (if you'd rather not run the script)
+-------------------------------------------------
+1. Drag OneAsr into your Applications folder
+2. Open Terminal and run these two lines (prefix with sudo if asked for a
+   password):
+
+       xattr -cr /Applications/OneAsr.app
+       codesign --force --deep --sign - /Applications/OneAsr.app
+
+3. Double-click OneAsr in the Applications folder
+
+First launch
+------------
+The first launch downloads the speech-recognition models (from a few
+hundred MB, depending on connection speed); progress shows in the app.
+After that, everything works offline. All recognition runs locally — no
+audio or video is ever uploaded.
+
+You can eject this disk image once installation is done.
+
+Help & feedback: https://github.com/eclipse005/OneAsr
+
+
+
 OneAsr macOS 安装说明
 =================================
 
@@ -37,7 +126,7 @@ OneAsr macOS 安装说明
     如果你更想手动打字，路径大概是（卷名以你看到的为准，
     不确定就先在终端里敲 ls /Volumes 看一眼）：
 
-        bash "/Volumes/OneAsr 1.0.3/安装 OneAsr.command"
+        bash "/Volumes/OneAsr <版本号>/安装 OneAsr.command"
 
 脚本到底做了什么
 ----------------
