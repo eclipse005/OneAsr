@@ -123,7 +123,6 @@ impl OneAsrApp {
         let dl_busy = self.any_download_busy();
         let picking = self.picking;
         let can_start = self.model_status == ModelStatus::Ready;
-        let has_tasks = self.tasks.iter().any(|t| !self.exiting.contains_key(&t.id));
 
         div()
             .h(px(52.))
@@ -191,8 +190,8 @@ impl OneAsrApp {
                     ))
                     .child(btn(
                         "清空",
-                        BtnKind::Danger,
-                        has_tasks,
+                        BtnKind::Quiet,
+                        true,
                         cx.listener(|this, _, _, cx| this.clear_all(cx)),
                     ))
                     .child(settings_gear_btn(
