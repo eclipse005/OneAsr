@@ -58,14 +58,17 @@ impl ModelId {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: crate::i18n::UiLang) -> &'static str {
         match self {
             Self::Qwen3Asr06B => "Qwen3-ASR 0.6B",
             Self::Qwen3Asr17B => "Qwen3-ASR 1.7B",
             Self::Qwen3Asr06BInt8 => "Qwen3-ASR 0.6B int8",
             Self::Qwen3Asr17BInt8 => "Qwen3-ASR 1.7B int8",
             Self::QwenAlign06B => "ForcedAligner 0.6B",
-            Self::HtdemucsFt => "人声分离 HTDemucs",
+            Self::HtdemucsFt => match lang {
+                crate::i18n::UiLang::Zh => "人声分离 HTDemucs",
+                crate::i18n::UiLang::En => "Vocal separation (HTDemucs)",
+            },
         }
     }
 

@@ -60,7 +60,9 @@ impl OneAsrApp {
                     rtfx_label: t
                         .timing
                         .as_ref()
-                        .and_then(|timing| realtime_factor_label(media_sec, timing.total_ms)),
+                        .and_then(|timing| {
+                            realtime_factor_label(media_sec, timing.total_ms, ui_lang())
+                        }),
                     is_video: is_video_format(&t.format),
                     timing: t.timing.clone(),
                     opacity,
@@ -135,7 +137,7 @@ pub(crate) fn row_fade(
     }
 }
 
-/// `6.5 倍速` for the timing card header — media seconds ÷ wall-clock seconds.
+/// `6.5 倍速` / `6.5×` for the timing card header — media seconds ÷ wall-clock.
 ///
 /// This is the **end-to-end** factor, so it agrees with the `用时` total printed
 /// next to it: the model-load stages are part of both. Anything the figure would
@@ -146,7 +148,11 @@ pub(crate) fn row_fade(
 /// A hardware-comparison number would strip `AsrStage::LoadingAsr` /
 /// `LoadingAligner` from the denominator; that is deliberately **not** what this
 /// returns, because the user is looking at one row's own wall clock here.
-pub(crate) fn realtime_factor_label(media_sec: Option<f64>, process_ms: u64) -> Option<String> {
+pub(crate) fn realtime_factor_label(
+    media_sec: Option<f64>,
+    process_ms: u64,
+    lang: UiLang,
+) -> Option<String> {
     let media = media_sec.filter(|s| s.is_finite() && *s > 0.0)?;
     let wall = process_ms as f64 / 1000.0;
     if wall <= 0.0 {
@@ -154,10 +160,14 @@ pub(crate) fn realtime_factor_label(media_sec: Option<f64>, process_ms: u64) -> 
     }
     let factor = media / wall;
     // Past 100× the decimal is noise and would outgrow the card.
-    Some(if factor >= 100.0 {
-        format!("{factor:.0} 倍速")
+    let number = if factor >= 100.0 {
+        format!("{factor:.0}")
     } else {
-        format!("{factor:.1} 倍速")
+        format!("{factor:.1}")
+    };
+    Some(match lang {
+        UiLang::Zh => format!("{number} 倍速"),
+        UiLang::En => format!("{number}×"),
     })
 }
 
@@ -275,23 +285,27 @@ mod tests {
 
     #[test]
     fn realtime_factor_needs_a_usable_length_and_clock() {
-        assert_eq!(realtime_factor_label(None, 37_000), None);
-        assert_eq!(realtime_factor_label(Some(0.0), 37_000), None);
-        assert_eq!(realtime_factor_label(Some(f64::NAN), 37_000), None);
-        assert_eq!(realtime_factor_label(Some(239.0), 0), None);
+        assert_eq!(realtime_factor_label(None, 37_000, UiLang::Zh), None);
+        assert_eq!(realtime_factor_label(Some(0.0), 37_000, UiLang::Zh), None);
+        assert_eq!(realtime_factor_label(Some(f64::NAN), 37_000, UiLang::Zh), None);
+        assert_eq!(realtime_factor_label(Some(239.0), 0, UiLang::Zh), None);
     }
 
     #[test]
     fn realtime_factor_is_media_over_the_same_wall_clock() {
         // 3:59 of media finished in 37 s → 6.5× realtime.
         assert_eq!(
-            realtime_factor_label(Some(239.0), 37_000).as_deref(),
+            realtime_factor_label(Some(239.0), 37_000, UiLang::Zh).as_deref(),
             Some("6.5 倍速")
         );
         // Large factors stay short instead of spilling decimals.
         assert_eq!(
-            realtime_factor_label(Some(600.0), 1_000).as_deref(),
+            realtime_factor_label(Some(600.0), 1_000, UiLang::Zh).as_deref(),
             Some("600 倍速")
+        );
+        assert_eq!(
+            realtime_factor_label(Some(239.0), 37_000, UiLang::En).as_deref(),
+            Some("6.5×")
         );
     }
 }

@@ -55,22 +55,34 @@ pub(super) fn stats_range_start(summary: &StatsSummary, today: &str) -> String {
 /// Outcomes are split, and the minutes are dropped when the day has none to
 /// claim (the probe found no duration): "0 分" would be a number the ledger
 /// never measured.
-pub(super) fn stats_hover_text(summary: &StatsSummary, day: &str) -> String {
+pub(super) fn stats_hover_text(summary: &StatsSummary, day: &str, lang: UiLang) -> String {
     let media = summary.per_day.get(day).copied().unwrap_or(0.0);
     let tasks = summary.per_day_tasks.get(day).copied().unwrap_or(0);
     let errs = summary.per_day_err.get(day).copied().unwrap_or(0);
     if tasks == 0 && errs == 0 {
-        return format!("{} · 无任务", oneasr_core::stats::format_day_cn(day));
+        let no_tasks = match lang {
+            UiLang::Zh => "无任务",
+            UiLang::En => "no tasks",
+        };
+        return format!("{} · {no_tasks}", oneasr_core::stats::format_day(lang, day));
     }
-    let mut line = oneasr_core::stats::format_day_cn(day);
+    let mut line = oneasr_core::stats::format_day(lang, day);
     if media > 0.0 {
-        line.push_str(&format!(" · {}", oneasr_core::stats::format_span_secs(media)));
+        line.push_str(&format!(" · {}", oneasr_core::stats::format_span_secs(lang, media)));
     }
     if tasks > 0 {
-        line.push_str(&format!(" · 成功 {tasks} 个"));
+        let ok = match lang {
+            UiLang::Zh => format!(" · 成功 {tasks} 个"),
+            UiLang::En => format!(" · {tasks} ok"),
+        };
+        line.push_str(&ok);
     }
     if errs > 0 {
-        line.push_str(&format!(" · 失败 {errs} 个"));
+        let failed = match lang {
+            UiLang::Zh => format!(" · 失败 {errs} 个"),
+            UiLang::En => format!(" · {errs} failed"),
+        };
+        line.push_str(&failed);
     }
     line
 }
@@ -84,18 +96,24 @@ pub(super) fn stats_early_caption(
     summary: &StatsSummary,
     today: &str,
     range_start: &str,
+    lang: UiLang,
 ) -> Option<String> {
     summary
         .first_day
         .as_deref()
         .and_then(|d| oneasr_core::stats::days_between(d, today))
         .filter(|span| (0..84).contains(span))
-        .map(|span| {
-            format!(
+        .map(|span| match lang {
+            UiLang::Zh => format!(
                 "记录从 {} 开始 · 已积累 {} 天",
-                oneasr_core::stats::format_day_cn(range_start),
+                oneasr_core::stats::format_day(lang, range_start),
                 span + 1
-            )
+            ),
+            UiLang::En => format!(
+                "Records start {} · {} days logged",
+                oneasr_core::stats::format_day(lang, range_start),
+                span + 1
+            ),
         })
 }
 
@@ -306,32 +324,53 @@ mod tests {
     #[test]
     fn hover_text_names_a_day_with_no_work() {
         let s = summary_with(&[]);
-        assert_eq!(stats_hover_text(&s, "2026-09-16"), "9 月 16 日 · 无任务");
+        assert_eq!(
+            stats_hover_text(&s, "2026-09-16", UiLang::Zh),
+            "9 月 16 日 · 无任务"
+        );
+        assert_eq!(
+            stats_hover_text(&s, "2026-09-16", UiLang::En),
+            "Sep 16 · no tasks"
+        );
     }
 
     #[test]
     fn hover_text_splits_outcomes_and_omits_unmeasured_minutes() {
         let s = summary_with(&[("2026-09-16", 3600.0, 2, 1)]);
         assert_eq!(
-            stats_hover_text(&s, "2026-09-16"),
+            stats_hover_text(&s, "2026-09-16", UiLang::Zh),
             "9 月 16 日 · 1 小时 · 成功 2 个 · 失败 1 个"
+        );
+        assert_eq!(
+            stats_hover_text(&s, "2026-09-16", UiLang::En),
+            "Sep 16 · 1 hr · 2 ok · 1 failed"
         );
 
         // A failure-only day carries no duration claim.
         let failed = summary_with(&[("2026-09-16", 0.0, 0, 1)]);
-        assert_eq!(stats_hover_text(&failed, "2026-09-16"), "9 月 16 日 · 失败 1 个");
+        assert_eq!(
+            stats_hover_text(&failed, "2026-09-16", UiLang::Zh),
+            "9 月 16 日 · 失败 1 个"
+        );
     }
 
     #[test]
     fn early_caption_retires_once_the_span_speaks_for_itself() {
         let young = summary_with(&[("2026-09-01", 60.0, 1, 0)]);
         assert_eq!(
-            stats_early_caption(&young, "2026-09-16", "2026-09-01").as_deref(),
+            stats_early_caption(&young, "2026-09-16", "2026-09-01", UiLang::Zh).as_deref(),
             Some("记录从 9 月 1 日 开始 · 已积累 16 天")
+        );
+        assert_eq!(
+            stats_early_caption(&young, "2026-09-16", "2026-09-01", UiLang::En).as_deref(),
+            Some("Records start Sep 1 · 16 days logged")
         );
 
         let old = summary_with(&[("2026-01-01", 60.0, 1, 0)]);
-        assert_eq!(stats_early_caption(&old, "2026-09-16", "2026-01-01"), None);
+        assert_eq!(
+            stats_early_caption(&old, "2026-09-16", "2026-01-01", UiLang::Zh),
+            None
+        );
     }
 
     #[test]

@@ -51,31 +51,6 @@ impl DownloadProgress {
         ((self.downloaded_bytes as f64 / self.total_bytes as f64) * 100.0).clamp(0.0, 100.0) as f32
     }
 
-    pub fn label(&self) -> String {
-        self.label_for_kind(self.model_id.kind())
-    }
-
-    /// Human status for a model download.
-    pub fn label_for_kind(&self, _kind: crate::model::ModelKind) -> String {
-        match self.state {
-            DownloadState::Idle => "未下载".into(),
-            DownloadState::Downloading => {
-                let pct = self.percent();
-                let speed = format_speed(self.speed_bytes_per_sec);
-                format!("下载中 {pct:.0}% · {speed}")
-            }
-            DownloadState::Completed => "已就绪".into(),
-            DownloadState::Failed => {
-                if self.message.is_empty() {
-                    "下载失败".into()
-                } else {
-                    format!("失败: {}", truncate(&self.message, 48))
-                }
-            }
-            DownloadState::Cancelled => "已取消".into(),
-        }
-    }
-
     /// Build a UI snapshot for a terminal outcome (single place for Failed/Cancelled/Completed).
     pub fn from_outcome(id: ModelId, model_dir: PathBuf, outcome: &DownloadOutcome) -> Self {
         match outcome {
@@ -249,9 +224,10 @@ pub fn download_model(
                     attempt += 1;
                 }
                 Err(FileDownloadError::Transient(message)) => {
-                    return ctx.failed(format!(
-                        "{}: {message}（已尝试 {MAX_FILE_ATTEMPTS} 次，可再次点击下载续传）",
-                        file.file_name
+                    return ctx.failed(crate::i18n::dl_file_retries_exhausted(
+                        &file.file_name,
+                        &message,
+                        MAX_FILE_ATTEMPTS,
                     ));
                 }
             }
@@ -268,15 +244,16 @@ pub fn download_model(
                 return None;
             }
             let actual = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            Some(format!(
-                "{}（{actual}/{} 字节）",
-                f.file_name, f.expected_size
+            Some(crate::i18n::dl_size_mismatch(
+                &f.file_name,
+                actual,
+                f.expected_size,
             ))
         })
         .collect();
     if !bad.is_empty() {
         return DownloadOutcome::Failed {
-            message: format!("文件缺失或损坏: {}", bad.join("、")),
+            message: crate::i18n::dl_files_missing(&bad.join(", ")),
             downloaded_bytes,
             total_bytes,
         };
@@ -429,7 +406,7 @@ fn download_one_file(
         // (a valid complete part was already finished above), so restart.
         discard_part(ctx, part_path, part_bytes, expected);
         return Err(FileDownloadError::Transient(
-            "服务器拒绝断点续传（HTTP 416），已重置".into(),
+            crate::i18n::dl_resume_rejected(),
         ));
     }
 
@@ -456,7 +433,7 @@ fn download_one_file(
             _ => {
                 discard_part(ctx, part_path, part_bytes, expected);
                 return Err(FileDownloadError::Transient(
-                    "服务器返回了错误的续传偏移，已重置".into(),
+                    crate::i18n::dl_resume_offset_invalid(),
                 ));
             }
         }
@@ -493,8 +470,8 @@ fn download_one_file(
 
     let have = std::fs::metadata(part_path).map(|m| m.len()).unwrap_or(0);
     if have != expected {
-        return Err(FileDownloadError::Transient(format!(
-            "文件不完整（{have}/{expected} 字节）"
+        return Err(FileDownloadError::Transient(crate::i18n::dl_incomplete(
+            have, expected,
         )));
     }
     // The pinned revision is immutable, so content is verified before rename;
@@ -503,9 +480,7 @@ fn download_one_file(
         Ok(true) => finish_part_file(part_path, target),
         Ok(false) => {
             discard_part(ctx, part_path, have, expected);
-            Err(FileDownloadError::Transient(
-                "SHA-256 校验失败，已删除并重新下载".into(),
-            ))
+            Err(FileDownloadError::Transient(crate::i18n::dl_sha256_reset()))
         }
         Err(e) => Err(FileDownloadError::Transient(e.to_string())),
     }
@@ -538,29 +513,6 @@ fn finish_part_file(part_path: &Path, target: &Path) -> Result<(), FileDownloadE
         let _ = std::fs::create_dir_all(parent);
     }
     std::fs::rename(part_path, target).map_err(|e| FileDownloadError::Permanent(e.to_string()))
-}
-
-fn format_speed(bps: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    let x = bps as f64;
-    if x >= MB {
-        format!("{:.1} MB/s", x / MB)
-    } else if x >= KB {
-        format!("{:.0} KB/s", x / KB)
-    } else if bps > 0 {
-        format!("{bps} B/s")
-    } else {
-        "…".into()
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max).collect::<String>())
-    }
 }
 
 #[cfg(test)]

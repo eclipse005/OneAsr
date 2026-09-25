@@ -36,7 +36,7 @@ impl Aligner for QwenAlignerAdapter {
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| EngineError::new("对齐器被占用"))?;
+            .map_err(|_| EngineError::new(crate::i18n::aligner_busy()))?;
         let items = inner
             .align(req.wav, req.text, Some(req.language))
             .map_err(|e| EngineError::new(format!("{e:#}")))?;

@@ -136,6 +136,8 @@ impl OneAsrApp {
         Self::start_worker_poller(cx);
 
         let settings = load_settings_or_fallback();
+        // 界面语言先于任何窗口构建生效（settings.json 的 ui_language）。
+        oneasr_core::i18n::set_ui_lang(settings.resolved_ui_language());
         let app_root = resolve_app_root_dir();
         log_environment_snapshot(&settings, &app_root);
 
@@ -257,7 +259,9 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                                     let warning = update.warning.as_ref().map(SharedString::from);
                                     let _ = ptx.send(WorkerMsg::Progress {
                                         id: id_for_progress.clone(),
-                                        stage: SharedString::from(update.label()),
+                                        stage: SharedString::from(
+                                            update.label(ui_lang()),
+                                        ),
                                         warning,
                                     });
                                 })
@@ -267,7 +271,7 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                                 crashlog::log_error(format!(
                                     "ASR worker panic (task {id}): {message}"
                                 ));
-                                Err(format!("处理线程异常: {message}"))
+                                Err(crate::i18n::task_thread_panic(&message))
                             });
                         let timing = clock.finish();
                         let _ = worker_tx.send(WorkerMsg::Finished {
@@ -361,7 +365,7 @@ pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
-        "未知 panic".into()
+        crate::i18n::unknown_panic().into()
     }
 }
 

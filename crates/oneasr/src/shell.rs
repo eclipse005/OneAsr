@@ -1,5 +1,7 @@
 //! OS shell helpers (Windows-first). Never block the UI thread on completion.
 
+use oneasr_core::i18n::{UiLang, ui_lang};
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,7 +17,7 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
         if let Some(parent) = parent_dir(file) {
             return open_folder(&parent);
         }
-        return Err(format!("文件不存在: {}", file.display()));
+        return Err(file_not_found(&file.display().to_string()));
     }
 
     #[cfg(windows)]
@@ -28,7 +30,7 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
         Command::new("explorer")
             .raw_arg(arg)
             .spawn()
-            .map_err(|e| format!("无法打开资源管理器: {e}"))?;
+            .map_err(|e| explorer_failed(&e))?;
         Ok(())
     }
 
@@ -37,7 +39,7 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
         if let Some(parent) = parent_dir(file) {
             return open_folder(&parent);
         }
-        Err("无法解析输出目录".into())
+        Err(resolve_output_failed())
     }
 }
 
@@ -47,7 +49,7 @@ fn open_folder(dir: &Path) -> Result<(), String> {
         Command::new("explorer")
             .arg(dir.as_os_str())
             .spawn()
-            .map_err(|e| format!("无法打开文件夹: {e}"))?;
+            .map_err(|e| open_folder_failed(&e))?;
         Ok(())
     }
     #[cfg(not(windows))]
@@ -55,7 +57,36 @@ fn open_folder(dir: &Path) -> Result<(), String> {
         Command::new("xdg-open")
             .arg(dir.as_os_str())
             .spawn()
-            .map_err(|e| format!("无法打开文件夹: {e}"))?;
+            .map_err(|e| open_folder_failed(&e))?;
         Ok(())
+    }
+}
+
+fn file_not_found(path: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("文件不存在: {path}"),
+        UiLang::En => format!("File not found: {path}"),
+    }
+}
+
+fn explorer_failed(e: &std::io::Error) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("无法打开资源管理器: {e}"),
+        UiLang::En => format!("Failed to launch Explorer: {e}"),
+    }
+}
+
+#[cfg(not(windows))]
+fn resolve_output_failed() -> String {
+    match ui_lang() {
+        UiLang::Zh => "无法解析输出目录".into(),
+        UiLang::En => "Cannot resolve the output folder".into(),
+    }
+}
+
+fn open_folder_failed(e: &std::io::Error) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("无法打开文件夹: {e}"),
+        UiLang::En => format!("Failed to open folder: {e}"),
     }
 }

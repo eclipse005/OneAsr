@@ -112,7 +112,7 @@ fn main() {
         &app_root_path,
         |update: StageUpdate| {
             clock.note(&update);
-            eprintln!("[stage] {}", update.label());
+            eprintln!("[stage] {}", update.label(oneasr_core::i18n::ui_lang()));
         },
     );
     let timing = clock.finish();
@@ -140,7 +140,7 @@ fn main() {
             for s in &timing.stages {
                 eprintln!(
                     "  {:12} {:>8}",
-                    s.stage.label(),
+                    s.stage.label(oneasr_core::i18n::ui_lang()),
                     oneasr_core::format_process_ms(s.elapsed_ms)
                 );
             }
@@ -150,7 +150,7 @@ fn main() {
             for s in &timing.stages {
                 eprintln!(
                     "  {:12} {:>8}",
-                    s.stage.label(),
+                    s.stage.label(oneasr_core::i18n::ui_lang()),
                     oneasr_core::format_process_ms(s.elapsed_ms)
                 );
             }

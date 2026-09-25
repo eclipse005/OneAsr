@@ -1,11 +1,14 @@
 //! OneAsr core: Qwen ASR + ForcedAligner pipeline, sentence boundary, subtitles.
 //!
-//! This crate is headless by design: it holds no window, no list model, and no
-//! interface copy. The batch list (`Task` / `TaskStatus`) and UI strings live in
-//! the GUI crate.
+//! This crate is headless by design: it holds no window and no list model. The
+//! batch list (`Task` / `TaskStatus`) and the interface labels live in the GUI
+//! crate; the bilingual copy for messages that *originate* here (errors, stage
+//! names, download progress, stats spans) lives in [`i18n`], together with the
+//! shared zh/en language mechanism the GUI crate reuses.
 
 pub mod asr;
 mod diagnostics;
+pub mod i18n;
 pub mod engine;
 pub mod lang;
 pub mod media;

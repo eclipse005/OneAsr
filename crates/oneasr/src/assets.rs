@@ -78,6 +78,10 @@ fn table() -> &'static HashMap<&'static str, &'static [u8]> {
                 include_bytes!("../../../assets/icons/video.svg").as_slice(),
             ),
             (
+                "icons/language-system.svg",
+                include_bytes!("../../../assets/icons/language-system.svg").as_slice(),
+            ),
+            (
                 "sounds/click.wav",
                 include_bytes!("../../../assets/sounds/click.wav").as_slice(),
             ),

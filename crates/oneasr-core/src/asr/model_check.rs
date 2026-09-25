@@ -1,6 +1,7 @@
 //! Model-directory validation: does this folder hold a complete, loadable set of weights? Cached, because the settings drawer probes on every repaint.
 
 use super::AsrError;
+use crate::i18n::{self, ROLE_ALIGNER, ROLE_ASR, ROLE_DEMUCS};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -45,10 +46,12 @@ fn cached_ready_store(role: ModelRole, canonical: PathBuf) {
 pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Asr, model_dir, || {
         match crate::model::ModelId::try_from_asr_dir(model_dir) {
-            Some(id) => check_model_dir_against_catalog("语音识别", model_dir, id),
-            None => {
-                check_model_dir_inner("语音识别", model_dir, &["config.json", "tokenizer.json"])
-            }
+            Some(id) => check_model_dir_against_catalog(ROLE_ASR, model_dir, id),
+            None => check_model_dir_inner(
+                ROLE_ASR,
+                model_dir,
+                &["config.json", "tokenizer.json"],
+            ),
         }
     })
 }
@@ -61,9 +64,9 @@ pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
 pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Aligner, model_dir, || {
         match crate::model::ModelId::try_from_aligner_dir(model_dir) {
-            Some(id) => check_model_dir_against_catalog("对齐", model_dir, id),
+            Some(id) => check_model_dir_against_catalog(ROLE_ALIGNER, model_dir, id),
             None => check_model_dir_inner(
-                "对齐",
+                ROLE_ALIGNER,
                 model_dir,
                 &["config.json", "tokenizer.json", "tokenizer_config.json"],
             ),
@@ -84,15 +87,15 @@ pub fn check_demucs_model_dir(model_dir: &Path) -> Result<(), AsrError> {
             .is_some_and(|n| n.eq_ignore_ascii_case(crate::model::HTDEMUCS_FT));
         if is_install_layout {
             return check_model_dir_against_catalog(
-                "人声分离",
+                ROLE_DEMUCS,
                 model_dir,
                 crate::model::ModelId::HtdemucsFt,
             );
         }
         if !model_dir.is_dir() {
-            return Err(AsrError::Other(format!(
-                "人声分离 模型目录不存在: {}",
-                model_dir.display()
+            return Err(AsrError::Other(i18n::model_dir_missing(
+                ROLE_DEMUCS,
+                model_dir,
             )));
         }
         let mut missing = Vec::new();
@@ -105,7 +108,7 @@ pub fn check_demucs_model_dir(model_dir: &Path) -> Result<(), AsrError> {
             Ok(())
         } else {
             Err(AsrError::ModelIncomplete {
-                role: "人声分离",
+                role: ROLE_DEMUCS,
                 missing: join_missing(&missing),
                 dir: model_dir.display().to_string(),
             })
@@ -131,15 +134,12 @@ fn run_cached_model_check(
 
 /// Validate a directory against a catalog definition (present + size contract).
 fn check_model_dir_against_catalog(
-    role: &'static str,
+    role: i18n::Str,
     model_dir: &Path,
     id: crate::model::ModelId,
 ) -> Result<(), AsrError> {
     if !model_dir.is_dir() {
-        return Err(AsrError::Other(format!(
-            "{role} 模型目录不存在: {}",
-            model_dir.display()
-        )));
+        return Err(AsrError::Other(i18n::model_dir_missing(role, model_dir)));
     }
     let definition = crate::model::model_definition(id);
     let missing: Vec<String> = definition
@@ -152,9 +152,9 @@ fn check_model_dir_against_catalog(
             }
             let actual = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             Some(if actual == 0 {
-                format!("{}（不存在）", file.file_name)
+                i18n::file_missing(&file.file_name)
             } else {
-                format!("{}（{actual}/{} 字节）", file.file_name, file.expected_size)
+                i18n::file_size_mismatch(&file.file_name, actual, file.expected_size)
             })
         })
         .collect();
@@ -170,15 +170,12 @@ fn check_model_dir_against_catalog(
 }
 
 fn check_model_dir_inner(
-    role: &'static str,
+    role: i18n::Str,
     model_dir: &Path,
     required: &[&str],
 ) -> Result<(), AsrError> {
     if !model_dir.is_dir() {
-        return Err(AsrError::Other(format!(
-            "{role} 模型目录不存在: {}",
-            model_dir.display()
-        )));
+        return Err(AsrError::Other(i18n::model_dir_missing(role, model_dir)));
     }
     let mut missing = Vec::new();
     for name in required {
@@ -221,7 +218,7 @@ fn weight_filenames(model_dir: &Path) -> Result<Vec<String>, String> {
     } else if single.is_file() {
         Ok(vec!["model.safetensors".into()])
     } else {
-        Err("model.safetensors 或 model.safetensors.index.json".into())
+        Err(i18n::weight_file_missing())
     }
 }
 
@@ -234,7 +231,7 @@ fn shard_names_from_index(index: &Path) -> Result<Vec<String>, String> {
     names.sort();
     names.dedup();
     if names.is_empty() {
-        Err("model.safetensors.index.json (weight_map 为空)".into())
+        Err(i18n::weight_map_empty())
     } else {
         Ok(names)
     }
@@ -247,10 +244,8 @@ fn check_weight_file(dir: &Path, name: &str, missing: &mut Vec<String>) {
     let path = dir.join(name);
     match std::fs::metadata(&path) {
         Ok(meta) if meta.is_file() && meta.len() >= MIN_WEIGHT_FILE_BYTES => {}
-        Ok(meta) if meta.is_file() => {
-            missing.push(format!("{name} (过小: {} 字节)", meta.len()));
-        }
-        _ => missing.push(format!("{name} (不存在)")),
+        Ok(meta) if meta.is_file() => missing.push(i18n::file_too_small(name, meta.len())),
+        _ => missing.push(i18n::file_absent(name)),
     }
 }
 
@@ -259,6 +254,6 @@ fn join_missing(names: &[String]) -> String {
     if names.len() <= SHOW {
         names.join(", ")
     } else {
-        format!("{}… (共 {} 项)", names[..SHOW].join(", "), names.len())
+        i18n::missing_summary(&names[..SHOW].join(", "), names.len())
     }
 }

@@ -50,6 +50,23 @@ impl OneAsrApp {
         self.settings_dirty
     }
 
+    /// 界面语言图标按钮：在 跟随系统 → 中文 → English 间循环。
+    ///
+    /// 与抽屉里其他设置**同一套暂存语义**：点击只改草稿（图标跟着变、
+    /// 出现「未保存」），点「保存设置」才切换全界面文案并落盘
+    /// （见 [`Self::save_settings`]），关抽屉放弃更改则随快照回滚。
+    pub(crate) fn cycle_ui_language(&mut self, cx: &mut Context<Self>) {
+        let next = match self.settings.ui_language.as_str() {
+            oneasr_core::i18n::UI_LANGUAGE_ZH => oneasr_core::i18n::UI_LANGUAGE_EN,
+            oneasr_core::i18n::UI_LANGUAGE_EN => oneasr_core::i18n::UI_LANGUAGE_SYSTEM,
+            _ => oneasr_core::i18n::UI_LANGUAGE_ZH,
+        };
+        self.settings.ui_language = next.into();
+        self.mark_settings_dirty(cx);
+        self.play_ui(sfx::Sfx::Click);
+        self.flash_hint(t(L::UI_LANGUAGE_APPLY_ON_SAVE), cx);
+    }
+
     /// Write `settings.json`, re-check model files.
     ///
     /// The one and only commit point: the drawer's 保存设置 button calls
@@ -59,20 +76,22 @@ impl OneAsrApp {
             Ok(_) => {
                 self.settings_dirty = false;
                 self.settings_snapshot = Some(self.settings.clone());
+                // 界面语言随本次保存生效（抽屉里选的档位是暂存的）。
+                oneasr_core::i18n::set_ui_lang(self.settings.resolved_ui_language());
                 self.reset_model_config(cx);
                 // Only a real commit earns the tap.
                 self.play_ui(sfx::Sfx::Click);
                 self.flash_hint(
                     match self.model_status {
-                        ModelStatus::Ready => "设置已保存 · 模型就绪",
-                        ModelStatus::NotReady => "设置已保存 · 模型未就绪",
+                        ModelStatus::Ready => t(L::SETTINGS_SAVED_READY),
+                        ModelStatus::NotReady => t(L::SETTINGS_SAVED_NOT_READY),
                     },
                     cx,
                 );
             }
             Err(e) => {
                 crashlog::log_error(format!("settings save failed: {e}"));
-                self.flash_hint(format!("保存失败: {e}"), cx);
+                self.flash_hint(crate::i18n::save_failed(&e), cx);
             }
         }
     }
@@ -85,7 +104,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         thread::spawn(move || {
             let files = rfd::FileDialog::new()
-                .set_title("添加音视频")
+                .set_title(t(L::DLG_ADD_MEDIA))
                 .add_filter(
                     "Media",
                     &[
@@ -110,7 +129,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         let start = self.settings.asr_model_dir.clone();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择语音识别模型目录");
+            let mut dlg = rfd::FileDialog::new().set_title(t(L::DLG_ASR_DIR));
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }
@@ -125,7 +144,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         let start = self.settings.aligner_model_dir.clone();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择对齐模型目录");
+            let mut dlg = rfd::FileDialog::new().set_title(t(L::DLG_ALIGNER_DIR));
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }
@@ -140,7 +159,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         let start = self.settings.resolved_demucs_model_dir();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择人声分离模型目录");
+            let mut dlg = rfd::FileDialog::new().set_title(t(L::DLG_DEMUCS_DIR));
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }
@@ -155,7 +174,7 @@ impl OneAsrApp {
         let tx = self.tx.clone();
         let start = self.settings.resolved_output_dir();
         thread::spawn(move || {
-            let mut dlg = rfd::FileDialog::new().set_title("选择字幕输出目录");
+            let mut dlg = rfd::FileDialog::new().set_title(t(L::DLG_OUTPUT_DIR));
             if start.is_dir() {
                 dlg = dlg.set_directory(&start);
             }

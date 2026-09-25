@@ -35,6 +35,10 @@ fn main() -> ExitCode {
         };
     }
 
+    // CLI 不读 settings.json（全部走参数），消息语言直接跟随系统——
+    // 对所有子命令生效（transcribe / asr-chunk 的错误与提示都走 i18n）。
+    oneasr_core::i18n::set_ui_lang(oneasr_core::i18n::detect_system_lang());
+
     // Default subcommand: bare flags act as `transcribe`.
     let (cmd, rest) = if args[1].starts_with('-') {
         ("transcribe", &args[1..])
@@ -153,7 +157,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     settings.output_txt = want_txt;
     settings.output_srt = !no_srt;
     if no_srt && !want_txt {
-        eprintln!("warning: --no-srt 需要配合 --txt；已保留 SRT 输出");
+        eprintln!("{}", oneasr_core::i18n::cli_no_srt_warning());
     }
     if let Some(s) = script {
         settings.text_script = s;
@@ -183,7 +187,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         settings.max_new_tokens,
         settings.output_srt,
         settings.output_txt,
-        settings.text_script_choice().label(),
+        settings.text_script_choice().label(oneasr_core::i18n::ui_lang()),
         settings.vocal_separation,
     );
 
@@ -207,7 +211,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
             if let Some(w) = &update.warning {
                 eprintln!("[warn] {w}");
             }
-            eprintln!("[stage] {}", update.label());
+            eprintln!("[stage] {}", update.label(oneasr_core::i18n::ui_lang()));
         },
         export,
     );
@@ -239,7 +243,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
             for s in &timing.stages {
                 eprintln!(
                     "  {:12} {:>8}",
-                    s.stage.label(),
+                    s.stage.label(oneasr_core::i18n::ui_lang()),
                     oneasr_core::format_process_ms(s.elapsed_ms)
                 );
             }
@@ -250,7 +254,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
             for s in &timing.stages {
                 eprintln!(
                     "  {:12} {:>8}",
-                    s.stage.label(),
+                    s.stage.label(oneasr_core::i18n::ui_lang()),
                     oneasr_core::format_process_ms(s.elapsed_ms)
                 );
             }

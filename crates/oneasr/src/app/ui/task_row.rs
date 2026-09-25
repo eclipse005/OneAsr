@@ -41,9 +41,9 @@ pub(super) fn task_row_view(
         IconKind::Play
     };
     let primary_tip = if done_with_out {
-        "打开输出位置"
+        t(L::TIP_OPEN_OUTPUT)
     } else {
-        "开始"
+        t(L::TIP_START)
     };
     let primary_enabled = interactive
         && if done_with_out {
@@ -75,7 +75,7 @@ pub(super) fn task_row_view(
         .filter(|(sid, _)| sid == &row.id)
         .map(|(_, s)| s.as_ref());
     let (status_label, status_color, status_bg) =
-        status_pill_style(status, qn, stage_for_row);
+        status_pill_style(status, qn, stage_for_row, ui_lang());
     let timing_total = row
         .timing
         .as_ref()
@@ -281,9 +281,11 @@ pub(super) fn task_row_view(
                                                                             },
                                                                         )
                                                                         .whitespace_nowrap()
-                                                                        .child(format!(
-                                                                            "用时 {total_label}"
-                                                                        )),
+                                                                        .child(
+                                                                            crate::i18n::took_time(
+                                                                                &total_label,
+                                                                            ),
+                                                                        ),
                                                                 ),
                                                         )
                                                         .when(show_card, |wrap| {
@@ -501,13 +503,13 @@ pub(super) fn task_row_view(
                                                 } else {
                                                     MUTED_SOFT
                                                 })
-                                                .child("分离"),
+                                                .child(t(L::SEP_CHIP)),
                                         )
                                         .tooltip({
                                             let tip = if sep_on {
-                                                "人声分离：开启（转录前分离人声，点击关闭）"
+                                                t(L::TIP_SEP_ON)
                                             } else {
-                                                "人声分离：关闭（点击开启）"
+                                                t(L::TIP_SEP_OFF)
                                             };
                                             move |_, cx| {
                                                 cx.new(|_| NameTooltip {
@@ -552,7 +554,7 @@ pub(super) fn task_row_view(
                                 ))
                                 .child(icon_btn(
                                     IconKind::Trash,
-                                    "删除",
+                                    t(L::TIP_DELETE),
                                     can_delete,
                                     is_hovered,
                                     cx.listener(move |this, _, _, cx| {

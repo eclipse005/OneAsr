@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::i18n;
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::media::resolve_app_root;
 use crate::model::{
@@ -81,6 +82,11 @@ pub struct Settings {
     /// Each task can override; pipeline uses the task language at run time.
     #[serde(default = "default_source_language")]
     pub language: String,
+    /// Interface language: `system` (follow the OS) | `zh` | `en`.
+    /// Normalized by [`i18n::normalize_ui_language`]; resolved to a concrete
+    /// [`i18n::UiLang`] by [`Self::resolved_ui_language`].
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
     /// `short` | `standard` | `loose`
     #[serde(default = "default_subtitle_length_preset")]
     pub subtitle_length_preset: String,
@@ -139,6 +145,11 @@ fn default_max_new_tokens() -> usize {
     2048
 }
 
+fn default_ui_language() -> String {
+    // 跟随系统：zh 系统中文、其余英文；首次运行后用户可在设置里固定。
+    i18n::UI_LANGUAGE_SYSTEM.into()
+}
+
 fn default_subtitle_length_preset() -> String {
     "standard".into()
 }
@@ -184,6 +195,7 @@ impl Default for Settings {
             backend: default_backend(),
             max_new_tokens: default_max_new_tokens(),
             language: default_source_language(),
+            ui_language: default_ui_language(),
             subtitle_length_preset: default_subtitle_length_preset(),
             chunk_target_seconds: default_chunk_target_seconds(),
             output_dir: default_output_dir(),
@@ -284,6 +296,11 @@ impl Settings {
     /// [`Self::normalize`] while recording every self-heal into `notes`.
     pub fn normalize_with_notes(&mut self, notes: &mut Vec<String>) {
         self.language = normalize_source_language(&self.language);
+        let ui_lang = i18n::normalize_ui_language(&self.ui_language);
+        if ui_lang != self.ui_language {
+            self.ui_language = ui_lang;
+            notes.push(format!("界面语言非法 → {}", self.ui_language));
+        }
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
         self.normalize_output_dir();
         // A muted install stays muted. The two switches of 0.1.9 were merged
@@ -409,6 +426,16 @@ impl Settings {
 
     /// Chunk target used by the pipeline (always within product range).
     #[inline]
+    /// 把 `ui_language` 设置解析成具体语言：`system` 时探测操作系统，
+    /// 探测失败保守回退中文（见 [`i18n::detect_system_lang`]）。
+    pub fn resolved_ui_language(&self) -> i18n::UiLang {
+        match self.ui_language.as_str() {
+            i18n::UI_LANGUAGE_ZH => i18n::UiLang::Zh,
+            i18n::UI_LANGUAGE_EN => i18n::UiLang::En,
+            _ => i18n::detect_system_lang(),
+        }
+    }
+
     pub fn chunk_target_seconds_clamped(&self) -> u32 {
         clamp_chunk_target_seconds(self.chunk_target_seconds)
     }
@@ -510,7 +537,8 @@ impl Settings {
     /// Normalize in place, then persist to `settings.json`.
     pub fn save(&mut self) -> Result<PathBuf, String> {
         self.normalize();
-        let path = Self::config_path().ok_or_else(|| "找不到应用目录，无法保存设置".to_string())?;
+        let path = Self::config_path()
+            .ok_or_else(|| crate::i18n::settings_no_dir())?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -587,6 +615,48 @@ mod tests {
     use crate::model::QWEN3_ASR_17B;
 
     #[test]
+    fn ui_language_defaults_to_system() {
+        let mut s = Settings::default();
+        assert_eq!(s.ui_language, i18n::UI_LANGUAGE_SYSTEM);
+        s.ui_language = "zh".into();
+        assert_eq!(s.resolved_ui_language(), i18n::UiLang::Zh);
+        s.ui_language = "en".into();
+        assert_eq!(s.resolved_ui_language(), i18n::UiLang::En);
+        s.ui_language = "system".into();
+        assert!(matches!(
+            s.resolved_ui_language(),
+            i18n::UiLang::Zh | i18n::UiLang::En
+        ));
+    }
+
+    #[test]
+    fn ui_language_missing_key_defaults_to_system() {
+        // 旧版 settings.json 没有这个字段，反序列化必须落到默认值。
+        let s: Settings = serde_json::from_str("{}").expect("empty settings object");
+        assert_eq!(s.ui_language, i18n::UI_LANGUAGE_SYSTEM);
+    }
+
+    #[test]
+    fn normalize_repairs_bad_ui_language() {
+        let mut s = Settings::default();
+        s.ui_language = "klingon".into();
+        let mut notes = Vec::new();
+        s.normalize_with_notes(&mut notes);
+        assert_eq!(s.ui_language, i18n::UI_LANGUAGE_SYSTEM);
+        assert!(notes.iter().any(|n| n.contains("界面语言")));
+    }
+
+    #[test]
+    fn normalize_keeps_valid_ui_language() {
+        let mut s = Settings::default();
+        s.ui_language = "en".into();
+        let mut notes = Vec::new();
+        s.normalize_with_notes(&mut notes);
+        assert_eq!(s.ui_language, "en");
+        assert!(!notes.iter().any(|n| n.contains("界面语言")));
+    }
+
+    #[test]
     fn default_language_and_asr_id() {
         assert_eq!(Settings::default().language, "zh");
         assert_eq!(Settings::default().selected_asr_id(), ModelId::Qwen3Asr06B);
@@ -634,7 +704,9 @@ mod tests {
         assert!(s.can_start().is_ok(), "{:?}", s.can_start());
 
         s.vocal_separation = true;
-        let err = s.can_start().unwrap_err();
+        let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || {
+            s.can_start().unwrap_err()
+        });
         assert!(err.contains("人声分离"), "{err}");
         assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
 

@@ -30,7 +30,7 @@ impl AsrEngine for QwenAsrAdapter {
         let path = req
             .wav
             .to_str()
-            .ok_or_else(|| EngineError::new("音频路径非 UTF-8"))?;
+            .ok_or_else(|| EngineError::new(crate::i18n::audio_path_not_utf8()))?;
         let opts = TranscribeOptions::default()
             .with_max_new_tokens(req.max_new_tokens)
             .with_language(req.language.to_string());

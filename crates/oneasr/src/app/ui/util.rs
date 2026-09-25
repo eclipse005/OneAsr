@@ -5,6 +5,8 @@
 
 use gpui::{IntoElement, Rgba, div, prelude::*, px, svg};
 
+use oneasr_core::i18n::UiLang;
+
 use crate::app::task::TaskStatus;
 use crate::theme::{
     ACCENT, ACCENT_SOFT, DANGER, DANGER_SOFT, LINE, LINE_SOFT, MEDIA_PLATE, MUTED, WARN, WARN_SOFT,
@@ -20,15 +22,20 @@ pub(crate) fn ease_out_cubic(t: f32) -> f32 {
 /// is what it buys. Deliberately coarse and never user-facing as a conversion:
 /// the point is the shape of the amount, not a second precision. `None` under
 /// ten minutes, where every comparison would sound like flattery.
-pub(crate) fn saved_tale(secs: f64) -> Option<&'static str> {
+pub(crate) fn saved_tale(secs: f64, lang: UiLang) -> Option<&'static str> {
     let min = secs / 60.0;
-    match min {
-        m if m < 10.0 => None,
-        m if m < 40.0 => Some("≈ 一集播客"),
-        m if m < 100.0 => Some("≈ 一集电视剧"),
-        m if m < 240.0 => Some("≈ 一部电影"),
-        m if m < 480.0 => Some("≈ 半个工作日"),
-        _ => Some("≈ 一个工作日"),
+    match (lang, min) {
+        (_, m) if m < 10.0 => None,
+        (UiLang::Zh, m) if m < 40.0 => Some("≈ 一集播客"),
+        (UiLang::Zh, m) if m < 100.0 => Some("≈ 一集电视剧"),
+        (UiLang::Zh, m) if m < 240.0 => Some("≈ 一部电影"),
+        (UiLang::Zh, m) if m < 480.0 => Some("≈ 半个工作日"),
+        (UiLang::Zh, _) => Some("≈ 一个工作日"),
+        (UiLang::En, m) if m < 40.0 => Some("≈ a podcast episode"),
+        (UiLang::En, m) if m < 100.0 => Some("≈ a TV episode"),
+        (UiLang::En, m) if m < 240.0 => Some("≈ a movie"),
+        (UiLang::En, m) if m < 480.0 => Some("≈ half a workday"),
+        (UiLang::En, _) => Some("≈ a full workday"),
     }
 }
 
@@ -84,24 +91,46 @@ pub(crate) fn status_border_color(status: TaskStatus) -> Rgba {
     }
 }
 
-/// Status pill: (label, foreground, soft background).
+/// Status pill: (label, foreground, soft background). `stage` is the live
+/// pipeline label (already translated); everything else is per `lang`.
 pub(crate) fn status_pill_style(
     status: TaskStatus,
     queue_n: Option<usize>,
     stage: Option<&str>,
+    lang: UiLang,
 ) -> (String, Rgba, Rgba) {
+    let pending = match lang {
+        UiLang::Zh => "待处理",
+        UiLang::En => "Pending",
+    };
+    let processing = match lang {
+        UiLang::Zh => "处理中",
+        UiLang::En => "Processing",
+    };
+    let done = match lang {
+        UiLang::Zh => "完成",
+        UiLang::En => "Done",
+    };
+    let error = match lang {
+        UiLang::Zh => "错误",
+        UiLang::En => "Error",
+    };
     match status {
-        TaskStatus::Pending => ("待处理".into(), MUTED, MEDIA_PLATE),
+        TaskStatus::Pending => (pending.into(), MUTED, MEDIA_PLATE),
         TaskStatus::Queued => {
             let n = queue_n.unwrap_or(0);
-            (format!("排队#{n}"), MUTED, MEDIA_PLATE)
+            let label = match lang {
+                UiLang::Zh => format!("排队#{n}"),
+                UiLang::En => format!("Queued #{n}"),
+            };
+            (label, MUTED, MEDIA_PLATE)
         }
         TaskStatus::Processing => {
-            let base = stage.unwrap_or("处理中");
+            let base = stage.unwrap_or(processing);
             (base.to_string(), WARN, WARN_SOFT)
         }
-        TaskStatus::Done => ("完成".into(), ACCENT, ACCENT_SOFT),
-        TaskStatus::Error => ("错误".into(), DANGER, DANGER_SOFT),
+        TaskStatus::Done => (done.into(), ACCENT, ACCENT_SOFT),
+        TaskStatus::Error => (error.into(), DANGER, DANGER_SOFT),
     }
 }
 

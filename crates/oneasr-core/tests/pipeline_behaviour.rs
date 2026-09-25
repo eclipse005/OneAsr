@@ -158,7 +158,7 @@ fn engines_are_used_one_at_a_time() {
     assert_eq!(provider.separator_loads(), 0);
 
     // Stage stream still describes the run for the UI.
-    let labels: Vec<String> = stages.iter().map(|s| s.label()).collect();
+    let labels: Vec<String> = stages.iter().map(|s| s.label(oneasr_core::i18n::UiLang::Zh)).collect();
     assert!(labels.iter().any(|l| l == "转码音频"));
     assert!(labels.iter().any(|l| l == "加载识别模型"));
     assert!(labels.iter().any(|l| l == "加载对齐模型"));
@@ -231,7 +231,7 @@ fn separation_reports_progress_and_cpu_fallback() {
     result.expect("pipeline should succeed with a fake separator");
 
     assert_eq!(provider.separator_loads(), 1, "separator must load once");
-    let labels: Vec<String> = stages.iter().map(|s| s.label()).collect();
+    let labels: Vec<String> = stages.iter().map(|s| s.label(oneasr_core::i18n::UiLang::Zh)).collect();
     assert!(
         labels.iter().any(|l| l == "人声分离 1/3") && labels.iter().any(|l| l == "人声分离 3/3"),
         "progress labels missing: {labels:?}"

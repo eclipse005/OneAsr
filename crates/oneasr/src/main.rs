@@ -12,6 +12,7 @@
 mod app;
 mod assets;
 mod crashlog;
+mod i18n;
 mod sfx;
 mod shell;
 mod theme;

@@ -75,7 +75,8 @@ impl OneAsrApp {
                             if matches!(t.status, TaskStatus::Processing | TaskStatus::Queued) {
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
-                                t.error = Some("识别工作线程已退出".into());
+                                t.error =
+                                    Some(oneasr_core::i18n::t(L::WORKER_EXITED).into());
                                 affected += 1;
                             }
                         }
@@ -183,7 +184,7 @@ impl OneAsrApp {
         if progress.state == DownloadState::Completed {
             crashlog::log_info(format!(
                 "download completed: {} → {}",
-                id.label(),
+                id.label(ui_lang()),
                 progress.model_dir.display()
             ));
             // Install layout already has files. Bind active selection only
@@ -191,7 +192,7 @@ impl OneAsrApp {
             match id.kind() {
                 ModelKind::Demucs => {
                     self.refresh_model_probe();
-                    self.flash_hint(format!("{} 已就绪", id.label()), cx);
+                    self.flash_hint(crate::i18n::model_ready(&id.label(ui_lang())), cx);
                 }
                 ModelKind::Asr | ModelKind::Align => {
                     let bound = self
@@ -203,19 +204,19 @@ impl OneAsrApp {
                         // already point at (the download lands in the current
                         // directory for that component).
                         self.reset_model_config(cx);
-                        self.flash_hint(format!("{} 下载完成", id.label()), cx);
+                        self.flash_hint(crate::i18n::model_download_done(&id.label(ui_lang())), cx);
                     } else {
                         // Non-selected ASR size finished installing on disk.
                         self.asr_download = None;
                         self.flash_hint(
-                            format!("{} 已就绪，可在设置中切换使用", id.label()),
+                            crate::i18n::model_ready_switchable(&id.label(ui_lang())),
                             cx,
                         );
                     }
                 }
             }
         } else if progress.state == DownloadState::Failed {
-            let fail = format!("{} 下载失败: {}", id.label(), progress.message);
+            let fail = crate::i18n::model_download_failed(&id.label(ui_lang()), &progress.message);
             // Byte counters separate dir-create failures (0 bytes)
             // from mid-file / rename failures for bare OS errors.
             crashlog::log_error(format!(
@@ -228,11 +229,11 @@ impl OneAsrApp {
         } else if progress.state == DownloadState::Cancelled {
             crashlog::log_info(format!(
                 "download cancelled: {} at {}/{} bytes",
-                id.label(),
+                id.label(ui_lang()),
                 progress.downloaded_bytes,
                 progress.total_bytes
             ));
-            self.flash_hint(format!("{} 已取消", id.label()), cx);
+            self.flash_hint(crate::i18n::model_cancelled(&id.label(ui_lang())), cx);
         }
         // Hide another size's terminal snapshot when viewing this size.
         self.clear_stale_asr_progress();
@@ -327,7 +328,8 @@ impl OneAsrApp {
             // already looking at.
             if rec.ok && self.stats.tasks_ok == 1
                 && let Some(s) = self.stats.saved_sec() {
-                self.nudge_saved = Some(oneasr_core::stats::format_span_secs(s).into());
+                self.nudge_saved =
+                    Some(oneasr_core::stats::format_span_secs(ui_lang(), s).into());
             }
         }
         if self.batch_mode {

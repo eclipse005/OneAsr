@@ -11,9 +11,9 @@ impl OneAsrApp {
         self.drain_row_anims();
 
         if self.tasks.is_empty() {
-            let title = empty_state_title();
+            let title = empty_state_title(ui_lang());
             let not_ready = self.model_status == ModelStatus::NotReady;
-            let subtitle = empty_state_subtitle(not_ready);
+            let subtitle = empty_state_subtitle(ui_lang(), not_ready);
             self.tick_empty_wave();
             let wave = self.render_empty_wave(cx);
             return div()
@@ -56,14 +56,14 @@ impl OneAsrApp {
                                 .items_center()
                                 .gap_2()
                                 .child(btn(
-                                    "添加文件",
+                                    t(L::ADD_FILES),
                                     BtnKind::Primary,
                                     true,
                                     cx.listener(|this, _, _, cx| this.add_files_dialog(cx)),
                                 ))
                                 .when(not_ready, |el| {
                                     el.child(btn(
-                                        "打开设置",
+                                        t(L::OPEN_SETTINGS),
                                         BtnKind::Secondary,
                                         true,
                                         cx.listener(|this, _, _, cx| {

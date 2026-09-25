@@ -28,15 +28,15 @@ pub use model_check::{
 };
 
 use std::cell::RefCell;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-
-use thiserror::Error;
 
 use crate::diagnostics::{pipeline_trace, trace_log};
 use crate::engine::{
     AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent, TranscribeRequest,
 };
+use crate::i18n::{self, UiLang, t};
 use crate::lang::{to_lang_key, to_qwen_language_label};
 use crate::media::{
     MediaError, convert_to_16k_mono_wav, slice_wav, wav_duration_sec,
@@ -51,41 +51,76 @@ use crate::subtitle::segmenter::{WordToken, normalize_word_tokens};
 use crate::text_script;
 use crate::vad;
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum AsrError {
-    #[error("I/O 错误: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("音频处理错误: {0}")]
-    Media(#[from] MediaError),
-    #[error("语音识别未产生任何有效文本（{0} 段全部为空）")]
+    Io(std::io::Error),
+    Media(MediaError),
     EmptyTranscribe(usize),
-    #[error("对齐后词列表为空")]
     EmptyAlignment,
-    #[error("断句后字幕为空")]
     EmptySentenceBoundary,
-    #[error("加载语音识别模型失败: {0}")]
     LoadAsr(String),
-    #[error("加载对齐模型失败: {0}")]
     LoadAligner(String),
-    #[error("转写失败 chunk {0}: {1}")]
     TranscribeChunk(usize, String),
-    #[error("对齐失败 chunk {0}（{1}）: {2}")]
     AlignChunk(usize, String, String),
-    #[error("{role}模型文件不完整（{missing}）: {dir}")]
     ModelIncomplete {
-        role: &'static str,
+        role: i18n::Str,
         missing: String,
         dir: String,
     },
-    #[error("{0}")]
     Other(String),
+}
+
+impl From<std::io::Error> for AsrError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<MediaError> for AsrError {
+    fn from(e: MediaError) -> Self {
+        Self::Media(e)
+    }
+}
+
+impl fmt::Display for AsrError {
+    /// 文案在**展示时**按进程当前语言取词（[`crate::i18n`]）；已在错误里
+    /// 定格的底层消息（io::Error、EngineError 等）保持原样。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{}: {e}", t(i18n::ERR_IO)),
+            Self::Media(e) => write!(f, "{}: {e}", t(i18n::ERR_MEDIA)),
+            Self::EmptyTranscribe(n) => write!(f, "{}", i18n::empty_transcribe(*n)),
+            Self::EmptyAlignment => write!(f, "{}", t(i18n::ERR_EMPTY_ALIGNMENT)),
+            Self::EmptySentenceBoundary => {
+                write!(f, "{}", t(i18n::ERR_EMPTY_SENTENCE_BOUNDARY))
+            }
+            Self::LoadAsr(e) => write!(f, "{}", i18n::load_asr_failed(e)),
+            Self::LoadAligner(e) => write!(f, "{}", i18n::load_aligner_failed(e)),
+            Self::TranscribeChunk(i, e) => write!(f, "{}", i18n::transcribe_chunk(*i, e)),
+            Self::AlignChunk(i, inner, e) => write!(f, "{}", i18n::align_chunk(*i, inner, e)),
+            Self::ModelIncomplete { role, missing, dir } => {
+                write!(f, "{}", i18n::model_incomplete(*role, missing, dir))
+            }
+            Self::Other(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for AsrError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Media(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 impl AsrError {
     /// Wrap an opaque error with context about which pipeline stage failed.
     pub fn with_stage(self, stage: &str) -> Self {
         match self {
-            Self::Io(e) => Self::Other(format!("[{stage}] I/O 错误: {e}")),
+            Self::Io(e) => Self::Other(i18n::stage_io_error(stage, &e)),
             Self::Media(e) => Self::Other(format!("[{stage}] {e}")),
             Self::LoadAsr(e) => Self::LoadAsr(format!("[{stage}] {e}")),
             Self::LoadAligner(e) => Self::LoadAligner(format!("[{stage}] {e}")),
@@ -122,16 +157,24 @@ pub enum AsrStage {
 }
 
 impl AsrStage {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Converting => "转码音频",
-            Self::Separating => "人声分离",
-            Self::Planning => "分段规划",
-            Self::LoadingAsr => "加载识别模型",
-            Self::Transcribing => "转写中",
-            Self::LoadingAligner => "加载对齐模型",
-            Self::Aligning => "打轴中",
-            Self::Exporting => "导出字幕",
+    pub fn label(self, lang: UiLang) -> &'static str {
+        match (self, lang) {
+            (Self::Converting, UiLang::Zh) => "转码音频",
+            (Self::Converting, UiLang::En) => "Converting audio",
+            (Self::Separating, UiLang::Zh) => "人声分离",
+            (Self::Separating, UiLang::En) => "Separating vocals",
+            (Self::Planning, UiLang::Zh) => "分段规划",
+            (Self::Planning, UiLang::En) => "Planning segments",
+            (Self::LoadingAsr, UiLang::Zh) => "加载识别模型",
+            (Self::LoadingAsr, UiLang::En) => "Loading ASR model",
+            (Self::Transcribing, UiLang::Zh) => "转写中",
+            (Self::Transcribing, UiLang::En) => "Transcribing",
+            (Self::LoadingAligner, UiLang::Zh) => "加载对齐模型",
+            (Self::LoadingAligner, UiLang::En) => "Loading aligner model",
+            (Self::Aligning, UiLang::Zh) => "打轴中",
+            (Self::Aligning, UiLang::En) => "Aligning",
+            (Self::Exporting, UiLang::Zh) => "导出字幕",
+            (Self::Exporting, UiLang::En) => "Exporting subtitles",
         }
     }
 }
@@ -168,10 +211,12 @@ impl StageUpdate {
         self
     }
 
-    pub fn label(&self) -> String {
+    pub fn label(&self, lang: UiLang) -> String {
         match self.chunk {
-            Some((cur, total)) if total > 1 => format!("{} {cur}/{total}", self.stage.label()),
-            _ => self.stage.label().to_string(),
+            Some((cur, total)) if total > 1 => {
+                format!("{} {cur}/{total}", self.stage.label(lang))
+            }
+            _ => self.stage.label(lang).to_string(),
         }
     }
 }
@@ -505,7 +550,7 @@ impl<'a> Pipeline<'a> {
         let wav_path = conv.work_dir.join("input_16k.wav");
         convert_to_16k_mono_wav(&master_source, &wav_path)?;
         conv.duration = wav_duration_sec(&wav_path)
-            .ok_or_else(|| AsrError::Other("无法读取转码后音频时长".into()))?
+            .ok_or_else(|| AsrError::Other(t(i18n::ERR_READ_DURATION).into()))?
             as f32;
         conv.wav_path = wav_path;
         Ok(conv)
@@ -534,9 +579,10 @@ impl<'a> Pipeline<'a> {
                         self.emit(StageUpdate::with_chunk(AsrStage::Separating, done, total));
                     }
                     SeparationEvent::FellBackToCpu { reason } => {
-                        self.emit(StageUpdate::new(AsrStage::Separating).with_warning(format!(
-                            "人声分离 GPU 不可用，已改用 CPU（速度明显变慢）：{reason}"
-                        )));
+                        self.emit(
+                            StageUpdate::new(AsrStage::Separating)
+                                .with_warning(i18n::sep_gpu_fallback(&reason)),
+                        );
                     }
                 },
             )
@@ -896,7 +942,8 @@ impl<'a> Pipeline<'a> {
                 primary = Some(path);
             }
         }
-        let primary = primary.ok_or_else(|| AsrError::Other("未启用任何输出格式".into()))?;
+        let primary =
+        primary.ok_or_else(|| AsrError::Other(t(i18n::ERR_NO_OUTPUT_FORMAT).into()))?;
 
         if let Some(words_path) = export.words_json.as_ref() {
             match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {
@@ -999,10 +1046,10 @@ mod tests {
             ]
         );
         assert_ne!(
-            AsrStage::LoadingAsr.label(),
-            AsrStage::LoadingAligner.label()
+            AsrStage::LoadingAsr.label(UiLang::Zh),
+            AsrStage::LoadingAligner.label(UiLang::Zh)
         );
-        assert_eq!(AsrStage::Planning.label(), "分段规划");
+        assert_eq!(AsrStage::Planning.label(UiLang::Zh), "分段规划");
         assert!(timing.has_breakdown());
     }
 
@@ -1081,7 +1128,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = check_asr_model_dir(&dir).unwrap_err().to_string();
+        let err = i18n::with_ui_lang(UiLang::Zh, || {
+            check_asr_model_dir(&dir).unwrap_err().to_string()
+        });
         assert!(err.contains("model-00001-of-00001.safetensors"), "{err}");
         assert!(err.contains("不完整"), "{err}");
 
@@ -1099,7 +1148,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Old CUDA-era merged bag must not count as ready.
         std::fs::write(dir.join("htdemucs_ft.safetensors"), vec![0u8; 4096]).unwrap();
-        let err = check_demucs_model_dir(&dir).unwrap_err().to_string();
+        let err = i18n::with_ui_lang(UiLang::Zh, || {
+            check_demucs_model_dir(&dir).unwrap_err().to_string()
+        });
         assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
         assert!(err.contains("人声分离"), "{err}");
 
@@ -1109,7 +1160,9 @@ mod tests {
             vec![0u8; 4096],
         )
         .unwrap();
-        let err = check_demucs_model_dir(&dir).unwrap_err().to_string();
+        let err = i18n::with_ui_lang(UiLang::Zh, || {
+            check_demucs_model_dir(&dir).unwrap_err().to_string()
+        });
         assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
         assert!(err.contains("字节"), "{err}");
         let _ = std::fs::remove_dir_all(&parent);

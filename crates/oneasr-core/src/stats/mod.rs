@@ -31,7 +31,7 @@ mod calendar;
 mod ledger;
 
 pub use calendar::{
-    days_between, days_in_month, format_day_cn, format_span_secs, monday_of, month_of, shift_days,
+    days_between, days_in_month, format_day, format_span_secs, monday_of, month_of, shift_days,
 };
 pub use ledger::{LEDGER_FILE, LEDGER_VERSION, append, ledger_path, load, summarize};
 

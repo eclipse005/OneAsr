@@ -42,11 +42,14 @@ impl TextScript {
     }
 
     /// Compact UI label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Original => "原文",
-            Self::Simplified => "简体",
-            Self::Traditional => "繁体",
+    pub fn label(self, lang: crate::i18n::UiLang) -> &'static str {
+        match (self, lang) {
+            (Self::Original, crate::i18n::UiLang::Zh) => "原文",
+            (Self::Original, crate::i18n::UiLang::En) => "Original",
+            (Self::Simplified, crate::i18n::UiLang::Zh) => "简体",
+            (Self::Simplified, crate::i18n::UiLang::En) => "Simplified",
+            (Self::Traditional, crate::i18n::UiLang::Zh) => "繁体",
+            (Self::Traditional, crate::i18n::UiLang::En) => "Traditional",
         }
     }
 
@@ -132,8 +135,9 @@ mod tests {
         assert_eq!(TextScript::from_id("zh-CN"), TextScript::Simplified);
         assert_eq!(TextScript::from_id(""), TextScript::Original);
         assert_eq!(TextScript::from_id("nope"), TextScript::Original);
-        assert_eq!(TextScript::Original.label(), "原文");
-        assert_eq!(TextScript::Traditional.label(), "繁体");
+        assert_eq!(TextScript::Original.label(crate::i18n::UiLang::Zh), "原文");
+        assert_eq!(TextScript::Traditional.label(crate::i18n::UiLang::Zh), "繁体");
+        assert_eq!(TextScript::Original.label(crate::i18n::UiLang::En), "Original");
         assert_eq!(
             TextScript::ALL.map(|s| s.id()),
             ["original", "simplified", "traditional"]

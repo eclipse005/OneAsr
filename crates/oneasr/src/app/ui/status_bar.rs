@@ -17,12 +17,14 @@ impl OneAsrApp {
         // deleting or adding tasks mid-run keeps it pointing at real rows.
         let left: SharedString = if batch {
             format_batch_progress(
+                ui_lang(),
                 self.batch_done,
                 self.batch_done + tally.pending + tally.queued + tally.proc,
             )
             .into()
         } else {
             format_queue_status(
+                ui_lang(),
                 tally.total, tally.pending, tally.queued, tally.proc, tally.done, tally.err,
             )
             .into()
@@ -31,8 +33,12 @@ impl OneAsrApp {
         let hint_good = self.status_hint_good;
         let stats = &self.stats;
         let stats_label: SharedString = match stats.saved_sec() {
-            Some(secs) => format!("已省 {}", oneasr_core::stats::format_span_secs(secs)).into(),
-            None => "统计".into(),
+            Some(secs) => crate::i18n::saved_prefix(&oneasr_core::stats::format_span_secs(
+                ui_lang(),
+                secs,
+            ))
+            .into(),
+            None => t(L::STATS).into(),
         };
         let stats_has_data = !stats.is_empty();
         let model = self.model_status;
@@ -198,8 +204,8 @@ fn status_bar_right(
                         .text_color(model_color)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(match model {
-                            ModelStatus::Ready => "模型就绪",
-                            ModelStatus::NotReady => "模型未就绪",
+                            ModelStatus::Ready => t(L::MODEL_READY),
+                            ModelStatus::NotReady => t(L::MODEL_NOT_READY),
                         }),
                 )
                 .into_any_element(),

@@ -134,7 +134,9 @@ pub fn timing_breakdown_popover(
                         } else {
                             gpui::FontWeight::NORMAL
                         })
-                        .child(s.stage.label().to_string()),
+                        .child(
+                            s.stage.label(oneasr_core::i18n::ui_lang()).to_string(),
+                        ),
                 )
                 .child(
                     div()
@@ -178,7 +180,7 @@ pub fn timing_breakdown_popover(
                             .text_xs()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(crate::theme::TEXT)
-                            .child("处理耗时"),
+                            .child(crate::i18n::t(crate::i18n::L::TIMING_TITLE)),
                     )
                     .child(
                         div()

@@ -18,10 +18,14 @@ fn separator_backend_follows_compute() {
 #[test]
 fn missing_weights_is_a_clear_error() {
     let dir = std::env::temp_dir().join(format!("oneasr_sep_missing_{}", std::process::id()));
-    let err = match DemucsSeparatorAdapter::load(&dir, ComputeBackend::Cpu, false, |_| {}) {
-        Ok(_) => panic!("missing weights must fail to load"),
-        Err(e) => e.to_string(),
-    };
+    // 断言中文文案：错误消息按进程语言构造，而单测并行共享全局语言，
+    // 必须固定语言窗口（其他测试可能正在 with_ui_lang 里切来切去）。
+    let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || {
+        match DemucsSeparatorAdapter::load(&dir, ComputeBackend::Cpu, false, |_| {}) {
+            Ok(_) => panic!("missing weights must fail to load"),
+            Err(e) => e.to_string(),
+        }
+    });
     assert!(err.contains("人声分离模型不存在"), "{err}");
 }
 

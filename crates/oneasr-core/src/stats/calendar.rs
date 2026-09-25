@@ -99,37 +99,53 @@ pub fn days_between(from: &str, to: &str) -> Option<i64> {
 
 // ─── formatting ─────────────────────────────────────────────────────
 
-/// `2026-09-04` → `9 月 4 日`, for the grid's hover card.
-pub fn format_day_cn(day: &str) -> String {
+use crate::i18n::UiLang;
+
+/// `2026-09-04` → `9 月 4 日`（zh）/ `Sep 4`（en），for the grid's hover card.
+pub fn format_day(lang: UiLang, day: &str) -> String {
     match parse_ymd(day) {
-        Some((_, m, d)) => format!("{m} 月 {d} 日"),
+        Some((_, m, d)) => match lang {
+            UiLang::Zh => format!("{m} 月 {d} 日"),
+            UiLang::En => format!("{} {d}", EN_MONTH_ABBR[m as usize - 1]),
+        },
         None => day.to_string(),
     }
 }
 
-/// Compact Chinese span: `3 小时 20 分` / `45 分` / `30 秒`.
+const EN_MONTH_ABBR: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Compact span: `3 小时 20 分` / `3 hr 20 min`（按 [`UiLang`]）.
 ///
 /// Minutes are the smallest unit the panel ever shows — seconds would imply a
 /// precision the underlying measurements do not have.
-pub fn format_span_secs(secs: f64) -> String {
+pub fn format_span_secs(lang: UiLang, secs: f64) -> String {
     if !secs.is_finite() || secs <= 0.0 {
-        return "0 分".into();
+        return match lang {
+            UiLang::Zh => "0 分".into(),
+            UiLang::En => "0 min".into(),
+        };
     }
     // Branch on the *rounded seconds*, not on rounded minutes: 45 s rounds to
     // 1 min, which would report "1 分" for something under a minute.
     let total_sec = secs.round() as u64;
     if total_sec < 60 {
-        return format!("{} 秒", total_sec.max(1));
+        return match lang {
+            UiLang::Zh => format!("{} 秒", total_sec.max(1)),
+            UiLang::En => format!("{} s", total_sec.max(1)),
+        };
     }
     let total_min = (total_sec + 30) / 60;
     let h = total_min / 60;
     let m = total_min % 60;
-    if h == 0 {
-        format!("{m} 分")
-    } else if m == 0 {
-        format!("{h} 小时")
-    } else {
-        format!("{h} 小时 {m} 分")
+    match (lang, h, m) {
+        (UiLang::Zh, 0, m) => format!("{m} 分"),
+        (UiLang::Zh, h, 0) => format!("{h} 小时"),
+        (UiLang::Zh, h, m) => format!("{h} 小时 {m} 分"),
+        (UiLang::En, 0, m) => format!("{m} min"),
+        (UiLang::En, h, 0) => format!("{h} hr"),
+        (UiLang::En, h, m) => format!("{h} hr {m} min"),
     }
 }
 
@@ -212,20 +228,30 @@ mod tests {
     }
 
     #[test]
-    fn day_labels_read_in_chinese() {
-        assert_eq!(format_day_cn("2026-09-04"), "9 月 4 日");
-        assert_eq!(format_day_cn("2026-12-31"), "12 月 31 日");
-        assert_eq!(format_day_cn("nope"), "nope");
+    fn day_labels_read_in_both_languages() {
+        use crate::i18n::UiLang;
+        assert_eq!(format_day(UiLang::Zh, "2026-09-04"), "9 月 4 日");
+        assert_eq!(format_day(UiLang::Zh, "2026-12-31"), "12 月 31 日");
+        assert_eq!(format_day(UiLang::En, "2026-09-04"), "Sep 4");
+        assert_eq!(format_day(UiLang::En, "2026-12-31"), "Dec 31");
+        assert_eq!(format_day(UiLang::Zh, "nope"), "nope");
     }
 
     #[test]
-    fn spans_read_naturally_in_chinese() {
-        assert_eq!(format_span_secs(45.0), "45 秒");
-        assert_eq!(format_span_secs(600.0), "10 分");
-        assert_eq!(format_span_secs(3600.0), "1 小时");
-        assert_eq!(format_span_secs(1200.0), "20 分");
-        assert_eq!(format_span_secs(7200.0 + 1500.0), "2 小时 25 分");
-        assert_eq!(format_span_secs(0.0), "0 分");
-        assert_eq!(format_span_secs(f64::NAN), "0 分");
+    fn spans_read_naturally_in_both_languages() {
+        use crate::i18n::UiLang;
+        assert_eq!(format_span_secs(UiLang::Zh, 45.0), "45 秒");
+        assert_eq!(format_span_secs(UiLang::Zh, 600.0), "10 分");
+        assert_eq!(format_span_secs(UiLang::Zh, 3600.0), "1 小时");
+        assert_eq!(format_span_secs(UiLang::Zh, 1200.0), "20 分");
+        assert_eq!(format_span_secs(UiLang::Zh, 7200.0 + 1500.0), "2 小时 25 分");
+        assert_eq!(format_span_secs(UiLang::Zh, 0.0), "0 分");
+        assert_eq!(format_span_secs(UiLang::Zh, f64::NAN), "0 分");
+        assert_eq!(format_span_secs(UiLang::En, 45.0), "45 s");
+        assert_eq!(format_span_secs(UiLang::En, 600.0), "10 min");
+        assert_eq!(format_span_secs(UiLang::En, 3600.0), "1 hr");
+        assert_eq!(format_span_secs(UiLang::En, 7200.0 + 1500.0), "2 hr 25 min");
+        assert_eq!(format_span_secs(UiLang::En, 0.0), "0 min");
+        assert_eq!(format_span_secs(UiLang::En, f64::NAN), "0 min");
     }
 }

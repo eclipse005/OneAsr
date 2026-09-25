@@ -18,6 +18,7 @@ impl OneAsrApp {
         let stats = &self.stats;
         let saved = stats.saved_sec();
         let speed = stats.avg_speed();
+        let lang = ui_lang();
 
         let today = crashlog::local_day_ymd();
         let range_start = stats_range_start(stats, &today);
@@ -33,8 +34,8 @@ impl OneAsrApp {
         let hover = self
             .stats_hover_day
             .as_deref()
-            .map(|day| stats_hover_text(stats, day));
-        let early_caption = stats_early_caption(stats, &today, &range_start);
+            .map(|day| stats_hover_text(stats, day, lang));
+        let early_caption = stats_early_caption(stats, &today, &range_start, lang);
 
         let mut panel = div()
             .absolute()
@@ -56,7 +57,7 @@ impl OneAsrApp {
                     .text_sm()
                     .text_color(TEXT)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("统计"),
+                    .child(t(L::STATS)),
             );
 
         if stats.is_empty() {
@@ -67,14 +68,14 @@ impl OneAsrApp {
                     .py_2()
                     .text_xs()
                     .text_color(MUTED)
-                    .child("完成第一个任务后，这里开始记账。"),
+                    .child(t(L::STATS_EMPTY)),
             );
         } else {
             panel = panel
-                .child(stats_hero(saved))
-                .child(stats_totals(stats, speed))
+                .child(stats_hero(saved, lang))
+                .child(stats_totals(stats, speed, lang))
                 .child(stats_year_section(&grid, hover, early_caption, cx))
-                .child(stats_rows_section(stats));
+                .child(stats_rows_section(stats, lang));
         }
 
         deferred(panel).with_priority(MENU_Z)
@@ -87,47 +88,60 @@ impl OneAsrApp {
 ///
 /// Cumulative by design and never following a time filter — the accumulation IS
 /// the value — and there is no "0 分" until a claim can actually be made.
-fn stats_hero(saved: Option<f64>) -> impl IntoElement {
+fn stats_hero(saved: Option<f64>, lang: UiLang) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .gap_2()
-        .child(div().text_xs().text_color(MUTED).child("累计省下"))
+        .child(
+            div()
+                .text_xs()
+                .text_color(MUTED)
+                .child(t(L::STATS_SAVED_TOTAL)),
+        )
         .child(
             div()
                 .text_size(px(20.))
                 .text_color(TEXT)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(match saved {
-                    Some(s) => oneasr_core::stats::format_span_secs(s),
+                    Some(s) => oneasr_core::stats::format_span_secs(lang, s),
                     None => "—".to_string(),
                 }),
         )
         // The number is a duration; this is what it buys. Kept to the unit the
         // user can feel, never a second figure.
-        .when_some(saved.and_then(saved_tale), |el, tale| {
+        .when_some(saved.and_then(|s| saved_tale(s, lang)), |el, tale| {
             el.child(div().text_xs().text_color(MUTED_SOFT).child(tale))
         })
 }
 
 /// The three aggregate columns under the hero.
-fn stats_totals(stats: &StatsSummary, speed: Option<f64>) -> impl IntoElement {
+fn stats_totals(stats: &StatsSummary, speed: Option<f64>, lang: UiLang) -> impl IntoElement {
     div().flex().gap_3().child(
         div()
             .flex()
             .flex_1()
             .gap_3()
             .child(stats_metric(
-                "素材总时长",
-                if stats.media_sec > 0.0 { oneasr_core::stats::format_span_secs(stats.media_sec) } else { "—".into() },
+                t(L::STATS_MEDIA_TOTAL),
+                if stats.media_sec > 0.0 {
+                    oneasr_core::stats::format_span_secs(lang, stats.media_sec)
+                } else {
+                    "—".into()
+                },
             ))
             .child(stats_metric(
-                "机器耗时",
-                if stats.process_ms > 0 { oneasr_core::stats::format_span_secs(stats.process_ms as f64 / 1000.0) } else { "—".into() },
+                t(L::STATS_PROCESS_TOTAL),
+                if stats.process_ms > 0 {
+                    oneasr_core::stats::format_span_secs(lang, stats.process_ms as f64 / 1000.0)
+                } else {
+                    "—".into()
+                },
             ))
             .child(stats_metric(
-                "平均速度",
-                speed.map_or_else(|| "—".into(), |f| format!("{f:.1} 倍速")),
+                t(L::STATS_AVG_SPEED),
+                speed.map_or_else(|| "—".into(), crate::i18n::rtfx),
             )),
     )
 }
@@ -149,7 +163,7 @@ fn stats_year_section(
                 .text_xs()
                 .text_color(MUTED)
                 .whitespace_nowrap()
-                .child(format!("{m} 月"))
+                .child(crate::i18n::month_label(*m))
                 .into_any_element(),
         );
     }
@@ -238,7 +252,7 @@ fn stats_year_section(
                         .text_xs()
                         .text_color(TEXT)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("每天处理的素材时长"),
+                        .child(t(L::STATS_DAILY)),
                 )
                 .child(stats_legend()),
         )
@@ -266,25 +280,20 @@ fn stats_year_section(
 }
 
 /// The bottom tally: task count, output lines, languages, separation, records.
-fn stats_rows_section(stats: &StatsSummary) -> impl IntoElement {
+fn stats_rows_section(stats: &StatsSummary, lang: UiLang) -> impl IntoElement {
     let mut rows: Vec<AnyElement> = Vec::new();
     rows.push(stats_row(
-        "完成任务",
+        t(L::STATS_TASKS),
         if stats.tasks_err == 0 {
-            format!("{} 个 · 全部成功", stats.tasks_ok)
+            crate::i18n::tasks_all_ok(lang, stats.tasks_ok)
         } else {
-            format!(
-                "{} 个 · 成功 {} · 失败 {}",
-                stats.tasks_total(),
-                stats.tasks_ok,
-                stats.tasks_err
-            )
+            crate::i18n::tasks_split(stats.tasks_total(), stats.tasks_ok, stats.tasks_err)
         },
     ));
     if stats.cues > 0 {
         rows.push(stats_row(
-            "输出文本",
-            format!("{} 行", format_thousands(stats.cues)),
+            t(L::STATS_OUTPUT),
+            crate::i18n::n_lines(stats.cues),
         ));
     }
     if !stats.langs.is_empty() {
@@ -298,18 +307,24 @@ fn stats_rows_section(stats: &StatsSummary) -> impl IntoElement {
             line.push_str(&format!(" · {} {}", lang_label(id), n));
         }
         if stats.langs.len() > 2 {
-            line.push_str(&format!(" · 等 {} 种", stats.langs.len()));
+            line.push_str(&crate::i18n::langs_more(stats.langs.len()));
         }
-        rows.push(stats_row("语种", line));
+        rows.push(stats_row(t(L::STATS_LANGS), line));
     }
     if stats.sep_tasks > 0 {
-        rows.push(stats_row("人声分离", format!("{} 个任务", stats.sep_tasks)));
+        rows.push(stats_row(
+            t(L::STATS_SEPARATION),
+            crate::i18n::n_tasks(lang, stats.sep_tasks),
+        ));
     }
     if let Some(m) = stats.longest_media_sec {
-        rows.push(stats_row("最长一次", oneasr_core::stats::format_span_secs(m)));
+        rows.push(stats_row(
+            t(L::STATS_LONGEST),
+            oneasr_core::stats::format_span_secs(ui_lang(), m),
+        ));
     }
     if let Some(f) = stats.fastest_speed {
-        rows.push(stats_row("最快一次", format!("{f:.1} 倍速")));
+        rows.push(stats_row(t(L::STATS_FASTEST), crate::i18n::rtfx(f)));
     }
 
     div()
@@ -368,11 +383,11 @@ fn stats_legend() -> impl IntoElement {
         .gap_1()
         .text_xs()
         .text_color(MUTED)
-        .child("少")
+        .child(t(L::LEGEND_LESS))
         .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L0))
         .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L1))
         .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L2))
         .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L3))
         .child(div().size(px(8.)).rounded(px(2.)).bg(STATS_L4))
-        .child("多")
+        .child(t(L::LEGEND_MORE))
 }

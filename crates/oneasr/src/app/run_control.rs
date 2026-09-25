@@ -39,13 +39,13 @@ impl OneAsrApp {
         self.batch_done = 0;
         self.batch_ok = 0;
         self.batch_err = 0;
-        let Some(msg) = batch_summary(done, err) else {
+        let Some(msg) = batch_summary(done, err, ui_lang()) else {
             return;
         };
         // The first success's saved time rides the run-complete line; later runs
         // are a plain tally.
         let msg = match self.nudge_saved.take() {
-            Some(saved) => format!("{msg} · 已省 {saved} · 左下角看统计"),
+            Some(saved) => crate::i18n::run_complete_with_saved(&msg, &saved),
             None => msg,
         };
         // One chime per run — the same "never one sound per item" rule the
@@ -98,7 +98,7 @@ impl OneAsrApp {
                 .iter()
                 .filter(|t| !self.exiting.contains_key(&t.id))
                 .collect();
-            self.flash_hint(no_start_reason(&live).message(), cx);
+            self.flash_hint(no_start_reason(&live).message(ui_lang()), cx);
             return;
         }
         self.play_ui(sfx::Sfx::Click);
@@ -118,7 +118,7 @@ impl OneAsrApp {
             Some(t) => t.status,
             None => return,
         };
-        if let Some(msg) = single_start_blocker(status) {
+        if let Some(msg) = single_start_blocker(status, ui_lang()) {
             self.flash_hint(msg, cx);
             return;
         }
@@ -218,7 +218,7 @@ impl OneAsrApp {
         };
         self.active_stage = Some((
             id.clone(),
-            SharedString::from(first_stage.label()),
+            SharedString::from(first_stage.label(ui_lang())),
         ));
 
         // Start context: failures log only `{id}` + message, so this entry is
@@ -251,7 +251,7 @@ impl OneAsrApp {
             if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                 t.status = TaskStatus::Error;
                 t.queue_seq = None;
-                t.error = Some("识别工作线程已退出".into());
+                t.error = Some(oneasr_core::i18n::t(L::WORKER_EXITED).into());
             }
             // Same rule as the pre-flight failure: a settled row must not stall
             // the rest of the batch.
@@ -261,9 +261,9 @@ impl OneAsrApp {
     }
 
     pub(crate) fn delete_task(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(t) = self.tasks.iter().find(|t| t.id == id) {
-            if t.status.locks_row_actions() {
-                self.flash_hint("处理中的任务不能删除", cx);
+        if let Some(task) = self.tasks.iter().find(|t| t.id == id) {
+            if task.status.locks_row_actions() {
+                self.flash_hint(t(L::LOCKED_DELETE), cx);
                 return;
             }
         } else {
@@ -299,7 +299,7 @@ impl OneAsrApp {
     pub(crate) fn clear_all(&mut self, cx: &mut Context<Self>) {
         let live_any = self.tasks.iter().any(|t| !self.exiting.contains_key(&t.id));
         if !live_any {
-            self.flash_hint("列表已空", cx);
+            self.flash_hint(t(L::LIST_EMPTY), cx);
             return;
         }
         let had_proc = self.tasks.iter().any(|t| {
@@ -323,7 +323,7 @@ impl OneAsrApp {
         self.lang_menu = None;
         self.close_timing_popover();
         if had_proc {
-            self.flash_hint("已清空队列，当前任务继续处理", cx);
+            self.flash_hint(t(L::CLEARED_KEEP_RUNNING), cx);
         }
         cx.notify();
     }
@@ -360,11 +360,14 @@ pub(crate) enum NoStart {
 }
 
 impl NoStart {
-    pub(crate) fn message(self) -> &'static str {
-        match self {
-            Self::NoFiles => "请先添加音视频文件",
-            Self::AlreadyRunning => "任务已在处理或排队中",
-            Self::NothingToStart => "没有可开始的任务",
+    pub(crate) fn message(self, lang: UiLang) -> &'static str {
+        match (self, lang) {
+            (Self::NoFiles, UiLang::Zh) => "请先添加音视频文件",
+            (Self::NoFiles, UiLang::En) => "Add audio / video files first",
+            (Self::AlreadyRunning, UiLang::Zh) => "任务已在处理或排队中",
+            (Self::AlreadyRunning, UiLang::En) => "Tasks are already processing or queued",
+            (Self::NothingToStart, UiLang::Zh) => "没有可开始的任务",
+            (Self::NothingToStart, UiLang::En) => "Nothing to start",
         }
     }
 }
@@ -385,12 +388,15 @@ pub(crate) fn no_start_reason(live: &[&Task]) -> NoStart {
 }
 
 /// Why a single row cannot start, or `None` to proceed.
-pub(crate) fn single_start_blocker(status: TaskStatus) -> Option<&'static str> {
-    match status {
-        TaskStatus::Processing => Some("该任务正在处理中"),
-        TaskStatus::Queued => Some("该任务已在队列中"),
-        TaskStatus::Done => Some("该任务已完成"),
-        TaskStatus::Pending | TaskStatus::Error => None,
+pub(crate) fn single_start_blocker(status: TaskStatus, lang: UiLang) -> Option<&'static str> {
+    match (status, lang) {
+        (TaskStatus::Processing, UiLang::Zh) => Some("该任务正在处理中"),
+        (TaskStatus::Processing, UiLang::En) => Some("This task is processing"),
+        (TaskStatus::Queued, UiLang::Zh) => Some("该任务已在队列中"),
+        (TaskStatus::Queued, UiLang::En) => Some("This task is already queued"),
+        (TaskStatus::Done, UiLang::Zh) => Some("该任务已完成"),
+        (TaskStatus::Done, UiLang::En) => Some("This task is done"),
+        (TaskStatus::Pending | TaskStatus::Error, _) => None,
     }
 }
 
@@ -410,15 +416,24 @@ pub(crate) fn next_queued_id(tasks: &[Task], exiting: &HashMap<String, Instant>)
 
 /// The run-complete line, or `None` when the batch has nothing to report — an
 /// empty summary would read as an accusation rather than a tally.
-pub(crate) fn batch_summary(done: usize, err: usize) -> Option<String> {
+pub(crate) fn batch_summary(done: usize, err: usize, lang: UiLang) -> Option<String> {
     if done == 0 && err == 0 {
         None
     } else if err == 0 {
-        Some(format!("全部完成 · {done} 个任务"))
+        Some(match lang {
+            UiLang::Zh => format!("全部完成 · {done} 个任务"),
+            UiLang::En => format!("All done · {}", crate::i18n::n_tasks(lang, done)),
+        })
     } else if done == 0 {
-        Some(format!("批次结束 · {err} 个失败"))
+        Some(match lang {
+            UiLang::Zh => format!("批次结束 · {err} 个失败"),
+            UiLang::En => format!("Batch ended · {err} failed"),
+        })
     } else {
-        Some(format!("批次结束 · 完成 {done} · 失败 {err}"))
+        Some(match lang {
+            UiLang::Zh => format!("批次结束 · 完成 {done} · 失败 {err}"),
+            UiLang::En => format!("Batch ended · {done} ok · {err} failed"),
+        })
     }
 }
 
@@ -450,19 +465,23 @@ mod tests {
     #[test]
     fn single_start_blockers_match_the_row_state() {
         // Pending and Error are both startable — a failed row can be retried.
-        assert_eq!(single_start_blocker(TaskStatus::Pending), None);
-        assert_eq!(single_start_blocker(TaskStatus::Error), None);
+        assert_eq!(single_start_blocker(TaskStatus::Pending, UiLang::Zh), None);
+        assert_eq!(single_start_blocker(TaskStatus::Error, UiLang::Zh), None);
         assert_eq!(
-            single_start_blocker(TaskStatus::Queued),
+            single_start_blocker(TaskStatus::Queued, UiLang::Zh),
             Some("该任务已在队列中")
         );
         assert_eq!(
-            single_start_blocker(TaskStatus::Processing),
+            single_start_blocker(TaskStatus::Processing, UiLang::Zh),
             Some("该任务正在处理中")
         );
         assert_eq!(
-            single_start_blocker(TaskStatus::Done),
+            single_start_blocker(TaskStatus::Done, UiLang::Zh),
             Some("该任务已完成")
+        );
+        assert_eq!(
+            single_start_blocker(TaskStatus::Queued, UiLang::En),
+            Some("This task is already queued")
         );
     }
 
@@ -502,12 +521,30 @@ mod tests {
 
     #[test]
     fn batch_summary_stays_silent_when_nothing_ran() {
-        assert_eq!(batch_summary(0, 0), None);
-        assert_eq!(batch_summary(3, 0).as_deref(), Some("全部完成 · 3 个任务"));
-        assert_eq!(batch_summary(0, 2).as_deref(), Some("批次结束 · 2 个失败"));
+        assert_eq!(batch_summary(0, 0, UiLang::Zh), None);
         assert_eq!(
-            batch_summary(3, 1).as_deref(),
+            batch_summary(3, 0, UiLang::Zh).as_deref(),
+            Some("全部完成 · 3 个任务")
+        );
+        assert_eq!(
+            batch_summary(0, 2, UiLang::Zh).as_deref(),
+            Some("批次结束 · 2 个失败")
+        );
+        assert_eq!(
+            batch_summary(3, 1, UiLang::Zh).as_deref(),
             Some("批次结束 · 完成 3 · 失败 1")
+        );
+        assert_eq!(
+            batch_summary(3, 0, UiLang::En).as_deref(),
+            Some("All done · 3 tasks")
+        );
+        assert_eq!(
+            batch_summary(0, 2, UiLang::En).as_deref(),
+            Some("Batch ended · 2 failed")
+        );
+        assert_eq!(
+            batch_summary(3, 1, UiLang::En).as_deref(),
+            Some("Batch ended · 3 ok · 1 failed")
         );
     }
 }

@@ -8,6 +8,13 @@ use crate::app::prelude::*;
 impl OneAsrApp {
     pub(super) fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let form = self.settings_form_state(cx);
+        // 语言按钮的 tooltip：当前档位 + 点击提示（按当前界面语言拼）。
+        let mode_label = t(match form.ui_language.as_str() {
+            oneasr_core::i18n::UI_LANGUAGE_ZH => L::UI_LANG_ZH,
+            oneasr_core::i18n::UI_LANGUAGE_EN => L::UI_LANG_EN,
+            _ => L::UI_LANG_SYSTEM,
+        });
+        let lang_tooltip: SharedString = crate::i18n::ui_language_tooltip(mode_label).into();
 
         // Layout: title | scrollable body | pin footer (save always visible).
         div()
@@ -29,16 +36,28 @@ impl OneAsrApp {
                             .text_base()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(TEXT)
-                            .child("设置"),
+                            .child(t(L::SETTINGS)),
                     )
-                    .when(form.dirty, |el| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .text_color(WARN)
-                                .child("未保存"),
-                        )
-                    }),
+                    // 右上角：未保存标记 + 界面语言切换（点击循环三档）。
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2p5()
+                            .when(form.dirty, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(WARN)
+                                        .child(t(L::UNSAVED)),
+                                )
+                            })
+                            .child(ui_language_btn(
+                                &form.ui_language,
+                                lang_tooltip,
+                                cx.listener(|this, _, _, cx| this.cycle_ui_language(cx)),
+                            )),
+                    ),
             )
             .child(
                 div()
@@ -80,7 +99,7 @@ impl OneAsrApp {
                     .justify_between()
                     .child(
                         div().flex_shrink_0().child(btn(
-                            "重置",
+                            t(L::RESET),
                             BtnKind::Quiet,
                             true,
                             cx.listener(|this, _, _, cx| this.reset_settings(cx)),
@@ -88,7 +107,11 @@ impl OneAsrApp {
                     )
                     .child(
                         div().flex_shrink_0().child(btn(
-                            if form.dirty { "保存设置" } else { "已保存" },
+                            if form.dirty {
+                                t(L::SAVE_SETTINGS)
+                            } else {
+                                t(L::SAVED)
+                            },
                             if form.dirty {
                                 BtnKind::Primary
                             } else {
@@ -109,6 +132,9 @@ impl OneAsrApp {
 pub(super) struct SettingsFormState {
     pub(super) backend: String,
     pub(super) language: String,
+    /// 界面语言当前档位（`system` | `zh` | `en`）——驱动右上角图标按钮。
+    /// 与抽屉里其他设置一样是暂存档：点按钮只改草稿，保存才生效。
+    pub(super) ui_language: String,
     pub(super) length_preset: String,
     pub(super) chunk_target: u32,
     /// 当前档位所属的 fp16 尺寸（0.6B / 1.7B chip 的选中态）。
@@ -147,6 +173,7 @@ impl OneAsrApp {
     pub(super) fn settings_form_state(&self, cx: &Context<Self>) -> SettingsFormState {
         let backend = self.settings.backend.clone();
         let language = self.settings.language.clone();
+        let ui_language = self.settings.ui_language.clone();
         let length_preset = self.settings.subtitle_length_preset.clone();
         let chunk_target = self.settings.chunk_target_seconds_clamped();
         let asr_id = self.settings.selected_asr_id();
@@ -186,6 +213,7 @@ impl OneAsrApp {
         SettingsFormState {
             backend,
             language,
+            ui_language,
             length_preset,
             chunk_target,
             asr_base_id,

@@ -38,7 +38,7 @@ pub(super) fn probe_gpu_device() -> &'static Result<GpuProbe, String> {
             Some(d) => Ok(GpuProbe {
                 description: d.describe(),
             }),
-            None => Err("未检测到可用 GPU（需要已安装的显卡驱动）".into()),
+            None => Err(crate::i18n::no_gpu_detected()),
         }
     })
 }
@@ -54,9 +54,7 @@ pub(super) fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, E
         "cpu" => Ok(ComputeBackend::Cpu),
         "gpu" => match probe_gpu_device() {
             Ok(_) => Ok(ComputeBackend::Gpu),
-            Err(e) => Err(EngineError::new(format!(
-                "{e}。GPU 加速需要已安装的显卡驱动；或在设置中改用 CPU"
-            ))),
+            Err(e) => Err(EngineError::new(crate::i18n::gpu_forced_but_unavailable(&e))),
         },
         // auto
         _ => match probe_gpu_device() {
@@ -80,12 +78,8 @@ pub(super) fn is_forced_gpu(backend: &str) -> bool {
 /// Append actionable guidance to a GPU engine load failure.
 pub(super) fn gpu_load_failure_msg(e: &impl std::fmt::Display) -> String {
     let probe_hint = match probe_gpu_device() {
-        Ok(p) => format!("（{}）", p.description),
+        Ok(p) => crate::i18n::gpu_probe_hint(&p.description),
         Err(_) => String::new(),
     };
-    format!(
-        "加载语音识别模型失败: {e:#}{probe_hint}\n\
-         请检查：1) 显卡驱动已安装并更新；2) 关闭占用 GPU 的程序后重试。\
-         或在设置中将后端改为 CPU"
-    )
+    crate::i18n::asr_gpu_load_failed(&format!("{e:#}"), &probe_hint)
 }

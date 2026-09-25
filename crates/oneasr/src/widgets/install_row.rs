@@ -13,6 +13,7 @@ use gpui::{
 use oneasr_core::DownloadProgress;
 
 use super::button::NameTooltip;
+use crate::i18n::L;
 
 /// The live state of one download / install row.
 ///
@@ -110,7 +111,7 @@ fn progress_of(progress: Option<&DownloadProgress>) -> (f32, String) {
             let frac = p.downloaded_bytes as f32 / p.total_bytes as f32;
             (frac, fmt_speed(p.speed_bytes_per_sec))
         }
-        None => (0.0, "准备中…".into()),
+        None => (0.0, crate::i18n::t(L::PREPARING).to_string()),
     }
 }
 
@@ -120,11 +121,11 @@ fn download_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let (tip, icon) = if row.busy {
-        ("点击取消下载", "icons/stop.svg")
+        (crate::i18n::t(L::TIP_CANCEL_DOWNLOAD), "icons/stop.svg")
     } else if row.ready {
-        ("重新下载", "icons/redownload.svg")
+        (crate::i18n::t(L::TIP_REDOWNLOAD), "icons/redownload.svg")
     } else {
-        ("下载模型", "icons/download.svg")
+        (crate::i18n::t(L::TIP_DOWNLOAD_MODEL), "icons/download.svg")
     };
     let tip: SharedString = tip.into();
     let icon: SharedString = icon.into();
@@ -189,6 +190,6 @@ fn fmt_speed(bps: u64) -> String {
     } else if bps > 0 {
         format!("{bps} B/s")
     } else {
-        "准备中…".into()
+        crate::i18n::t(L::PREPARING).to_string()
     }
 }

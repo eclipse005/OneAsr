@@ -168,7 +168,7 @@ impl OneAsrApp {
             .is_some_and(|t| t.status.locks_row_actions() || self.exiting.contains_key(id));
         if locked {
             self.close_floating_overlays();
-            self.flash_hint("处理中的任务不能改语言", cx);
+            self.flash_hint(t(L::LOCKED_LANG), cx);
             return;
         }
         let was_open = self.lang_menu.as_deref() == Some(id);
@@ -205,7 +205,7 @@ impl OneAsrApp {
                 };
                 if task.status.locks_row_actions() {
                     self.close_floating_overlays();
-                    self.flash_hint("处理中的任务不能改语言", cx);
+                    self.flash_hint(t(L::LOCKED_LANG), cx);
                     return;
                 }
                 task.set_language(language);
@@ -227,21 +227,21 @@ impl OneAsrApp {
             return;
         };
         if task.status.locks_row_actions() {
-            self.flash_hint("处理中的任务不能修改人声分离", cx);
+            self.flash_hint(t(L::LOCKED_SEPARATION), cx);
             return;
         }
         let next = !task.vocal_separation;
         if next && !self.demucs_ready {
-            self.flash_hint("请先在设置中下载人声分离模型", cx);
+            self.flash_hint(t(L::SEPARATION_NEEDS_MODEL), cx);
             return;
         }
         task.set_vocal_separation(next);
         self.play_ui(sfx::Sfx::Click);
         self.flash_hint(
             if next {
-                "本任务已开启人声分离"
+                t(L::SEPARATION_ON)
             } else {
-                "本任务已关闭人声分离"
+                t(L::SEPARATION_OFF)
             },
             cx,
         );

@@ -1,9 +1,8 @@
 //! Buttons, pills, icons and the name tooltip.
 
 use gpui::{
-    div, linear, percentage, prelude::*, px, svg, Animation,
-    AnimationExt as _, App, ClickEvent, Context, SharedString,
-    Transformation, Window, WindowControlArea,
+    AnyElement, div, linear, percentage, prelude::*, px, svg, Animation, AnimationExt as _, App,
+    ClickEvent, Context, SharedString, Transformation, Window, WindowControlArea,
 };
 use std::time::Duration;
 
@@ -139,9 +138,64 @@ pub fn settings_gear_btn(
         .child(gear_el)
 }
 
+/// 界面语言切换按钮（设置抽屉标题行右上角）。
+///
+/// 一个按钮三种档位，图标随当前档位变化，点击循环到下一档：
+/// - 跟随系统 → 显示器图标（`icons/language-system.svg`）
+/// - 中文 → 字体渲染的「中」
+/// - English → 字体渲染的「En」
+///
+/// 字形直接用 UI 字体出字（比手绘 SVG 字母精致），与图标同为 MUTED 色、
+/// 同一视觉重量。`tooltip` 由调用方按当前语言拼好。
+pub fn ui_language_btn(
+    mode: &str,
+    tooltip: SharedString,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let glyph: AnyElement = match mode {
+        "zh" => div()
+            .text_size(px(14.))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(crate::theme::MUTED)
+            .child(crate::i18n::t(crate::i18n::L::UI_LANG_ZH_GLYPH))
+            .into_any_element(),
+        "en" => div()
+            .text_size(px(12.5))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(crate::theme::MUTED)
+            .child(crate::i18n::t(crate::i18n::L::UI_LANG_EN_GLYPH))
+            .into_any_element(),
+        _ => svg()
+            .size(px(16.))
+            .path("icons/language-system.svg")
+            .text_color(crate::theme::MUTED)
+            .into_any_element(),
+    };
+    div()
+        .id("ui-language-btn")
+        .size(px(32.))
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .bg(crate::theme::PANEL)
+        .border_1()
+        .border_color(crate::theme::LINE)
+        .cursor_pointer()
+        .hover(|s| {
+            s.bg(crate::theme::ACCENT_SOFT)
+                .border_color(crate::theme::ACCENT)
+        })
+        .tooltip(move |_, cx| {
+            cx.new(|_| NameTooltip { text: tooltip.clone() }).into()
+        })
+        .on_click(on_click)
+        .child(glyph)
+}
+
 /// Primary CTA. When disabled: not clickable + tooltip explains why.
-pub fn btn_cta(
-    label: &str,
+pub fn btn_cta(    label: &str,
     enabled: bool,
     disabled_tip: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,

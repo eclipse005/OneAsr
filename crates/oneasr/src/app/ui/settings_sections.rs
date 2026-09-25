@@ -56,7 +56,7 @@ pub(super) fn render_settings_language(
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(TEXT)
-                            .child("默认语言"),
+                            .child(t(L::DEFAULT_LANGUAGE)),
                     )
                     .child(
                         div()
@@ -131,14 +131,14 @@ pub(super) fn render_settings_language(
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(TEXT)
-                            .child("字幕长度"),
+                            .child(t(L::SUBTITLE_LENGTH)),
                     )
                     .child(
                         div().flex().gap_1p5().children(
                             [
-                                ("short", "短"),
-                                ("standard", "标准"),
-                                ("loose", "宽松"),
+                                ("short", t(L::LEN_SHORT)),
+                                ("standard", t(L::LEN_STANDARD)),
+                                ("loose", t(L::LEN_LOOSE)),
                             ]
                             .into_iter()
                             .map(|(id, label)| {
@@ -195,15 +195,16 @@ pub(super) fn render_settings_chunk_duration(
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(TEXT)
-                            .child("分段时长"),
+                            .child(t(L::CHUNK_DURATION)),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(MUTED)
-                            .child(format!(
-                                "{} 秒 · {}–{}",
-                                form.chunk_target, CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_MAX_SEC
+                            .child(crate::i18n::chunk_target_label(
+                                form.chunk_target,
+                                CHUNK_TARGET_MIN_SEC,
+                                CHUNK_TARGET_MAX_SEC,
                             )),
                     ),
             )
@@ -239,7 +240,7 @@ pub(super) fn render_settings_chunk_duration(
                         div()
                             .text_xs()
                             .text_color(MUTED)
-                            .child("建议 4GB 显存使用 60 秒分段时长"),
+                            .child(t(L::CHUNK_4GB_HINT)),
                     ),
             )
             .into_any_element()
@@ -277,7 +278,7 @@ pub(super) fn render_settings_output(
                                                             .font_weight(gpui::FontWeight::MEDIUM)
                                                             .text_color(TEXT)
                                                             .whitespace_nowrap()
-                                                            .child("输出格式"),
+                                                            .child(t(L::OUTPUT_FORMAT)),
                                                     ),
                                             )
                                             .child(
@@ -295,7 +296,7 @@ pub(super) fn render_settings_output(
                                                         cx.listener(|this, _, _, cx| {
                                                             if !this.settings.output_txt {
                                                                 this.flash_hint(
-                                                                    "至少保留一种输出格式",
+                                                                    t(L::KEEP_ONE_FORMAT),
                                                                     cx,
                                                                 );
                                                                 return;
@@ -316,7 +317,7 @@ pub(super) fn render_settings_output(
                                                         cx.listener(|this, _, _, cx| {
                                                             if !this.settings.output_srt {
                                                                 this.flash_hint(
-                                                                    "至少保留一种输出格式",
+                                                                    t(L::KEEP_ONE_FORMAT),
                                                                     cx,
                                                                 );
                                                                 return;
@@ -346,14 +347,14 @@ pub(super) fn render_settings_output(
                                                             .font_weight(gpui::FontWeight::MEDIUM)
                                                             .text_color(TEXT)
                                                             .whitespace_nowrap()
-                                                            .child("中文输出"),
+                                                            .child(t(L::CHINESE_OUTPUT)),
                                                     )
                                                     .child(
                                                         div()
                                                             .text_xs()
                                                             .text_color(MUTED)
                                                             .whitespace_nowrap()
-                                                            .child("仅中文/粤语"),
+                                                            .child(t(L::ZH_YUE_ONLY)),
                                                     ),
                                             )
                                             .child(
@@ -361,7 +362,7 @@ pub(super) fn render_settings_output(
                                                     |script| {
                                                         let active = form.text_script == script;
                                                         btn(
-                                                            script.label(),
+                                                            script.label(ui_lang()),
                                                             if active {
                                                                 BtnKind::Primary
                                                             } else {
@@ -401,11 +402,11 @@ pub(super) fn render_settings_output_location(
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(TEXT)
-                                            .child("字幕输出位置"),
+                                            .child(t(L::OUTPUT_LOCATION)),
                                     )
                                     .child(
                                         div().flex().gap_1p5().children(
-                                            [(true, "视频同目录"), (false, "指定目录")]
+                                            [(true, t(L::NEXT_TO_VIDEO)), (false, t(L::CUSTOM_DIR))]
                                                 .into_iter()
                                                 .map(|(next, label)| {
                                                     let active = form.save_next == next;
@@ -508,7 +509,7 @@ pub(super) fn render_settings_asr_model(
                                                     .text_sm()
                                                     .font_weight(gpui::FontWeight::MEDIUM)
                                                     .text_color(TEXT)
-                                                    .child("语音识别模型"),
+                                                    .child(t(L::ASR_MODEL)),
                                             )
                                             .child(
                                                 div()
@@ -543,7 +544,7 @@ pub(super) fn render_settings_asr_model(
                                                         }
                                                         if this.download_kind_busy(ModelKind::Asr) {
                                                             this.flash_hint(
-                                                                "ASR 下载进行中，请稍后再切换尺寸",
+                                                                t(L::ASR_DL_BUSY_RESIZE),
                                                                 cx,
                                                             );
                                                             return;
@@ -560,12 +561,12 @@ pub(super) fn render_settings_asr_model(
                                         chips.push(
                                             pill(
                                                 "asr-quant",
-                                                "量化",
+                                                t(L::QUANT),
                                                 form.asr_quant,
                                                 cx.listener(|this, _, _, cx| {
                                                     if this.download_kind_busy(ModelKind::Asr) {
                                                         this.flash_hint(
-                                                            "ASR 下载进行中，请稍后再切换",
+                                                            t(L::ASR_DL_BUSY),
                                                             cx,
                                                         );
                                                         return;
@@ -674,7 +675,7 @@ pub(super) fn render_settings_aligner(
                                                     .text_sm()
                                                     .font_weight(gpui::FontWeight::MEDIUM)
                                                     .text_color(TEXT)
-                                                    .child("对齐模型"),
+                                                    .child(t(L::ALIGNER_MODEL)),
                                             )
                                             .child(
                                                 div()
@@ -774,7 +775,7 @@ pub(super) fn render_settings_demucs(
                                                     .text_sm()
                                                     .font_weight(gpui::FontWeight::MEDIUM)
                                                     .text_color(TEXT)
-                                                    .child("人声分离"),
+                                                    .child(t(L::VOCAL_SEPARATION)),
                                             )
                                             .child(
                                                 div()
@@ -787,12 +788,12 @@ pub(super) fn render_settings_demucs(
                                     // 与「量化」同款：点亮即选中，再点取消。
                                     .child(div().flex().gap_1p5().child(pill(
                                         "vocal-sep-default",
-                                        "默认启用",
+                                        t(L::SEP_DEFAULT_ON),
                                         form.vocal_sep,
                                         cx.listener(|this, _, _, cx| {
                                             let enabling = !this.settings.vocal_separation;
                                             if enabling && !this.demucs_ready {
-                                                this.flash_hint("请先下载人声分离模型", cx);
+                                                this.flash_hint(t(L::SEP_NEEDS_MODEL), cx);
                                                 return;
                                             }
                                             this.settings.vocal_separation = enabling;
@@ -884,12 +885,12 @@ pub(super) fn render_settings_backend(
                                         div()
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child("推理后端"),
+                                            .child(t(L::BACKEND)),
                                     )
                                     .child(
                                         div().flex().gap_1p5().children(
                                             [
-                                                ("auto", "自动"),
+                                                ("auto", t(L::BACKEND_AUTO)),
                                                 ("gpu", "GPU"),
                                                 ("cpu", "CPU"),
                                             ]
@@ -935,7 +936,7 @@ pub(super) fn render_settings_sound(
                 .text_sm()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(TEXT)
-                .child("提示音"),
+                .child(t(L::SOUND)),
         )
         .child(switch(
             "switch-sound",

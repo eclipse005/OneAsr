@@ -177,19 +177,19 @@ impl OneAsrApp {
                     .items_center()
                     .gap_2()
                     .child(btn(
-                        if picking { "选择中…" } else { "添加" },
+                        if picking { t(L::SELECTING) } else { t(L::ADD) },
                         BtnKind::Secondary,
                         true,
                         cx.listener(|this, _, _, cx| this.add_files_dialog(cx)),
                     ))
                     .child(btn_cta(
-                        "全部开始",
+                        t(L::START_ALL),
                         can_start,
-                        "模型未就绪，请先在设置中选择完整模型目录",
+                        t(L::START_ALL_BLOCKED),
                         cx.listener(|this, _, _, cx| this.start_all(cx)),
                     ))
                     .child(btn(
-                        "清空",
+                        t(L::CLEAR),
                         BtnKind::Quiet,
                         true,
                         cx.listener(|this, _, _, cx| this.clear_all(cx)),

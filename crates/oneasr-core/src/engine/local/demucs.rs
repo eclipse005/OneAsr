@@ -39,10 +39,7 @@ impl DemucsSeparatorAdapter {
 
         let weights = model_dir.join(DEMUCS_WEIGHTS_FILE);
         if !weights.is_file() {
-            return Err(EngineError::new(format!(
-                "人声分离模型不存在: {}（请在设置中下载）",
-                weights.display()
-            )));
+            return Err(EngineError::new(crate::i18n::demucs_model_missing(&weights)));
         }
 
         let opts = LoadOptions {
@@ -51,26 +48,27 @@ impl DemucsSeparatorAdapter {
             stems: StemSelection::Some(vec![StemId::Vocals]),
         };
         let attempt = separator_backend(backend);
-        log(format!("人声分离后端 {}", attempt.tag()));
+        log(format!("vocal-separation backend {}", attempt.tag()));
 
         let (inner, fell_back) = match Demucs::load(&weights, opts.clone(), attempt.clone()) {
             Ok(inner) => (inner, false),
             Err(e) if backend == ComputeBackend::Gpu && !forced_gpu => {
-                log(format!("人声分离 GPU 加载失败，改用 CPU: {e}"));
-                let inner = Demucs::load(&weights, opts, demucs_core::Backend::Cpu)
-                    .map_err(|cpu_e| {
-                        EngineError::new(format!("加载人声分离模型失败（cpu）: {cpu_e}"))
-                    })?;
+                log(crate::i18n::sep_gpu_load_failed_cpu(&e.to_string()));
+                let inner = Demucs::load(&weights, opts, demucs_core::Backend::Cpu).map_err(
+                    |cpu_e| {
+                        EngineError::new(crate::i18n::sep_load_failed("cpu", &cpu_e.to_string()))
+                    },
+                )?;
                 (inner, true)
             }
             Err(e) => {
-                return Err(EngineError::new(format!(
-                    "加载人声分离模型失败（{}）: {e}",
-                    attempt.tag()
+                return Err(EngineError::new(crate::i18n::sep_load_failed(
+                    attempt.tag(),
+                    &e.to_string(),
                 )));
             }
         };
-        log(format!("人声分离已加载 {}", inner.backend_tag()));
+        log(format!("vocal separation loaded {}", inner.backend_tag()));
 
         Ok(Self {
             inner,
@@ -89,7 +87,7 @@ impl Separator for DemucsSeparatorAdapter {
 
         if self.fell_back.replace(false) {
             on_event(SeparationEvent::FellBackToCpu {
-                reason: "GPU 加载失败".into(),
+                reason: crate::i18n::sep_gpu_load_failed_reason().into(),
             });
         }
 
@@ -106,12 +104,12 @@ impl Separator for DemucsSeparatorAdapter {
                     total: p.total,
                 });
             })
-            .map_err(|e| EngineError::new(format!("人声分离失败: {e}")))?;
+            .map_err(|e| EngineError::new(crate::i18n::sep_failed(&e.to_string())))?;
 
         let vocals = stems
             .iter()
             .find(|s| s.id == StemId::Vocals)
-            .ok_or_else(|| EngineError::new("人声分离没有返回 vocals 轨道"))?;
+            .ok_or_else(|| EngineError::new(crate::i18n::sep_no_vocals()))?;
         let out = req.out_dir.join("vocals.wav");
         write_stereo_f32(&out, &vocals.left, &vocals.right, sample_rate)
             .map_err(EngineError::new)?;
@@ -124,16 +122,16 @@ fn read_stereo_f32(path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), String> {
     use hound::SampleFormat;
 
     let mut reader = hound::WavReader::open(path)
-        .map_err(|e| format!("读取分离输入失败 {}: {e}", path.display()))?;
+        .map_err(|e| crate::i18n::sep_read_input_failed(path, &e.to_string()))?;
     let spec = reader.spec();
     if spec.channels == 0 {
-        return Err("分离输入没有声道".into());
+        return Err(crate::i18n::sep_no_channels().into());
     }
     let samples: Vec<f32> = match spec.sample_format {
         SampleFormat::Float => reader
             .samples::<f32>()
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("读取分离输入失败: {e}"))?,
+            .map_err(|e| crate::i18n::sep_read_input_failed_bare(&e.to_string()))?,
         SampleFormat::Int => {
             // ffmpeg wrote PCM s16le; stay tolerant of other integer widths.
             let bits = spec.bits_per_sample.max(1);
@@ -142,7 +140,7 @@ fn read_stereo_f32(path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), String> {
                 .samples::<i32>()
                 .map(|s| s.map(|v| v as f32 / scale))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("读取分离输入失败: {e}"))?
+                .map_err(|e| crate::i18n::sep_read_input_failed_bare(&e.to_string()))?
         }
     };
 
@@ -171,15 +169,15 @@ fn write_stereo_f32(
         sample_format: SampleFormat::Float,
     };
     let mut writer = WavWriter::create(path, spec)
-        .map_err(|e| format!("写入人声轨道失败 {}: {e}", path.display()))?;
+        .map_err(|e| crate::i18n::sep_write_failed(path, &e.to_string()))?;
     for (l, r) in left.iter().zip(right.iter()) {
         writer
             .write_sample(*l)
             .and_then(|_| writer.write_sample(*r))
-            .map_err(|e| format!("写入人声轨道失败: {e}"))?;
+            .map_err(|e| crate::i18n::sep_write_failed_bare(&e.to_string()))?;
     }
     writer
         .finalize()
-        .map_err(|e| format!("写入人声轨道失败: {e}"))?;
+        .map_err(|e| crate::i18n::sep_write_failed_bare(&e.to_string()))?;
     Ok(())
 }

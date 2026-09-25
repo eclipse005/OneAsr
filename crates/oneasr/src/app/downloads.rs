@@ -13,7 +13,7 @@ impl OneAsrApp {
     pub(crate) fn start_model_download(&mut self, id: ModelId, cx: &mut Context<Self>) {
         // One job per kind — 0.6B / 1.7B share the ASR slot.
         if self.download_kind_busy(id.kind()) {
-            self.flash_hint("已有同类下载任务进行中", cx);
+            self.flash_hint(t(L::DOWNLOAD_KIND_BUSY), cx);
             return;
         }
 
@@ -30,7 +30,7 @@ impl OneAsrApp {
             }
         };
         if verified.is_ok() {
-            self.flash_hint("模型文件完整，无需重新下载", cx);
+            self.flash_hint(t(L::MODEL_FILES_COMPLETE), cx);
             return;
         }
 
@@ -52,7 +52,7 @@ impl OneAsrApp {
         };
         crashlog::log_info(format!(
             "download start: {}\n  dir: {}\n  writable: {writable}",
-            id.label(),
+            id.label(ui_lang()),
             model_dir.display(),
         ));
         match id.kind() {
@@ -98,7 +98,7 @@ impl OneAsrApp {
                 speed_bytes_per_sec: 0,
                 message: e.to_string(),
             });
-            self.flash_hint(format!("下载启动失败: {e}"), cx);
+            self.flash_hint(crate::i18n::download_start_failed(&e), cx);
         }
         cx.notify();
     }
@@ -112,7 +112,7 @@ impl OneAsrApp {
         if let Some(h) = handle
             && h.model_id == id {
             h.cancel();
-            self.flash_hint("正在取消下载…", cx);
+            self.flash_hint(t(L::CANCELLING_DOWNLOAD), cx);
         }
         cx.notify();
     }
