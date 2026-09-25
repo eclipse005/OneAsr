@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+  <!-- Stop: rounded square, click cancels the download -->
+  <rect x="7" y="7" width="10" height="10" rx="2"/>
+</svg>

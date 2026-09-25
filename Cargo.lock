@@ -4841,7 +4841,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oneasr"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4854,7 +4854,7 @@ dependencies = [
 
 [[package]]
 name = "oneasr-core"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "demucs-core",
  "ferrous-opencc",
@@ -5665,8 +5665,8 @@ dependencies = [
 
 [[package]]
 name = "qwen3-asr-wgpu"
-version = "0.1.0"
-source = "git+https://github.com/eclipse005/qwen3-asr-wgpu.git#9811bb009108445adb13fe1eb3bcdd50c7d2af94"
+version = "0.2.0"
+source = "git+https://github.com/eclipse005/qwen3-asr-wgpu.git#c099a5eff11ba712e04c51c83a500b22afb806f5"
 dependencies = [
  "anyhow",
  "bytemuck",

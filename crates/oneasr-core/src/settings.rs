@@ -331,12 +331,28 @@ impl Settings {
         // seed it as the active size's pick so a hand-picked path survives the
         // upgrade, and let a catalog-named folder say which size it holds.
         if self.asr_dirs.is_empty() {
-            if let Some(id) = ModelId::try_from_asr_dir(&self.asr_model_dir) {
-                self.asr_model = id.as_str().into();
+            let mut id = ModelId::parse_asr(&self.asr_model);
+            if let Some(named) = ModelId::try_from_asr_dir(&self.asr_model_dir)
+                && self.asr_model_dir != resolve_model_dir(named.as_str())
+            {
+                // A catalog-named folder outside the install layout is a
+                // deliberate pick — it wins over the stored id. A folder that
+                // IS the install layout (e.g. the serde default backing an
+                // absent field) must not override the parsed id: the int8
+                // variant would otherwise be reset to its fp16 sibling.
+                self.asr_model = named.as_str().into();
+                id = named;
             }
             let dir = self.asr_model_dir.clone();
-            let id = ModelId::parse_asr(&self.asr_model);
-            self.remember_asr_dir(id, &dir);
+            // Install-layout defaults are recomputed per id on every read —
+            // the only thing worth seeding is a genuine hand-picked folder.
+            if dir != resolve_model_dir(id.as_str())
+                && ModelId::try_from_asr_dir(&dir).is_none_or(|named| {
+                    dir != resolve_model_dir(named.as_str())
+                })
+            {
+                self.remember_asr_dir(id, &dir);
+            }
         }
         let id = ModelId::parse_asr(&self.asr_model);
         self.asr_model = id.as_str().into();
@@ -419,6 +435,24 @@ impl Settings {
 
     pub fn selected_asr_id(&self) -> ModelId {
         ModelId::parse_asr(&self.asr_model)
+    }
+
+    /// True when the active ASR selection is the int8-quantized variant of
+    /// its size (`Qwen3-ASR-*-int8`).
+    pub fn asr_quantized(&self) -> bool {
+        self.selected_asr_id().is_quantized()
+    }
+
+    /// Switch the active ASR to the fp16 / int8 variant of the current size.
+    ///
+    /// Quantized checkpoints are catalog ids of their own, so each of the
+    /// four ASR variants (two sizes × fp16/int8) keeps its own directory in
+    /// [`Self::asr_dirs`] — same per-size memory as the size switch.
+    pub fn set_asr_quantized(&mut self, quantized: bool) {
+        let id = self.selected_asr_id().with_quant(quantized);
+        if id != self.selected_asr_id() {
+            self.select_asr_model(id);
+        }
     }
 
     /// Directory bound to one ASR size: the folder hand-picked for it, else
@@ -645,6 +679,67 @@ mod tests {
         s.select_asr_model(ModelId::Qwen3Asr17B);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
         assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-hf"));
+    }
+
+    #[test]
+    fn quantized_selection_switches_variant_and_keeps_per_variant_dirs() {
+        let mut s = Settings::default();
+        assert!(!s.asr_quantized());
+
+        // 0.6B → 0.6B int8: the size stays, the catalog id and default dir change.
+        s.set_asr_quantized(true);
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06BInt8);
+        assert!(
+            s.asr_model_dir
+                .to_string_lossy()
+                .contains("Qwen3-ASR-0.6B-int8"),
+            "{}",
+            s.asr_model_dir.display()
+        );
+
+        // Each of the four variants remembers its own folder.
+        let custom_int8 = PathBuf::from(r"C:\custom\models\Qwen3-ASR-0.6B-int8");
+        s.set_asr_dir(custom_int8.clone());
+        s.set_asr_quantized(false);
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06B);
+        assert!(
+            s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-0.6B-hf"),
+            "{}",
+            s.asr_model_dir.display()
+        );
+        s.set_asr_quantized(true);
+        assert_eq!(s.asr_model_dir, custom_int8);
+
+        // Core selection is a plain catalog id: picking a size always lands on
+        // its fp16 id, and the quantized state is a separate, explicit choice
+        // (the GUI combines the two when it renders the chips).
+        s.select_asr_model(ModelId::Qwen3Asr17B);
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
+        s.set_asr_quantized(true);
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17BInt8);
+        assert!(
+            s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-int8"),
+            "{}",
+            s.asr_model_dir.display()
+        );
+
+        // Setting the same state twice is a no-op (no dir reset).
+        let before = s.asr_model_dir.clone();
+        s.set_asr_quantized(true);
+        assert_eq!(s.asr_model_dir, before);
+    }
+
+    #[test]
+    fn parse_round_trips_an_int8_active_model() {
+        // A settings.json saved with the int8 variant active must load back as
+        // exactly that variant, not fall back to fp16 0.6B.
+        let mut s: Settings = serde_json::from_str(
+            r#"{"asr_model":"Qwen3-ASR-0.6B-int8"}"#,
+        )
+        .unwrap();
+        s.normalize();
+        assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06BInt8);
+        assert!(s.asr_quantized());
     }
 
     #[test]

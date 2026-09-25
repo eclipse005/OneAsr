@@ -21,7 +21,6 @@ impl OneAsrApp {
                     .flex_shrink_0()
                     .px_4()
                     .pt_4()
-                    .pb_2()
                     .flex()
                     .items_center()
                     .justify_between()
@@ -47,7 +46,11 @@ impl OneAsrApp {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    // 上下留白与卡片间距（gap_2p5）一致：标题→首卡、卡↔卡、
+                    // 末卡→保存栏全部等距，末卡不再贴着保存栏。
                     .px_4()
+                    .pt_2p5()
+                    .pb_2p5()
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
@@ -108,7 +111,10 @@ pub(super) struct SettingsFormState {
     pub(super) language: String,
     pub(super) length_preset: String,
     pub(super) chunk_target: u32,
-    pub(super) asr_id: ModelId,
+    /// 当前档位所属的 fp16 尺寸（0.6B / 1.7B chip 的选中态）。
+    pub(super) asr_base_id: ModelId,
+    /// 当前档位是否为 int8 量化变体（量化按钮的选中态）。
+    pub(super) asr_quant: bool,
     pub(super) model: String,
     pub(super) model_tip: String,
     pub(super) aligner: String,
@@ -144,6 +150,8 @@ impl OneAsrApp {
         let length_preset = self.settings.subtitle_length_preset.clone();
         let chunk_target = self.settings.chunk_target_seconds_clamped();
         let asr_id = self.settings.selected_asr_id();
+        let asr_base_id = asr_id.asr_base();
+        let asr_quant = asr_id.is_quantized();
         let model = self.settings.asr_model_dir.display().to_string();
         let model_tip = model.clone();
         let aligner = self.settings.aligner_model_dir.display().to_string();
@@ -180,7 +188,8 @@ impl OneAsrApp {
             language,
             length_preset,
             chunk_target,
-            asr_id,
+            asr_base_id,
+            asr_quant,
             model,
             model_tip,
             aligner,

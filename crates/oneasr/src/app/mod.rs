@@ -327,6 +327,8 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
     let models_line = [
         ModelId::Qwen3Asr06B,
         ModelId::Qwen3Asr17B,
+        ModelId::Qwen3Asr06BInt8,
+        ModelId::Qwen3Asr17BInt8,
         ModelId::QwenAlign06B,
         ModelId::HtdemucsFt,
     ]

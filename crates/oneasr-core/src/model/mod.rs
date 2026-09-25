@@ -7,8 +7,8 @@ mod path;
 mod ready;
 
 pub use catalog::{
-    model_definition, ModelDefinition, ModelDownloadFile, ModelId, ModelKind, QWEN3_ASR_06B,
-    QWEN3_ASR_17B, QWEN_ALIGN_06B, HTDEMUCS_FT,
+    model_definition, ModelDefinition, ModelDownloadFile, ModelId, ModelKind, HTDEMUCS_FT,
+    QWEN3_ASR_06B, QWEN3_ASR_06B_INT8, QWEN3_ASR_17B, QWEN3_ASR_17B_INT8, QWEN_ALIGN_06B,
 };
 pub use download::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, download_model,

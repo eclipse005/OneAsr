@@ -71,8 +71,11 @@ pub enum BtnKind {
     Primary,
     /// Outlined secondary (添加 / 后端选项).
     Secondary,
-    /// Low-emphasis destructive/utility (清空) — text only.
+    /// Outlined low-emphasis utility (重置) — bordered like Secondary but
+    /// muted text; the destructive tint only appears on hover.
     Quiet,
+    /// Outlined destructive (清空) — red text / border at rest, fills on hover.
+    Danger,
 }
 
 /// Settings gear.
@@ -185,8 +188,10 @@ pub fn btn(
         (BtnKind::Primary, false) => (crate::theme::ACCENT, crate::theme::PANEL, crate::theme::ACCENT, 0.42),
         (BtnKind::Secondary, true) => (crate::theme::PANEL, crate::theme::TEXT, crate::theme::LINE, 1.0),
         (BtnKind::Secondary, false) => (crate::theme::PANEL, crate::theme::MUTED_SOFT, crate::theme::LINE, 1.0),
-        (BtnKind::Quiet, true) => (crate::theme::PANEL, crate::theme::MUTED, crate::theme::PANEL, 1.0),
-        (BtnKind::Quiet, false) => (crate::theme::PANEL, crate::theme::MUTED_SOFT, crate::theme::PANEL, 1.0),
+        (BtnKind::Quiet, true) => (crate::theme::PANEL, crate::theme::MUTED, crate::theme::LINE, 1.0),
+        (BtnKind::Quiet, false) => (crate::theme::PANEL, crate::theme::MUTED_SOFT, crate::theme::LINE, 1.0),
+        (BtnKind::Danger, true) => (crate::theme::DANGER_SOFT, crate::theme::DANGER, crate::theme::DANGER, 1.0),
+        (BtnKind::Danger, false) => (crate::theme::PANEL, crate::theme::MUTED_SOFT, crate::theme::LINE, 1.0),
     };
     let mut el = div()
         .id(id)
@@ -200,7 +205,7 @@ pub fn btn(
         .border_color(border)
         .font_weight(match kind {
             BtnKind::Primary => gpui::FontWeight::SEMIBOLD,
-            BtnKind::Secondary | BtnKind::Quiet => gpui::FontWeight::NORMAL,
+            BtnKind::Secondary | BtnKind::Quiet | BtnKind::Danger => gpui::FontWeight::NORMAL,
         })
         .opacity(opacity)
         .child(label.to_string());
@@ -210,7 +215,8 @@ pub fn btn(
             .hover(|s| match kind {
                 BtnKind::Primary => s.opacity(0.92),
                 BtnKind::Secondary => s.border_color(crate::theme::ACCENT),
-                BtnKind::Quiet => s.text_color(crate::theme::DANGER).bg(crate::theme::DANGER_SOFT),
+                BtnKind::Quiet => s.text_color(crate::theme::DANGER).bg(crate::theme::DANGER_SOFT).border_color(crate::theme::DANGER),
+                BtnKind::Danger => s.bg(crate::theme::DANGER).text_color(crate::theme::PANEL),
             })
             .on_click(on_click);
     }

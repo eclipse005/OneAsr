@@ -45,6 +45,10 @@ pub const WARN: Rgba = rgba_hex(0xd97706);
 pub const WARN_SOFT: Rgba = rgba_hex(0xfff7ed);
 /// Logo mark fill
 pub const LOGO: Rgba = rgba_hex(0x0f766e);
+/// 滑动开关关闭态轨道：介于 LINE 与 MUTED_SOFT 之间的冷灰，白卡片上一眼可辨。
+pub const SWITCH_OFF: Rgba = rgba_hex(0xcbd5e1);
+/// 滑动开关关闭态悬停：再暗一档，让"这里可以点"更明显。
+pub const SWITCH_OFF_HOVER: Rgba = rgba_hex(0xb6c2d2);
 
 // ─── stats year-grid intensity ramp ─────────────────────────────────
 //

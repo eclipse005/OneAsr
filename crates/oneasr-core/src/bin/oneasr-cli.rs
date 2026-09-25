@@ -376,12 +376,13 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
 /// argument alone), so headless runs must pin it here.
 fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
     let models = app_root.join("models");
-    // Bind whichever catalog ASR size is actually installed under --app-root
-    // (0.6B preferred); otherwise keep the default path so the model check
-    // reports the missing directory.
-    if let Some(id) = ModelId::ASR_CHOICES
+    // Bind whichever catalog ASR variant is actually installed under
+    // --app-root (fp16 preferred over its int8 sibling); otherwise keep the
+    // default path so the model check reports the missing directory.
+    let candidates = ModelId::ASR_CHOICES
         .into_iter()
-        .find(|id| models.join(id.as_str()).is_dir())
+        .chain([ModelId::Qwen3Asr06BInt8, ModelId::Qwen3Asr17BInt8]);
+    if let Some(id) = candidates.into_iter().find(|id| models.join(id.as_str()).is_dir())
     {
         settings.asr_model = id.as_str().into();
         settings.asr_model_dir = models.join(id.as_str());

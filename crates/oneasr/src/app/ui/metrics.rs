@@ -4,8 +4,9 @@
 //! floating menus cannot drift apart. Read by both the render methods and the
 //! animation state in [`crate::app`].
 
-/// Settings drawer width (overlay, does not shrink the list).
-pub(crate) const SETTINGS_W: f32 = 400.;
+/// Settings drawer width (overlay, does not shrink the list). Wide enough that
+/// a model path bar + its download button share one row without wrapping.
+pub(crate) const SETTINGS_W: f32 = 450.;
 pub(crate) const DRAWER_ANIM_SECS: f32 = 0.34;
 /// Row add fade-in duration (seconds).
 pub(crate) const ROW_ENTER_SECS: f32 = 0.30;

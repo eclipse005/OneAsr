@@ -10,7 +10,7 @@ use crate::app::prelude::*;
 use crate::app::ui::settings_drawer::SettingsFormState;
 
 /// One settings card: rounded, bordered, padded. All ten sections go through
-/// this so their chrome cannot drift apart.
+/// this so their chrome cannot drift apart. Gray cards on the white drawer. White on the gray page background.
 pub(super) fn settings_section(body: AnyElement) -> impl IntoElement + use<> {
     div()
         .flex()
@@ -261,8 +261,9 @@ pub(super) fn render_settings_output(
                                     .gap_2p5()
                                     .child(
                                         div()
-                                            // 中文输出 takes its natural width (3 pills) and
-                                            // may shrink; 输出格式 absorbs the remaining space.
+                                            // 两列平分宽度（同「默认语言 | 字幕长度」。
+                                            .flex_1()
+                                            .min_w_0()
                                             .flex()
                                             .flex_col()
                                             .gap_1()
@@ -516,11 +517,16 @@ pub(super) fn render_settings_asr_model(
                                                     .bg(if form.asr_ready { ACCENT } else { DANGER }),
                                             ),
                                     )
-                                    .child(
-                                        div().flex().gap_1p5().children(
-                                            ModelId::ASR_CHOICES.into_iter().map(|id| {
-                                                let active = form.asr_id == id;
-                                                let can_switch = !form.asr_size_locked || active;
+                                    .child({
+                                        // 尺寸 chip 选"档位家族"：量化开着时切尺寸
+                                        // 仍落在该尺寸的 int8 档；「量化」是同一行里
+                                        // 可独立点亮/取消的按钮（与 SRT/TXT 同款）。
+                                        let mut chips: Vec<AnyElement> = ModelId::ASR_CHOICES
+                                            .into_iter()
+                                            .map(|id| {
+                                                let active = form.asr_base_id == id;
+                                                let can_switch =
+                                                    !form.asr_size_locked || active;
                                                 btn(
                                                     id.short_label(),
                                                     if active {
@@ -530,7 +536,9 @@ pub(super) fn render_settings_asr_model(
                                                     },
                                                     can_switch,
                                                     cx.listener(move |this, _, _, cx| {
-                                                        if this.settings.selected_asr_id() == id {
+                                                        let target =
+                                                            id.with_quant(this.settings.asr_quantized());
+                                                        if this.settings.selected_asr_id() == target {
                                                             return;
                                                         }
                                                         if this.download_kind_busy(ModelKind::Asr) {
@@ -540,16 +548,46 @@ pub(super) fn render_settings_asr_model(
                                                             );
                                                             return;
                                                         }
-                                                        this.settings.select_asr_model(id);
+                                                        this.settings.select_asr_model(target);
                                                         this.clear_stale_asr_progress();
                                                         this.refresh_model_probe();
                                                         this.mark_settings_dirty(cx);
                                                     }),
                                                 )
-                                            }),
-                                        ),
-                                    )
-                                    .child(
+                                                .into_any_element()
+                                            })
+                                            .collect();
+                                        chips.push(
+                                            pill(
+                                                "asr-quant",
+                                                "量化",
+                                                form.asr_quant,
+                                                cx.listener(|this, _, _, cx| {
+                                                    if this.download_kind_busy(ModelKind::Asr) {
+                                                        this.flash_hint(
+                                                            "ASR 下载进行中，请稍后再切换",
+                                                            cx,
+                                                        );
+                                                        return;
+                                                    }
+                                                    this.settings
+                                                        .set_asr_quantized(!this.settings.asr_quantized());
+                                                    this.clear_stale_asr_progress();
+                                                    this.refresh_model_probe();
+                                                    this.mark_settings_dirty(cx);
+                                                }),
+                                            )
+                                            .into_any_element(),
+                                        );
+                                        div().flex().gap_1p5().children(chips)
+                                    })
+                                    .child(model_download_row(
+                                        ComponentRow {
+                                            id: "asr-dl-btn",
+                                            ready: form.asr_ready,
+                                            busy: form.asr_dl_busy,
+                                            progress: form.asr_dl.as_ref(),
+                                        },
                                         div()
                                             .id("model-dir")
                                             .flex()
@@ -570,7 +608,7 @@ pub(super) fn render_settings_asr_model(
                                                     .text_xs()
                                                     .text_color(TEXT)
                                                     .whitespace_normal()
-                                                    .line_clamp(2)
+                                                    .line_clamp(1)
                                                     .child(form.model.clone())
                                                     .tooltip({
                                                         let tip = form.model_tip.clone();
@@ -602,16 +640,6 @@ pub(super) fn render_settings_asr_model(
                                                         this.pick_model_dir(cx)
                                                     })),
                                             ),
-                                    )
-                                    .child(model_download_row(
-                                        ComponentRow {
-                                            id: "asr-dl-btn",
-                                            cancel_id: "asr-dl-cancel",
-                                            ready: form.asr_ready,
-                                            busy: form.asr_dl_busy,
-                                            progress: form.asr_dl.as_ref(),
-                                        },
-                                        ModelKind::Asr,
                                         cx.listener(move |this, _, _, cx| {
                                             let id = this.settings.selected_asr_id();
                                             this.start_model_download(id, cx);
@@ -655,7 +683,13 @@ pub(super) fn render_settings_aligner(
                                                     .bg(if form.align_ready { ACCENT } else { DANGER }),
                                             ),
                                     )
-                                    .child(
+                                    .child(model_download_row(
+                                        ComponentRow {
+                                            id: "align-dl-btn",
+                                            ready: form.align_ready,
+                                            busy: form.align_dl_busy,
+                                            progress: form.align_dl.as_ref(),
+                                        },
                                         div()
                                             .id("aligner-dir")
                                             .flex()
@@ -676,7 +710,7 @@ pub(super) fn render_settings_aligner(
                                                     .text_xs()
                                                     .text_color(TEXT)
                                                     .whitespace_normal()
-                                                    .line_clamp(2)
+                                                    .line_clamp(1)
                                                     .child(form.aligner.clone())
                                                     .tooltip({
                                                         let tip = form.aligner_tip.clone();
@@ -708,16 +742,6 @@ pub(super) fn render_settings_aligner(
                                                         this.pick_aligner_dir(cx)
                                                     })),
                                             ),
-                                    )
-                                    .child(model_download_row(
-                                        ComponentRow {
-                                            id: "align-dl-btn",
-                                            cancel_id: "align-dl-cancel",
-                                            ready: form.align_ready,
-                                            busy: form.align_dl_busy,
-                                            progress: form.align_dl.as_ref(),
-                                        },
-                                        ModelKind::Align,
                                         cx.listener(|this, _, _, cx| {
                                             this.start_model_download(ModelId::QwenAlign06B, cx);
                                         }),
@@ -759,40 +783,29 @@ pub(super) fn render_settings_demucs(
                                                     .bg(if form.demucs_ready { ACCENT } else { DANGER }),
                                             ),
                                     )
-                                    // 开关 = 新任务默认值（任务行里可单独覆盖）
-                                    .child(
-                                        div().flex().gap_1p5().children(
-                                            [(false, "关闭"), (true, "开启")]
-                                                .into_iter()
-                                                .map(|(on, label)| {
-                                                    let active = form.vocal_sep == on;
-                                                    btn(
-                                                        label,
-                                                        if active {
-                                                            BtnKind::Primary
-                                                        } else {
-                                                            BtnKind::Secondary
-                                                        },
-                                                        true,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            if this.settings.vocal_separation == on {
-                                                                return;
-                                                            }
-                                                            if on && !this.demucs_ready {
-                                                                this.flash_hint(
-                                                                    "请先下载人声分离模型",
-                                                                    cx,
-                                                                );
-                                                                return;
-                                                            }
-                                                            this.settings.vocal_separation = on;
-                                                            this.mark_settings_dirty(cx);
-                                                        }),
-                                                    )
-                                                }),
-                                        ),
-                                    )
-                                    .child(
+                                    // 「默认启用」= 新任务默认值（任务行里可单独覆盖）；
+                                    // 与「量化」同款：点亮即选中，再点取消。
+                                    .child(div().flex().gap_1p5().child(pill(
+                                        "vocal-sep-default",
+                                        "默认启用",
+                                        form.vocal_sep,
+                                        cx.listener(|this, _, _, cx| {
+                                            let enabling = !this.settings.vocal_separation;
+                                            if enabling && !this.demucs_ready {
+                                                this.flash_hint("请先下载人声分离模型", cx);
+                                                return;
+                                            }
+                                            this.settings.vocal_separation = enabling;
+                                            this.mark_settings_dirty(cx);
+                                        }),
+                                    )))
+                                    .child(model_download_row(
+                                        ComponentRow {
+                                            id: "demucs-dl-btn",
+                                            ready: form.demucs_ready,
+                                            busy: form.demucs_dl_busy,
+                                            progress: form.demucs_dl.as_ref(),
+                                        },
                                         div()
                                             .id("demucs-dir")
                                             .flex()
@@ -813,7 +826,7 @@ pub(super) fn render_settings_demucs(
                                                     .text_xs()
                                                     .text_color(TEXT)
                                                     .whitespace_normal()
-                                                    .line_clamp(2)
+                                                    .line_clamp(1)
                                                     .child(form.demucs_dir.clone())
                                                     .tooltip({
                                                         let tip = form.demucs_dir_tip.clone();
@@ -845,16 +858,6 @@ pub(super) fn render_settings_demucs(
                                                         this.pick_demucs_dir(cx)
                                                     })),
                                             ),
-                                    )
-                                    .child(model_download_row(
-                                        ComponentRow {
-                                            id: "demucs-dl-btn",
-                                            cancel_id: "demucs-dl-cancel",
-                                            ready: form.demucs_ready,
-                                            busy: form.demucs_dl_busy,
-                                            progress: form.demucs_dl.as_ref(),
-                                        },
-                                        ModelKind::Demucs,
                                         cx.listener(|this, _, _, cx| {
                                             this.start_model_download(ModelId::HtdemucsFt, cx);
                                         }),
@@ -917,59 +920,36 @@ pub(super) fn render_settings_backend(
     settings_section(body)
 }
 
-/// 提示音与运行提醒
+/// 提示音：一行一个开关，点亮即开启。
 pub(super) fn render_settings_sound(
     &mut self,
     form: &SettingsFormState,
     cx: &mut Context<Self>,
 ) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(TEXT)
-                                                    .child("提示音"),
-                                            )
-                                            .child(
-                                                div().flex().gap_1p5().children(
-                                                    [(false, "关闭"), (true, "开启")]
-                                                        .into_iter()
-                                                        .map(|(on, label)| {
-                                                            let active = form.sound == on;
-                                                            pill(
-                                                                if on {
-                                                                    "sound-on"
-                                                                } else {
-                                                                    "sound-off"
-                                                                },
-                                                                label,
-                                                                active,
-                                                                cx.listener(move |this, _, _, cx| {
-                                                                    if this.settings.sound == on {
-                                                                        return;
-                                                                    }
-                                                                    this.settings.sound = on;
-                                                                    // Audible the moment it
-                                                                    // comes back on.
-                                                                    this.play_ui(sfx::Sfx::Click);
-                                                                    this.mark_settings_dirty(cx);
-                                                                }),
-                                                            )
-                                                        }),
-                                                ),
-                                            ),
-                                    )
-                                    .into_any_element();
-    settings_section(body)
+    let body = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(TEXT)
+                .child("提示音"),
+        )
+        .child(switch(
+            "switch-sound",
+            form.sound,
+            cx.listener(|this, _, _, cx| {
+                let enabling = !this.settings.sound;
+                this.settings.sound = enabling;
+                // Audible the moment it comes back on.
+                if enabling {
+                    this.play_ui(sfx::Sfx::Click);
+                }
+                this.mark_settings_dirty(cx);
+            }),
+        ));
+    settings_section(body.into_any_element())
 }
 }

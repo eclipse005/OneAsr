@@ -17,6 +17,23 @@ impl OneAsrApp {
             return;
         }
 
+        // Re-download gate: verify what is already on disk **before** entering
+        // the download state, so clicking 重新下载 on a complete install never
+        // flashes the card into progress mode — it only reports completeness.
+        let verified = match id.kind() {
+            ModelKind::Asr => check_asr_model_dir(&self.settings.asr_model_dir),
+            ModelKind::Align => {
+                oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir)
+            }
+            ModelKind::Demucs => {
+                oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir())
+            }
+        };
+        if verified.is_ok() {
+            self.flash_hint("模型文件完整，无需重新下载", cx);
+            return;
+        }
+
         // Downloads land where the app looks for the weights: the user's own
         // folder when one was picked, else the install layout.
         let model_dir = match id.kind() {

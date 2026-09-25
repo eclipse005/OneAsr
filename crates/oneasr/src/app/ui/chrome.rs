@@ -191,7 +191,7 @@ impl OneAsrApp {
                     ))
                     .child(btn(
                         "清空",
-                        BtnKind::Quiet,
+                        BtnKind::Danger,
                         has_tasks,
                         cx.listener(|this, _, _, cx| this.clear_all(cx)),
                     ))

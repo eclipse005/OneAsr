@@ -7,6 +7,7 @@ mod button;
 mod install_row;
 mod logo;
 mod popover;
+mod switch;
 
 pub use button::{
     BtnKind, CaptionAction, IconKind, NameTooltip, btn, btn_cta, caption_btn, icon_btn, pill,
@@ -14,6 +15,7 @@ pub use button::{
 };
 pub use install_row::{ComponentRow, model_download_row};
 pub use logo::app_logo;
+pub use switch::switch;
 pub use popover::{
     floating_lang_menu, popover_dismiss_layer, popover_menu_shadow,
     timing_breakdown_popover,
