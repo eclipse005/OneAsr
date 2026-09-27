@@ -1,5 +1,5 @@
-# Tag v1.0.1 (or any v*) on this repo → build installers and attach them
-# to a GitHub Release. workflow_dispatch builds artifacts without publishing.
+# Tag v* (e.g. v1.1.0) on this repo → build installers and attach them to a
+# GitHub Release. workflow_dispatch builds artifacts without publishing.
 #
 # Expected files on a tag (one artifact = one file, names match the download):
 #   OneAsr_<ver>_windows_setup.exe
@@ -7,6 +7,13 @@
 #   OneAsr_<ver>_linux_x64.deb
 #   OneAsr_<ver>_linux_x64.tar.gz
 #   OneAsr_<ver>_macos.dmg
+#
+# <ver> 只有一个来源：根 Cargo.toml 的 [workspace.package] version。
+# tag 只是触发器和校验对象 —— version job 会断言 `v<Cargo.toml 版本>` 与
+# 推上来的 tag 完全一致，不一致就直接失败（以前这里直接取 tag 名当版本号，
+# 从不核对 Cargo.toml，能构建出一个文件名与内容不符的产物）。
+#
+# 打包脚本不再接受版本号参数：它们自己从 Cargo.toml 读，无法被调用方改错。
 name: Release
 
 on:
@@ -15,8 +22,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 默认最小权限：只有 publish job 需要写权限，写权限在那里单独声明。
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,19 +37,23 @@ env:
 jobs:
   version:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # 与 CI 用的是同一个脚本：tag / Cargo.toml / 两份 README 的下载链接
+      # 必须三方一致，否则不打包。stdout 只输出版本号。
       - id: ver
+        name: Assert tag matches Cargo.toml, then read the version
+        shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            V="${GITHUB_REF_NAME#v}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            V="$(python3 scripts/verify-version.py --tag "${GITHUB_REF_NAME}")"
           else
-            V="$(python3 -c "import re,pathlib; t=pathlib.Path('Cargo.toml').read_text(); m=re.search(r'(?m)^version\\s*=\\s*\\\"([^\\\"]+)\\\"', t); print(m.group(1) if m else '')")"
+            V="$(python3 scripts/verify-version.py)"
           fi
-          [[ -n "$V" ]]
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "OneAsr $V"
 
@@ -50,22 +62,30 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release-windows
       - name: Inno Setup
         run: choco install innosetup --no-progress -y
+      # 版本号、--locked 构建、ffmpeg 哈希校验、缺 ISCC 时失败 —— 都在脚本里；
+      # 脚本不接受版本参数，所以这里也不可能传错版本。
       - name: Pack
         shell: pwsh
-        run: ./scripts/pack-release.ps1 -Version ${{ needs.version.outputs.version }}
-      - uses: actions/upload-artifact@v4
+        run: ./scripts/pack-release.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_windows_setup.exe
           path: release/OneAsr_*_windows_setup.exe
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_windows_portable.zip
           path: release/OneAsr_*_windows_portable.zip
@@ -76,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Native deps
         run: |
           sudo apt-get update
@@ -86,20 +106,26 @@ jobs:
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libvulkan-dev libx11-dev libxrandr-dev libxcb1-dev \
             libzstd-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release-linux
       - name: Pack
         run: |
           chmod +x scripts/pack-unix.sh
-          ./scripts/pack-unix.sh --version ${{ needs.version.outputs.version }} --os linux --arch x64
-      - uses: actions/upload-artifact@v4
+          ./scripts/pack-unix.sh --os linux --arch x64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_linux_x64.deb
           path: release/OneAsr_*_linux_x64.deb
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_linux_x64.tar.gz
           path: release/OneAsr_*_linux_x64.tar.gz
@@ -110,16 +136,22 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: release-macos
       - name: Pack
         run: |
           chmod +x scripts/pack-unix.sh
-          ./scripts/pack-unix.sh --version ${{ needs.version.outputs.version }} --os macos --arch arm64
-      - uses: actions/upload-artifact@v4
+          ./scripts/pack-unix.sh --os macos --arch arm64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_macos.dmg
           path: release/OneAsr_*_macos.dmg
@@ -129,13 +161,17 @@ jobs:
     needs: [version, windows, linux, macos]
     if: ${{ always() && !cancelled() && needs.version.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 只有这一步真的需要写权限（建 release、传资产）。
+    permissions:
+      contents: write
     steps:
       # Tags + full history: the release body is built from them below.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           path: src
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: out
           merge-multiple: true
@@ -191,7 +227,7 @@ jobs:
           } > ../RELEASE_BODY.md
           echo '--- generated body ---'
           cat ../RELEASE_BODY.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.ref_name }}
           name: OneAsr ${{ needs.version.outputs.version }}

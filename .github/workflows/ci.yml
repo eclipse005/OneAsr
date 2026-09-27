@@ -1,0 +1,140 @@
+# 提交 / PR 门禁：格式、lint、测试、版本一致性、供应链。
+#
+# 与 release.yml 的分工：
+#   本文件 —— 每次提交都验证，只读权限，不做任何发布动作。
+#   发布 —— tag 触发的打包与建 release 全在 release.yml，那里才需要写权限。
+#
+# 关于 tag 与版本号的断言：tag 只会在 release.yml 里出现，所以「tag 必须等于
+# Cargo.toml 版本」这一条在那里做（两个文件调用的是同一个
+# scripts/verify-version.py，规则只有一份）。本文件只校验 Cargo.toml 与两份 README。
+name: CI
+
+on:
+  # 主分支是 wgpu，而且不走过 PR 直接提交 —— push 检查才是真正拦住坏代码的门。
+  # PR 检查同样保留：Dependabot 的依赖升级都是以 PR 形式进来的。
+  push:
+    branches: [wgpu]
+  pull_request:
+  workflow_dispatch:
+
+# 最小权限。CI 只需要读代码；写权限只在 release.yml 的 publish job 里给。
+permissions:
+  contents: read
+
+# 同一分支/PR 上的新提交取消上一次运行：省 runner，也让结论只对最新提交负责。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # 与发布构建保持一致；CI 里增量编译没有收益，只会占满磁盘。
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # ── 1. 格式：最便宜的一道门，先失败先报 ──────────────────────────────
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # 工具链版本只认 rust-toolchain.toml，workflow 里不再写第二个版本号。
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # ── 2. lint + 测试：同一个 job 共用编译产物，不为同一套依赖编两遍 ──────
+  check:
+    name: clippy + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # 与 release.yml 的 Linux 构建同一套原生依赖，避免 CI 绿而发布红。
+      - name: Native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake pkg-config clang \
+            libssl-dev libasound2-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libvulkan-dev libx11-dev libxrandr-dev libxcb1-dev \
+            libzstd-dev
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # --workspace --all-targets：连 oneasr-core 的 tests / examples 一起 lint。
+      # （以前只写 -p oneasr，core 的测试代码因此长期没人 lint。）
+      - name: clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --locked -p oneasr-core -p oneasr
+
+  # ── 3. 版本一致性：Cargo.toml 是唯一来源，两份 README 必须跟它一致 ──────
+  version:
+    name: version consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # 只跑 Python 标准库，不需要 Rust 工具链，所以这个 job 秒完。
+      - name: Version consistency
+        run: python3 scripts/verify-version.py
+
+  # ── 4. 供应链：外部二进制的哈希 + 依赖漏洞与来源 ───────────────────────
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # ffmpeg 来自上游 Tyrrrz/FFmpegBin 的版本化 tag，归档仍可被重新上传，
+      # 所以用哈希清单锁内容：资产被换掉时在这里就红，而不是等打包或用户下载后才发现。
+      # 来源（base-url）与哈希都由 scripts/ffmpeg-checksums.txt 声明，本步骤不含硬编码 URL。
+      - name: Verify bundled ffmpeg digests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/verify-ffmpeg-manifest.py
+      # 依赖漏洞 + 依赖来源（deny.toml：只允许 crates.io 与本组织 GitHub 仓库，
+      # 且 git 依赖必须带 tag/rev）。
+      #
+      # 这里刻意不用第三方 action，而是按仓库自己的规矩来：钉版本 + 校验上游
+      # 随资产发布的 sha256 —— 与我们对待 ffmpeg 的做法一致。少了这个 action，
+      # 也就少了「action 内部下载二进制、而这一步没有任何校验」的环节。
+      # 升级版本：改 VER，脚本会自己用新资产自带的 .sha256 校验，校验不过就红。
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - name: cargo-deny (advisories + sources)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER=0.20.2
+          TRIPLE=x86_64-unknown-linux-musl
+          BASE="https://github.com/EmbarkStudios/cargo-deny/releases/download/${VER}"
+          ASSET="cargo-deny-${VER}-${TRIPLE}.tar.gz"
+          curl -sSfL --retry 3 -o "/tmp/${ASSET}" "${BASE}/${ASSET}"
+          curl -sSfL --retry 3 -o "/tmp/${ASSET}.sha256" "${BASE}/${ASSET}.sha256"
+          # 上游随资产发布的 .sha256 是这里的信任锚点，不一致就中止。
+          echo "$(awk '{print $1}' "/tmp/${ASSET}.sha256")  /tmp/${ASSET}" | sha256sum -c -
+          tar -xzf "/tmp/${ASSET}" -C /tmp
+          # 不用 --locked：cargo-deny 的 --locked 是全局参数、不能跟在 check 后面；
+          # 锁文件的一致性由上面的 clippy / test（都带 --locked）负责把关。
+          "/tmp/cargo-deny-${VER}-${TRIPLE}/cargo-deny" check advisories sources

@@ -1,8 +1,11 @@
 /target
 /runs
 /output
-# Bundled ffmpeg is large; place bin/ffmpeg.exe locally for dev/run
-/bin/*.exe
+# Bundled ffmpeg（约 60–100 MB）只本地存在，从不入库：Windows 用 bin/ffmpeg.exe，
+# Linux/macOS 用无扩展名的 bin/ffmpeg。整个目录忽略、只放行占位文件，
+# 免得哪天多出一个平台的文件就被误提交。
+/bin/*
+!/bin/.gitkeep
 # Downloaded ASR/aligner weights (multi-GB; never commit)
 /models
 # CUDA DLLs installed next to the exe / into dll/
@@ -25,6 +28,9 @@
 /.workbuddy/
 # Icon gen intermediates
 assets/icons/_t*.png
+# scripts/ 下的 Python 校验脚本运行时的字节码缓存
+__pycache__/
+*.pyc
 **/*.rs.bk
 .DS_Store
 *.pdb

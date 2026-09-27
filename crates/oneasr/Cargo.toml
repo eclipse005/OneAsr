@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "OneAsr desktop app — pure GPUI shell"
+# 只通过 GitHub Release 分发，不进 crates.io；显式声明免得误发。
+publish = false
 
 [[bin]]
 name = "oneasr"

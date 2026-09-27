@@ -1,0 +1,13 @@
+# 工具链单一来源。
+#
+# 本文件是仓库编译工具链的唯一出处：本地 cargo、CI、三平台发布构建都读它，
+# workflow 里不再写死 `stable`（否则 CI 会用「今天的 stable」去构建，而
+# Cargo.lock 里的依赖和 rustfmt/clippy 的输出都随版本漂移，问题无法复现）。
+# 升级工具链 = 改这一行 + 跑一遍 CI，是一个显式动作。
+#
+# 1.96.0 是验证过能编译本仓库的版本（`cargo check -p oneasr` 0 警告，
+# `cargo test -p oneasr-core -p oneasr` 全绿）。
+[toolchain]
+channel = "1.96.0"
+# fmt / clippy 是 CI 的门禁，必须随工具链一起装，否则本地跑不出 CI 的结果。
+components = ["rustfmt", "clippy"]

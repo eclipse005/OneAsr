@@ -9,6 +9,18 @@
 *.sh text eol=lf
 *.command text eol=lf
 *.yml text eol=lf
+# CI / 打包脚本按行解析这两个文件，行尾必须是 LF：Windows 检出若写成 CRLF，
+# `awk '$2 == asset'` 会拿到带 \r 的字段而永远匹配不上。
+# （Cargo.toml 等交给 cargo 解析的 toml 不在此列，无需额外约定。）
+rust-toolchain.toml text eol=lf
+scripts/ffmpeg-checksums.txt text eol=lf
+
+# pack-release.ps1 必须带 UTF-8 BOM。Windows PowerShell 5.1（本地开发最常用的那个，
+# AGENTS.md 里的 `./scripts/pack-release.ps1` 就是它）在没有 BOM 时按系统 ANSI 代码页
+# 读文件：中文注释只是变乱码，但中文**字符串**会被误解码，偶尔还会凭空多出一个引号
+# 让整个脚本解析失败。release.yml 用的是 pwsh（默认 UTF-8），所以这个坑只在本地显形。
+# 加 BOM 对两个版本都安全，不要去掉。
+scripts/pack-release.ps1 text eol=crlf
 
 # macOS 磁盘映像里的说明文件：原样交给用户，固定 LF。
 installer/macos/* text eol=lf

@@ -5,8 +5,11 @@
 ;   iscc /DMyAppVersion=0.1.0 installer\OneAsr.iss
 
 #define MyAppName "OneAsr"
+; 版本号只有一个出处：根 Cargo.toml 的 [workspace.package] version。
+; 打包脚本读它，再用 /DMyAppVersion=<ver> 传进来。这里不再给默认值 ——
+; 以前缺参数会静默按 0.1.0 打包，产物名与仓库版本对不上却照样成功。
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #error MyAppVersion is not defined. Build through scripts/pack-release.ps1 (it reads Cargo.toml), or pass /DMyAppVersion=<version> to ISCC explicitly.
 #endif
 #define MyAppPublisher "OneAsr"
 #define MyAppExeName "oneasr.exe"

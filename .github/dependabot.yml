@@ -1,0 +1,40 @@
+# 依赖与 action 的自动升级策略。
+#
+# 为什么要有它：本项目把版本钉得很死（Cargo.lock 入库、git 依赖写 rev、
+# action 钉 commit SHA）。钉死之后必须有机制主动告知「上游发了新版 / 修了漏洞」，
+# 否则钉版就退化成「永远不更新」。Dependabot 就是那个机制。
+#
+# 依赖漏洞另有一道闸：CI 的 supply-chain job 跑 cargo-deny advisories。
+#
+# 只配根目录一条 cargo 条目：这是 Cargo workspace，Dependabot 会顺着
+# [workspace] members 覆盖 crates/oneasr-core 与 crates/oneasr；
+# 再为子 crate 单独配一条只会产出重复 PR。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # 次版本与补丁级更新合并成一个 PR；破坏性升级单独出 PR，逐个核对。
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      # workflow 里的 action 钉的是 commit SHA（旁边有 `# vX.Y.Z` 注释），
+      # Dependabot 会按注释把 SHA 一起更新。
+      actions:
+        patterns: ["*"]

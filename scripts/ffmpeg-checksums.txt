@@ -1,0 +1,45 @@
+# 随产物分发的 ffmpeg——来源声明 + 供应链哈希清单。
+#
+# 本文件是 ffmpeg 来源的**唯一出处**：两个打包脚本与 CI 的校验脚本都从这里读
+# base-url 与哈希，换 ffmpeg 只改这一个文件（以前 URL 抄在三处，改一处必漏一处）。
+#
+# base-url https://github.com/Tyrrrz/FFmpegBin/releases/download/7.1.2
+#
+# 来源是上游 `Tyrrrz/FFmpegBin` 的**版本化 tag**（tag 名 = ffmpeg 版本号），不是
+# 本仓库的 release：我们不自己托管 ffmpeg，打包时直接下上游归档、解压出需要的
+# 那枚可执行文件。这样"我们自己仓库里那个可以被重传的 `tools` release"从此不再
+# 参与构建，供应链少一个自建环节。
+#
+# 上游不用自己发 release 的原因：FFmpeg 官方只发布源码，预编译二进制都由第三方
+# 提供，FFmpegBin 是其中被广泛使用的一家。固定它的**版本化 tag**（而不是 latest）
+# 是为了让历史版本可以原样重新打包——浮动 tag 会被删掉重建。
+#
+# 为什么固定 tag 之外还要钉哈希：GitHub 的 release 资产默认仍可被重新上传
+# （`immutable` 当前为 false），所以真正的信任锚点是**内容**而不是 URL。
+# 两个打包脚本在把 ffmpeg 写进产物之前强制校验这里的哈希，资产一旦被替换，
+# 构建直接中止，而不是悄悄把别人的二进制发给用户；`scripts/verify-ffmpeg-manifest.py`
+# 再在 CI 里比对 GitHub API 的 `digest`，不一致就报错。
+#
+# 这里钉的是**归档**（zip）的哈希，不是里面 ffmpeg 的哈希——同一份归档字节必然
+# 解出同一枚 ffmpeg，钉归档已经足够，且哈希能直接从 GitHub API 的 `digest` 取到，
+# 不需要另外维护一份"解出来是什么"的数字。钉归档还顺带解决两个问题：产物里只会
+# 有需要的 ffmpeg（不会混进 ffplay/ffprobe），以及本地能缓存归档、重复打包不用重下。
+#
+# 换 ffmpeg 版本的做法：改上面这行 base-url 里的 tag，再跑
+# `python3 scripts/verify-ffmpeg-manifest.py --print-manifest` 重写下面的哈希。
+#
+# ffmpeg 版本：7.1.2（静态构建，随产物分发）
+# 哈希取自 GitHub API（repos/Tyrrrz/FFmpegBin/releases/tags/7.1.2 → assets[].digest），
+# 2026-09-27 核对。
+#
+# 已知待办：这批构建的 configure 行带 `--enable-nonfree`，而 FFmpeg 官方 LICENSE.md
+# 写明带该参数编出的产物不可再分发。换 LGPL 构建只动这一个文件（base-url + 哈希），
+# 不需要改打包脚本。
+#
+# 格式与 `sha256sum` 兼容：<sha256>  <资产名>（两个空格）；`#` 起头为注释，
+# 其中 `# base-url <URL>` 是**机器可读**的来源声明（不带冒号，方便 awk/sed 取第 3 列）。
+4b2925fb9ca729002f6fa67a320e4e462e63bd01034504863ebc7e572688b855  ffmpeg-windows-x64.zip
+be36c8afd5d60e5765f4582f513fda4f0d2e5081661d50002a9fa4506e2dbd47  ffmpeg-linux-x64.zip
+fd02fde00b3b07e2c60ae0a8fdab852ccfb67402c2c96227a131a5e6315f1e85  ffmpeg-linux-arm64.zip
+d9a2b27a5130c02958c6e0c027aa30fe63867eb3e4fbb0be117b0d90da213be0  ffmpeg-osx-x64.zip
+23e59259e4825bebd58547dc740fa01c61dc9f2ab10b8970530151a460f9dc92  ffmpeg-osx-arm64.zip

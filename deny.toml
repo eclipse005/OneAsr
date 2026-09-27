@@ -1,0 +1,76 @@
+# cargo-deny 配置 —— 依赖安全与来源治理。
+#
+# 为什么选 cargo-deny 而不是 cargo-audit：
+#   cargo-audit 只做「已知漏洞」一件事；本项目真正的供应链风险面更大 ——
+#   产物里含 6 个 GitHub git 依赖（5 个直接声明：qwen3-asr-wgpu /
+#   qwen3-aligner-wgpu / fireredvad / demucs-core / punkt，外加传递依赖
+#   nagisa-rs）。cargo-deny 能把「git 依赖只能来自这份显式清单、而且必须带
+#   tag/rev 说明符」写成硬规则，[advisories] 同时覆盖漏洞。
+#   一个工具、一份配置、一条命令，比两个工具更好维护。
+#
+# 运行（本地与 CI 同一条命令）：
+#   cargo deny check advisories sources
+#
+# 目前只开 advisories 与 sources 两项，都是「有事实依据就能判定」的检查。
+# 暂不启用 [licenses] / [bans]：它们一开就会大面积报出与本次治理无关的历史债
+# （许可证组合、重复版本），先把真正要守的两条守住；将来要收紧许可证或去重时
+# 再按需打开，并当次把报出来的问题一并处理掉。
+
+[graph]
+# 只按仓库实际交付的目标评估依赖图，避免把只在其他平台出现的可选依赖算进风险面。
+targets = [
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-apple-darwin" },
+]
+
+[advisories]
+version = 2
+# 被 yank 的版本继续用下去会把别人踩过的坑留在产物里；Cargo.lock 是入库的，
+# 出现 yanked 就说明锁文件该更新了，直接失败。
+yanked = "deny"
+# unmaintained = "workspace"：只把「本仓库直接依赖」里的停维护 crate 当错误。
+#
+# 为什么不是默认的 "all"：2026-09-27 实测 `cargo deny check advisories` 在
+# 全量模式下报出 6 个**传递**依赖的「已停维护」通告，作者全都改不动 ——
+# 一个都修不了的门禁等于没有门禁，只会被无视：
+#   RUSTSEC-2025-0052 async-std（已停止开发）
+#   RUSTSEC-2024-0436 paste
+#   RUSTSEC-2026-0173 proc-macro-error2
+#   RUSTSEC-2025-0134 rustls-pemfile
+#   RUSTSEC-2026-0206 rustybuzz      ← usvg → gpui
+#   RUSTSEC-2026-0192 ttf-parser     ← usvg → fontdb → gpui（上游无安全升级路径）
+# 这 6 个都是「停维护」通告，**没有一个是真正的漏洞**（RustSec 里带
+# vulnerability 的通告仍然是硬错误，无法被本配置降级）。
+# 想连传递依赖一起看时，本地跑：
+#   cargo deny check advisories --config 'advisories.unmaintained="all"'
+# 摘掉这个限制的条件：gpui/usvg 换掉 ttf-parser + rustybuzz 之后。
+unmaintained = "workspace"
+# 空列表是刻意的：不靠 ignore 屏蔽具体通告，让真正的漏洞如实暴露在 CI 上。
+ignore = []
+
+[sources]
+# 依赖只允许来自 crates.io（默认）与 allow-git 里逐个列出的仓库。
+unknown-registry = "deny"
+unknown-git = "deny"
+# allow-git 是「精确 URL」匹配，不支持通配符（docs：the url must match exactly），
+# 所以下面逐个列出，.git 后缀按 cargo 的归一化省掉。
+# 代价是新增一个 git 依赖必须同时改这里 —— 这正是想要的：来路不明的 fork
+# 会在 CI 被拦下，而不是静静进入产物。
+allow-git = [
+    "https://github.com/eclipse005/FireRedVad",
+    "https://github.com/eclipse005/demucs-wgpu",
+    # 传递依赖：qwen3-aligner-wgpu 自己拉了 nagisa-rs，不是本仓库直接声明的，
+    # 但同样会被打进产物，所以一样要在清单里（这条就是 check sources 逼出来的）。
+    "https://github.com/eclipse005/nagisa-rs",
+    "https://github.com/eclipse005/qwen3-aligner-wgpu",
+    "https://github.com/eclipse005/qwen3-asr-wgpu",
+    "https://github.com/eclipse005/rust-punkt",
+]
+# 必须带 tag 或 rev：不写说明符的 git 依赖会跟踪默认分支最新提交，
+# 同一份源码能构建出不同产物。用 rev 也可以（更具体），tag 是允许的底线。
+required-git-spec = "tag"
+# 清单里列了却没被任何 crate 用到的 URL 直接报错：既防呆（写错 URL 或
+# 匹配不到的写法会立刻暴露），也防止删掉依赖后清单烂在那里。
+unused-allowed-source = "deny"
