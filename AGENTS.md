@@ -40,6 +40,16 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR + For
 - 提交正文写清"为什么"和用户能感知的影响，不写"优化代码"这类空话
 - 注释与文档用中文，术语跟 README 保持一致；`.rs` 在仓库里是 CRLF（Windows 检出）
 - 新增行为要带单测，`crates/oneasr-core/src/settings.rs`、`crates/oneasr/src/app/rows.rs` 有现成的纯函数单测可参照
+- **单测必须跨平台**（CI 只在 ubuntu 上跑，本地是 Windows，两边不一致时以 CI 为准）：
+  - 路径一律用 `join` 构造，**不许写死 `r"D:\..."` 当期望值**。`Path::join` 在 Linux
+    用的是 `/`，写死字面量的话断言比的是分隔符、不是被测的规则
+  - 喂给 `file_name()` / `parent()` / `ends_with()` 的路径必须用 `join` 构造：`r"D:\m\x"`
+    在 Linux 上整体被当成文件名，解析必然失败
+  - 断言平台串要**大小写不敏感**：`consts::OS` 是小写 `linux`，而 UA 里是 `X11; Linux x86_64`
+  - 不要断言本机环境（仓库里有没有 `bin/ffmpeg`、`models/` 在不在）。要测就把逻辑抽成
+    吃参数的纯函数、用临时目录树测；`#[ignore]` 比静默 early-return 好——
+    读不到文件就 return 的测试在 CI 上是**假绿**
+  - 改完只在 Windows 上跑过不算数，`git push` 后看 CI 结果
 - **界面文案必须双语**：新增用户可见文案一律成对写入双语表——GUI 标签进
   `crates/oneasr/src/i18n.rs` 的 `L` 表（`t(L::X)`），管线自产消息用
   `crates/oneasr-core/src/i18n.rs` 的助手；**不许硬编码单语字符串**。
@@ -51,9 +61,9 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR + For
 
 ## 发布流程
 
-主分支是 `master`，也是 GitHub 上的默认分支（历史上曾用 `wgpu` 作为主分支名，
-两条线从未分叉，`master` 已快进到与它相同的提交，旧名可以删掉）。
-直接提交到 `master`，不走过 PR 流程。
+主分支只有 `master` 一个，也是 GitHub 上的默认分支，直接提交，不走过 PR 流程。
+（历史上曾用 `wgpu` 作默认分支，两条线从未分叉，已快进合并并删除；
+远端与本地都只剩 `master`，CI 的 `on.push.branches` 也已改成 `[master]`。）
 
 版本号只有一个出处：`Cargo.toml` 的 `[workspace.package] version`（应用标题栏与日志都读它）。
 打包脚本不再接收、也不再写回版本号；tag 与两份 README 必须跟它一致，CI 负责断言。
