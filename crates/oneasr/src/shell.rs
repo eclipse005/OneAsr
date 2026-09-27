@@ -67,6 +67,10 @@ fn file_not_found(path: &str) -> String {
     }
 }
 
+// 唯一调用点在 `open_containing_folder` 的 `#[cfg(windows)]` 分支里。
+// 定义也必须带同样的门控：否则在 Linux / macOS 上编译时这个函数无人调用，
+// `cargo clippy -- -D warnings` 会以 dead-code 报错（CI 首次实跑就抓到了这个）。
+#[cfg(windows)]
 fn explorer_failed(e: &std::io::Error) -> String {
     match ui_lang() {
         UiLang::Zh => format!("无法打开资源管理器: {e}"),
