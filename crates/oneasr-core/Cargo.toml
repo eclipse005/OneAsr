@@ -14,7 +14,7 @@ thiserror = { workspace = true }
 rayon = "1.10"
 jieba-rs = "0.10"
 hound = "3.5"
-sha2 = "0.10"
+sha2 = "0.11"
 # Simplified ⇄ Traditional conversion for Chinese output (pure Rust, Apache-2.0,
 # dictionaries compiled into the binary at build time — no runtime files).
 ferrous-opencc = "0.4"
