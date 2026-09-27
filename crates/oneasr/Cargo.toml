@@ -15,7 +15,7 @@ path = "src/main.rs"
 oneasr-core = { workspace = true }
 gpui = "0.2.2"
 anyhow = { workspace = true }
-rfd = "0.15"
+rfd = "0.17"
 # Cross-platform native audio output; WAV assets stay embedded in the binary.
 rodio = { version = "0.22.2", default-features = false, features = ["playback", "hound"] }
 
