@@ -10,10 +10,10 @@
 name: CI
 
 on:
-  # 主分支是 wgpu，而且不走过 PR 直接提交 —— push 检查才是真正拦住坏代码的门。
+  # 主分支是 master，而且不走过 PR 直接提交 —— push 检查才是真正拦住坏代码的门。
   # PR 检查同样保留：Dependabot 的依赖升级都是以 PR 形式进来的。
   push:
-    branches: [wgpu]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 

@@ -51,8 +51,9 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR + For
 
 ## 发布流程
 
-主分支是 `wgpu`（GitHub 上的默认分支；本地 `origin/HEAD` 可能陈旧地指向 `master`，别被它带偏）。
-直接提交到 `wgpu`，不走过 PR 流程。
+主分支是 `master`，也是 GitHub 上的默认分支（历史上曾用 `wgpu` 作为主分支名，
+两条线从未分叉，`master` 已快进到与它相同的提交，旧名可以删掉）。
+直接提交到 `master`，不走过 PR 流程。
 
 版本号只有一个出处：`Cargo.toml` 的 `[workspace.package] version`（应用标题栏与日志都读它）。
 打包脚本不再接收、也不再写回版本号；tag 与两份 README 必须跟它一致，CI 负责断言。
@@ -64,13 +65,13 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR + For
 4. 本地自检全绿再推：`cargo fmt --all --check`、
    `cargo clippy --locked -p oneasr --all-targets -- -D warnings`、
    `cargo test --locked -p oneasr-core -p oneasr`、`python3 scripts/verify-version.py --tag v<版本>`
-5. `git commit` → `git push origin wgpu` → `git tag v<版本>` → `git push origin v<版本>`
+5. `git commit` → `git push origin master` → `git tag v<版本>` → `git push origin v<版本>`
 6. tag 触发 `.github/workflows/release.yml`：三平台打包 + 自动建 release 并挂上全部产物
    （打包前先跑同一个 `verify-version.py --tag`，tag 与 `Cargo.toml` 不一致就直接失败）
 7. 验证：`gh release view v<版本>`，确认 5 个产物都在、说明正文正确
 
 注意：`workflow_dispatch` 只出 artifact、**不建 release**；只有推 tag 才会发布。
-CI 只在 `push: wgpu` 与 PR 上跑，直接提交到 `wgpu` 同样会拿到门禁结果。
+CI 只在 `push: master` 与 PR 上跑，直接提交到 `master` 同样会拿到门禁结果。
 
 ### 发布说明要写成什么形式
 
