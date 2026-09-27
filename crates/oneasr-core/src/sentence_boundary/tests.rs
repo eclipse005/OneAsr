@@ -1511,13 +1511,20 @@ fn overlong_split_survives_fragment_absorption() {
     }
 }
 
+// 手动回放工具，不是门禁：需要一份真实的 asr dump 才能跑。
+//
+// 标 #[ignore] 是有意的。之前这里兜底了一个写死的本机 %TEMP% 路径，
+// 读不到就 early-return——在 CI 上等于一个断言都没跑却报 "ok"。
+// 静默空测试比红测试更坏：它让人以为回放路径验过了。
+// 现在它在 test 结果里显示为 ignored，要跑就显式带上环境变量：
+//   VOXTRANS_REPLAY_ASR_JSON=<dump.json> cargo test -p oneasr-core -- --ignored
 #[test]
+#[ignore = "手动回放：需设置 VOXTRANS_REPLAY_ASR_JSON 指向一份 asr dump"]
 fn replay_saved_asr_applies_digit_glue_and_blocks_open_genitive() {
-    let path = std::env::var("VOXTRANS_REPLAY_ASR_JSON")
-        .unwrap_or_else(|_| r"C:\Users\ADMIN\AppData\Local\Temp\vt_asr_mfkge5.json".to_string());
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return;
+    let Ok(path) = std::env::var("VOXTRANS_REPLAY_ASR_JSON") else {
+        panic!("设置 VOXTRANS_REPLAY_ASR_JSON 指向一份 asr dump（运行时加 -- --ignored）");
     };
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不了 {path}: {e}"));
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct AsrDump {

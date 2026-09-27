@@ -512,9 +512,9 @@ mod tests {
             Some(ModelId::Qwen3Asr06BInt8)
         );
         assert_eq!(
-            ModelId::try_from_aligner_dir(std::path::Path::new(
-                r"C:\m\Qwen3-ForcedAligner-0.6B-hf"
-            )),
+            ModelId::try_from_aligner_dir(
+                &std::path::Path::new("m").join("Qwen3-ForcedAligner-0.6B-hf")
+            ),
             Some(ModelId::QwenAlign06B)
         );
     }
