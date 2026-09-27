@@ -1,7 +1,13 @@
 # 随产物分发的 ffmpeg——来源声明 + 供应链哈希清单。
 #
 # 本文件是 ffmpeg 来源的**唯一出处**：两个打包脚本与 CI 的校验脚本都从这里读
-# base-url 与哈希，换 ffmpeg 只改这一个文件（以前 URL 抄在三处，改一处必漏一处）。
+# 来源 URL 与哈希。换 ffmpeg 只改下面那条 base-url 与这些哈希两处。
+#
+# 注意：base-url 那一行必须独占一行、后面不能再跟任何文字。
+# 打包脚本过去用 `awk '$1=="#" && $2=="base-url" {print $3}'` 取值，会把
+# 任何以「# base-url …」开头的**说明文字**也当成指令，于是把散文当成了 URL，
+# 表现为 `curl: (3) URL using bad/illegal format`。现在两个脚本都要求整行
+# 匹配 `# base-url <https://…>`，多一个字符就报错而不是悄悄取错。
 #
 # base-url https://github.com/Tyrrrz/FFmpegBin/releases/download/7.1.2
 #

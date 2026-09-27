@@ -57,14 +57,29 @@ function Get-WorkspaceVersion {
 }
 
 # ffmpeg 的来源 URL 只声明在清单文件里（`# base-url <URL>` 一行），本脚本不再抄一份。
+#
+# 整行必须严格是 `# base-url <https://…>`，后面多一个字符都不接受。
+# 清单里任何以「# base-url …」开头的说明文字都会被误当成指令，把散文当 URL。
+# （unix 那边真的踩过：报成 `curl: (3) URL using bad/illegal format`。）
+# 这里额外检查「同一行有多余内容」并直接指出，而不是静默取到错误值。
 function Get-FfmpegBase {
   $manifest = Join-Path $Root "scripts\ffmpeg-checksums.txt"
   if (-not (Test-Path -LiteralPath $manifest)) {
     throw "Checksum manifest missing: $manifest"
   }
   $entry = Select-String -Path $manifest -Pattern '^\s*#\s*base-url\s+(\S+)\s*$' | Select-Object -First 1
-  if (-not $entry) { throw "No '# base-url <URL>' line in $manifest" }
-  return $entry.Matches[0].Groups[1].Value
+  if (-not $entry) { throw "No '# base-url <URL>' line (alone on its line) in $manifest" }
+
+  $bad = Select-String -Path $manifest -Pattern '^\s*#\s*base-url\s+\S+\s+\S+' | Select-Object -First 1
+  if ($bad) {
+    throw "Malformed '# base-url' line at $($bad.LineNumber) in $manifest (must be exactly: '# base-url <URL>')"
+  }
+
+  $url = $entry.Matches[0].Groups[1].Value
+  if ($url -notmatch '^https://') {
+    throw "base-url must be an https:// URL, got '$url' in $manifest"
+  }
+  return $url
 }
 
 # 校验某个文件与 scripts/ffmpeg-checksums.txt 里该归档钉的 sha256 是否一致。

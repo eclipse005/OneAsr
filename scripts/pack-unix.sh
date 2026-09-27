@@ -47,13 +47,23 @@ CHECKSUM_FILE="$ROOT/scripts/ffmpeg-checksums.txt"
 
 # ffmpeg 的来源 URL 只声明在清单文件里（`# base-url <URL>` 一行），
 # 打包脚本不再各抄一份 —— 换 tag 时只改清单，不会漏掉某一处。
+#
+# 整行必须严格是 `# base-url <https://…>`，后面多一个字符都不接受。
+# 之前用 `$1=="#" && $2=="base-url" {print $3}`，结果清单里任何以
+# 「# base-url …」开头的说明文字都会被当成指令，把散文当 URL 喂给 curl，
+# 报成 `curl: (3) URL using bad/illegal format` —— 报错点离原因十万八千里。
 ffmpeg_base() {
   local url
-  url="$(awk '$1 == "#" && $2 == "base-url" { print $3; exit }' "$CHECKSUM_FILE")"
-  [[ -n "$url" ]] || {
-    echo "no '# base-url <URL>' line in $CHECKSUM_FILE" >&2
-    exit 1
-  }
+  url="$(sed -n 's/^# base-url \(https:\/\/[^ 	]*\)$/\1/p' "$CHECKSUM_FILE" | head -n 1)"
+  if [[ -z "$url" ]]; then
+    echo "no '# base-url <https://...>' line (alone on its line) in $CHECKSUM_FILE" >&2
+    return 1
+  fi
+  # 同一行若有多余内容，明确告诉维护者，而不是让它静默取到错误值
+  if grep -qE '^# base-url .+ .+' "$CHECKSUM_FILE"; then
+    echo "malformed '# base-url' line in $CHECKSUM_FILE (must be exactly: '# base-url <URL>')" >&2
+    return 1
+  fi
   printf '%s' "$url"
 }
 
