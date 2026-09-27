@@ -88,15 +88,15 @@ impl OneAsrApp {
         let timing_visible = self.timing_popover_visible();
         let timing_progress = self.timing_popover_progress();
 
-            // Row-invariant state, captured once for the whole repaint.
-            let row_ctx = RowCtx {
-                hover_id,
-                lang_menu,
-                active_stage,
-                timing_popover,
-                timing_visible,
-                timing_progress,
-            };
+        // Row-invariant state, captured once for the whole repaint.
+        let row_ctx = RowCtx {
+            hover_id,
+            lang_menu,
+            active_stage,
+            timing_popover,
+            timing_visible,
+            timing_progress,
+        };
 
         div()
             .id("task-list")
@@ -106,9 +106,12 @@ impl OneAsrApp {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(items.into_iter().enumerate().map(move |(ix, row)| {
-                task_row_view(ix, &row, &row_ctx, cx)
-            }))
+            .children(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(ix, row)| task_row_view(ix, &row, &row_ctx, cx)),
+            )
             .into_any_element()
     }
 }

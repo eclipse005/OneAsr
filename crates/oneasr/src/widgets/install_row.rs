@@ -7,9 +7,7 @@
 //! - 已安装：重新下载（未闭环圆圈箭头）
 //! - 下载中：停止图标，点击取消
 
-use gpui::{
-    div, prelude::*, px, relative, svg, App, ClickEvent, SharedString, Window,
-};
+use gpui::{App, ClickEvent, SharedString, Window, div, prelude::*, px, relative, svg};
 use oneasr_core::DownloadProgress;
 
 use super::button::NameTooltip;
@@ -151,9 +149,7 @@ fn download_button(
         .border_color(crate::theme::LINE)
         .cursor_pointer()
         .group(hover_group.clone())
-        .tooltip(move |_, cx| {
-            cx.new(|_| NameTooltip { text: tip.clone() }).into()
-        })
+        .tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into())
         .hover(|s| {
             if row.busy {
                 s.bg(crate::theme::DANGER_SOFT)

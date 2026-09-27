@@ -36,9 +36,9 @@ use preset::subtitle_length_preset_from_id;
 use semantic::{build_split_points_from_hard_boundaries, split_points_to_spans};
 use subtitle_layout::build_subtitle_layout_split_points;
 use types::SourceSentenceStep2;
-use util::{from_core_words, to_core_words};
 #[cfg(test)]
 use util::join_words;
+use util::{from_core_words, to_core_words};
 use watchability_merge::merge_watchability_spans;
 
 pub use assembly::{source_sentences_to_srt, source_sentences_to_txt};
@@ -62,9 +62,10 @@ pub fn build_source_sentences_from_words(
         return Err("words is empty".to_string());
     }
 
-    let normalized_words = digit_glue::unglue_fused_ja_copula(digit_glue::glue_asr_split_digits(
-        from_core_words(beautify_words_for_subtitle(to_core_words(request.words.clone()))),
-    ));
+    let normalized_words =
+        digit_glue::unglue_fused_ja_copula(digit_glue::glue_asr_split_digits(from_core_words(
+            beautify_words_for_subtitle(to_core_words(request.words.clone())),
+        )));
     if normalized_words.is_empty() {
         return Err("words is empty".to_string());
     }
@@ -78,8 +79,7 @@ pub fn build_source_sentences_from_words(
         return Err("failed to build micro chunks".to_string());
     }
 
-    let hard_split_points =
-        build_split_points_from_hard_boundaries(&normalized_words, &*profile);
+    let hard_split_points = build_split_points_from_hard_boundaries(&normalized_words, &*profile);
     let semantic_spans = split_points_to_spans(normalized_words.len(), &hard_split_points);
     let split_points = merge_split_points(
         hard_split_points,

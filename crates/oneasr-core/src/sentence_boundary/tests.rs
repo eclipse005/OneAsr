@@ -1,10 +1,8 @@
 //! Sentence-boundary tests: the corpus of transcript shapes the pipeline has to
 //! survive.
 
-use super::{
-    BoundaryDecisionKind, build_micro_chunks, build_source_sentences_from_words,
-};
 use super::WordTokenDto;
+use super::{BoundaryDecisionKind, build_micro_chunks, build_source_sentences_from_words};
 use crate::subtitle::text_rules::ends_with_terminal_punctuation;
 
 /// Deterministic spans for the span-shape tests: semantic pre-split only, with
@@ -300,15 +298,18 @@ fn japanese_particle_guides_force_cuts() {
     for (index, _) in &dp_cuts {
         let last = tokens[*index].chars().last().unwrap_or_default();
         assert!(
-            matches!(last, 'は' | 'が' | 'を' | 'に' | 'の' | 'と' | 'で' | 'も' | 'へ' | 'や'),
+            matches!(
+                last,
+                'は' | 'が' | 'を' | 'に' | 'の' | 'と' | 'で' | 'も' | 'へ' | 'や'
+            ),
             "DP cut after {:?} is not a phrase-close particle",
             tokens[*index]
         );
     }
 
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "short"))
-    .expect("step2 should build japanese sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "short"))
+            .expect("step2 should build japanese sentences");
 
     // A 3-char first piece ("それは") is an orphan flash line; source-side
     // watchability may glue it back. Final cues must stay within the cap.
@@ -361,9 +362,9 @@ fn japanese_open_genitive_stays_with_head_noun() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "short"))
-    .expect("step2 should build japanese sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "short"))
+            .expect("step2 should build japanese sentences");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -419,9 +420,9 @@ fn japanese_does_not_start_cue_with_no() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -434,7 +435,10 @@ fn japanese_does_not_start_cue_with_no() {
         );
     }
     let joined = texts.join("");
-    assert!(joined.contains("Z世代の"), "の should stay with the left or the NP, got {texts:?}");
+    assert!(
+        joined.contains("Z世代の"),
+        "の should stay with the left or the NP, got {texts:?}"
+    );
 }
 
 #[test]
@@ -454,9 +458,9 @@ fn japanese_katakana_name_run_does_not_split() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "short"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "short"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -489,9 +493,9 @@ fn japanese_splits_after_desu_masu_instead_of_packing() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -502,7 +506,9 @@ fn japanese_splits_after_desu_masu_instead_of_packing() {
         "です/ます should split a spoken paragraph: {texts:?}"
     );
     assert!(
-        texts.iter().any(|t| t.ends_with("行きます") || t.ends_with("ます")),
+        texts
+            .iter()
+            .any(|t| t.ends_with("行きます") || t.ends_with("ます")),
         "a cue should end at ます: {texts:?}"
     );
     assert!(
@@ -515,16 +521,40 @@ fn japanese_splits_after_desu_masu_instead_of_packing() {
 fn japanese_watchability_does_not_reglue_desu_into_next_clause() {
     // Short です cue (orphan-sized) must not be glued onto the next sentence.
     let words = vec![
-        WordTokenDto { start: 0.0, end: 0.3, word: "私は".into() },
-        WordTokenDto { start: 0.3, end: 0.7, word: "学生です".into() },
-        WordTokenDto { start: 0.72, end: 1.1, word: "今日から".into() },
-        WordTokenDto { start: 1.1, end: 1.4, word: "新しい".into() },
-        WordTokenDto { start: 1.4, end: 1.8, word: "学校に".into() },
-        WordTokenDto { start: 1.8, end: 2.3, word: "通います".into() },
+        WordTokenDto {
+            start: 0.0,
+            end: 0.3,
+            word: "私は".into(),
+        },
+        WordTokenDto {
+            start: 0.3,
+            end: 0.7,
+            word: "学生です".into(),
+        },
+        WordTokenDto {
+            start: 0.72,
+            end: 1.1,
+            word: "今日から".into(),
+        },
+        WordTokenDto {
+            start: 1.1,
+            end: 1.4,
+            word: "新しい".into(),
+        },
+        WordTokenDto {
+            start: 1.4,
+            end: 1.8,
+            word: "学校に".into(),
+        },
+        WordTokenDto {
+            start: 1.8,
+            end: 2.3,
+            word: "通います".into(),
+        },
     ];
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -559,9 +589,9 @@ fn japanese_hou_ga_ii_stays_together() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -582,9 +612,9 @@ fn japanese_splits_before_minasan_even_when_short() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -604,9 +634,9 @@ fn japanese_does_not_pack_ano_after_masu() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -634,9 +664,9 @@ fn japanese_splits_before_minasan_turn() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -647,7 +677,9 @@ fn japanese_splits_before_minasan_turn() {
         "must split before 皆さん: {texts:?}"
     );
     assert!(
-        texts.iter().any(|t| t.starts_with("皆さん") || t.starts_with("こんにちは")),
+        texts
+            .iter()
+            .any(|t| t.starts_with("皆さん") || t.starts_with("こんにちは")),
         "address/greeting should start a cue: {texts:?}"
     );
 }
@@ -669,9 +701,9 @@ fn japanese_node_stays_on_the_previous_line() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -713,9 +745,9 @@ fn japanese_time_glue_does_not_hide_hai_turn() {
             word: (*t).to_string(),
         })
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -751,9 +783,9 @@ fn japanese_suru_compound_and_minasan_stay_together() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -789,16 +821,18 @@ fn japanese_masu_ha_i_is_hai_not_particle() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
         .map(|s| s.text.as_str())
         .collect();
     assert!(
-        texts.iter().any(|t| t.ends_with("ます") || t.ends_with("てます")),
+        texts
+            .iter()
+            .any(|t| t.ends_with("ます") || t.ends_with("てます")),
         "ます should close the clause: {texts:?}"
     );
     assert!(
@@ -825,9 +859,9 @@ fn japanese_split_mashita_closes_the_clause() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -838,7 +872,9 @@ fn japanese_split_mashita_closes_the_clause() {
         "ました must close before ラストコール: {texts:?}"
     );
     assert!(
-        texts.iter().any(|t| t.contains("始まりました") || t.ends_with("た")),
+        texts
+            .iter()
+            .any(|t| t.contains("始まりました") || t.ends_with("た")),
         "始まりました should stay one copula: {texts:?}"
     );
 }
@@ -862,9 +898,9 @@ fn japanese_desu_ka_stays_together() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -892,9 +928,9 @@ fn japanese_te_kudasai_stays_together() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let texts: Vec<&str> = response
         .translation_sentences
         .iter()
@@ -914,9 +950,9 @@ fn asr_split_digits_are_glued_before_layout() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "ja", "standard"))
-    .expect("step2");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("step2");
     let joined = response
         .translation_sentences
         .iter()
@@ -950,21 +986,25 @@ fn vad_pause_is_a_quality_cut_in_grace_band() {
     for wd in words.iter_mut() {
         wd.word = "word".to_string();
     }
-    let response = build_source_sentences_from_words(
-        request_with_vad(
-            words,
-            "en",
-            "short",
-            vec![(0.0, 6.4), (8.5, 14.4)],
-        ))
+    let response = build_source_sentences_from_words(request_with_vad(
+        words,
+        "en",
+        "short",
+        vec![(0.0, 6.4), (8.5, 14.4)],
+    ))
     .expect("step2 should build sentences");
 
     assert_eq!(
-        response.sentence_total,
-        2,
+        response.sentence_total, 2,
         "13-word grace span with a VAD pause should split at the pause"
     );
-    assert_eq!(response.translation_sentences[0].text.split_whitespace().count(), 7);
+    assert_eq!(
+        response.translation_sentences[0]
+            .text
+            .split_whitespace()
+            .count(),
+        7
+    );
 }
 
 /// Grace band without any good cut keeps the whole (slightly over) line —
@@ -982,9 +1022,9 @@ fn grace_band_keeps_whole_line_without_good_cut() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "en", "short"))
-    .expect("step2 should build sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "en", "short"))
+            .expect("step2 should build sentences");
 
     assert_eq!(response.sentence_total, 1);
 }
@@ -996,20 +1036,34 @@ fn force_cuts_never_dangle_function_words() {
     // 13 words within grace (14): quality mode; the connector "and" gives a
     // good cut before it; cutting after "to"/"the"/"market" must NOT occur.
     let tokens = [
-        "I", "want", "to", "go", "to", "the", "market", "and", "buy", "some", "fresh",
-        "vegetables", "today",
+        "I",
+        "want",
+        "to",
+        "go",
+        "to",
+        "the",
+        "market",
+        "and",
+        "buy",
+        "some",
+        "fresh",
+        "vegetables",
+        "today",
     ];
     let words = tokens
         .iter()
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "en", "short"))
-    .expect("step2 should build sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "en", "short"))
+            .expect("step2 should build sentences");
 
     assert_eq!(response.sentence_total, 2);
-    assert_eq!(response.translation_sentences[0].text, "I want to go to the market");
+    assert_eq!(
+        response.translation_sentences[0].text,
+        "I want to go to the market"
+    );
     assert_eq!(
         response.translation_sentences[1].text,
         "and buy some fresh vegetables today"
@@ -1017,8 +1071,10 @@ fn force_cuts_never_dangle_function_words() {
     for s in &response.translation_sentences {
         let last = s.text.split_whitespace().last().unwrap_or("");
         assert!(
-            !["I", "want", "to", "go", "the", "and", "buy", "some", "fresh"]
-                .contains(&last),
+            ![
+                "I", "want", "to", "go", "the", "and", "buy", "some", "fresh"
+            ]
+            .contains(&last),
             "cue ends with a function word: {:?}",
             s.text
         );
@@ -1029,9 +1085,8 @@ fn force_cuts_never_dangle_function_words() {
 fn step2_builds_same_response_shape_without_llm_settings() {
     let words = vec![w(0, "Hello"), w(1, "world."), w(2, "Again.")];
 
-    let response = build_source_sentences_from_words(
-        request(words))
-    .expect("step2 should not require llm settings");
+    let response = build_source_sentences_from_words(request(words))
+        .expect("step2 should not require llm settings");
 
     // "Again." is a 0.3s orphan tail after "Hello world."; source-side
     // watchability glues it so it does not flash on screen.
@@ -1092,9 +1147,8 @@ fn punctuation_still_closes_atom_when_available() {
 fn standalone_ascii_punctuation_keeps_following_space() {
     let words = vec![w(0, "Alright"), w(1, ","), w(2, "welcome.")];
 
-    let response = build_source_sentences_from_words(
-        request(words))
-    .expect("step2 should build sentence");
+    let response =
+        build_source_sentences_from_words(request(words)).expect("step2 should build sentence");
 
     assert_eq!(response.translation_sentences[0].text, "Alright, welcome.");
 }
@@ -1111,9 +1165,9 @@ fn local_subtitle_layout_splits_long_semantic_sentence_near_punctuation() {
         .map(|(index, token)| w(index, token))
         .collect::<Vec<_>>();
 
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "en", "short"))
-    .expect("step2 should build local subtitle layout");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "en", "short"))
+            .expect("step2 should build local subtitle layout");
 
     assert!(response.sentence_total >= 2, "expected multiple cues");
     let joined = response
@@ -1166,14 +1220,13 @@ fn short_sentence_with_vad_pause_stays_intact() {
         },
     ];
 
-    let response = build_source_sentences_from_words(
-        request_with_vad(
-            words,
-            "en",
-            "short",
-            // VAD detects a silence gap [0.5, 2.8] between "pause" and "after".
-            vec![(0.0, 0.5), (2.8, 3.3)],
-        ))
+    let response = build_source_sentences_from_words(request_with_vad(
+        words,
+        "en",
+        "short",
+        // VAD detects a silence gap [0.5, 2.8] between "pause" and "after".
+        vec![(0.0, 0.5), (2.8, 3.3)],
+    ))
     .expect("step2 should build one sentence");
 
     // Under budget → one sentence, not fragmented by the VAD pause.
@@ -1214,7 +1267,7 @@ fn vad_sustains_segmentation_when_punctuation_stripped() {
         .collect();
 
     let vad_segments = vec![
-        (0.0, 9.4),  // words 0-9
+        (0.0, 9.4),   // words 0-9
         (10.5, 21.9), // words 10-19
     ];
 
@@ -1231,8 +1284,7 @@ fn vad_sustains_segmentation_when_punctuation_stripped() {
     let semantic_spans = super::split_points_to_spans(words_stripped.len(), &splits_semantic);
 
     let en_profile = super::profile::profile_for_lang("en");
-    let short_preset =
-        super::preset::subtitle_length_preset_from_id("short");
+    let short_preset = super::preset::subtitle_length_preset_from_id("short");
 
     // DP with VAD: overlong span must be split, and the VAD silence gap
     // (cost 2.0) should be chosen over plain word boundaries (cost 6.0).
@@ -1275,18 +1327,33 @@ fn vad_sustains_segmentation_when_punctuation_stripped() {
 fn dp_does_not_isolate_leading_discourse_marker() {
     // "Now," + an 18-word body well past the "short" preset limit (12 words).
     let body = [
-        "the", "first", "step", "is", "basically", "determining", "your",
-        "directional", "bias", "and", "your", "drawn", "liquidity", "on",
-        "the", "daily", "time", "frame.",
+        "the",
+        "first",
+        "step",
+        "is",
+        "basically",
+        "determining",
+        "your",
+        "directional",
+        "bias",
+        "and",
+        "your",
+        "drawn",
+        "liquidity",
+        "on",
+        "the",
+        "daily",
+        "time",
+        "frame.",
     ];
     let mut words = vec![w(0, "Now,")];
     for (i, tok) in body.iter().enumerate() {
         words.push(w(i + 1, tok));
     }
 
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "en", "short"))
-    .expect("step2 should build sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "en", "short"))
+            .expect("step2 should build sentences");
 
     // No cue may read exactly "Now," — it must have been absorbed.
     assert!(
@@ -1304,9 +1371,7 @@ fn dp_does_not_isolate_leading_discourse_marker() {
     // And the first cue must still begin with "Now," (the marker survived, just
     // merged with the following body).
     assert!(
-        response.translation_sentences[0]
-            .text
-            .starts_with("Now,"),
+        response.translation_sentences[0].text.starts_with("Now,"),
         "marker text was lost during absorption: {:?}",
         response.translation_sentences[0].text
     );
@@ -1318,18 +1383,33 @@ fn dp_does_not_isolate_leading_discourse_marker() {
 #[test]
 fn dp_does_not_isolate_fullwidth_discourse_marker() {
     let body = [
-        "the", "first", "step", "is", "basically", "determining", "your",
-        "directional", "bias", "and", "your", "drawn", "liquidity", "on",
-        "the", "daily", "time", "frame.",
+        "the",
+        "first",
+        "step",
+        "is",
+        "basically",
+        "determining",
+        "your",
+        "directional",
+        "bias",
+        "and",
+        "your",
+        "drawn",
+        "liquidity",
+        "on",
+        "the",
+        "daily",
+        "time",
+        "frame.",
     ];
     let mut words = vec![w(0, "Now，")];
     for (i, tok) in body.iter().enumerate() {
         words.push(w(i + 1, tok));
     }
 
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "en", "short"))
-    .expect("step2 should build sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "en", "short"))
+            .expect("step2 should build sentences");
 
     assert!(
         !response
@@ -1357,8 +1437,22 @@ fn dp_absorbs_trailing_short_fragment() {
     // Body of ~14 words (over the short limit of 12) ending in a 1-word
     // trailing fragment that DP would otherwise leave dangling.
     let tokens = [
-        "this", "is", "a", "long", "unpunctuated", "run", "of", "words", "that",
-        "must", "be", "split", "into", "two", "parts", "now",
+        "this",
+        "is",
+        "a",
+        "long",
+        "unpunctuated",
+        "run",
+        "of",
+        "words",
+        "that",
+        "must",
+        "be",
+        "split",
+        "into",
+        "two",
+        "parts",
+        "now",
     ];
     let words = tokens
         .iter()
@@ -1366,9 +1460,9 @@ fn dp_absorbs_trailing_short_fragment() {
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
 
-    let response = build_source_sentences_from_words(
-        request_with_lang_and_preset(words, "en", "short"))
-    .expect("step2 should build sentences");
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "en", "short"))
+            .expect("step2 should build sentences");
 
     // No cue may be a single short word ("now") left dangling at the end.
     let last = response
@@ -1409,15 +1503,18 @@ fn overlong_split_survives_fragment_absorption() {
             s.text
         );
         assert!(wc <= 12, "cue over word cap: {:?}", s.text);
-        assert!(s.text.chars().count() <= 66, "cue over char cap: {:?}", s.text);
+        assert!(
+            s.text.chars().count() <= 66,
+            "cue over char cap: {:?}",
+            s.text
+        );
     }
 }
 
 #[test]
 fn replay_saved_asr_applies_digit_glue_and_blocks_open_genitive() {
-    let path = std::env::var("VOXTRANS_REPLAY_ASR_JSON").unwrap_or_else(|_| {
-        r"C:\Users\ADMIN\AppData\Local\Temp\vt_asr_mfkge5.json".to_string()
-    });
+    let path = std::env::var("VOXTRANS_REPLAY_ASR_JSON")
+        .unwrap_or_else(|_| r"C:\Users\ADMIN\AppData\Local\Temp\vt_asr_mfkge5.json".to_string());
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return;
     };
@@ -1432,15 +1529,14 @@ fn replay_saved_asr_applies_digit_glue_and_blocks_open_genitive() {
     if dump.words.is_empty() {
         return;
     }
-    let response = build_source_sentences_from_words(
-        super::SentenceBoundaryRequest {
-            task_id: "replay".to_string(),
-            media_path: "replay.mp4".to_string(),
-            source_lang: dump.source_lang.unwrap_or_else(|| "ja".to_string()),
-            subtitle_length_preset: "standard".to_string(),
-            words: dump.words,
-            vad_speech_segments: dump.vad_speech_segments,
-        })
+    let response = build_source_sentences_from_words(super::SentenceBoundaryRequest {
+        task_id: "replay".to_string(),
+        media_path: "replay.mp4".to_string(),
+        source_lang: dump.source_lang.unwrap_or_else(|| "ja".to_string()),
+        subtitle_length_preset: "standard".to_string(),
+        words: dump.words,
+        vad_speech_segments: dump.vad_speech_segments,
+    })
     .expect("replay step2");
     let texts: Vec<&str> = response
         .translation_sentences
@@ -1471,7 +1567,11 @@ fn replay_saved_asr_applies_digit_glue_and_blocks_open_genitive() {
                 head,
                 'は' | 'が' | 'を' | 'に' | 'で' | 'と' | 'も' | 'へ' | 'や'
             );
-            if !particle_start && (head.is_alphanumeric() || ('ぁ'..='ん').contains(&head) || ('ァ'..='ン').contains(&head) || ('一'..='龯').contains(&head))
+            if !particle_start
+                && (head.is_alphanumeric()
+                    || ('ぁ'..='ん').contains(&head)
+                    || ('ァ'..='ン').contains(&head)
+                    || ('一'..='龯').contains(&head))
             {
                 open_genitive_splits += 1;
                 if leftovers.len() < 6 {

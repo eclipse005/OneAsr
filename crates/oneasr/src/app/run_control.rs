@@ -26,10 +26,10 @@ impl OneAsrApp {
         if !self.batch_mode {
             return;
         }
-        let still =
-            self.tasks.iter().any(|t| {
-                matches!(t.status, TaskStatus::Queued | TaskStatus::Processing)
-            });
+        let still = self
+            .tasks
+            .iter()
+            .any(|t| matches!(t.status, TaskStatus::Queued | TaskStatus::Processing));
         if still {
             return;
         }
@@ -144,7 +144,12 @@ impl OneAsrApp {
 
     /// Start the oldest queued job if the worker slot is free.
     pub(crate) fn try_start_next(&mut self, cx: &mut Context<Self>) {
-        if self.busy || self.tasks.iter().any(|t| t.status == TaskStatus::Processing) {
+        if self.busy
+            || self
+                .tasks
+                .iter()
+                .any(|t| t.status == TaskStatus::Processing)
+        {
             return;
         }
         let next_id = next_queued_id(&self.tasks, &self.exiting);
@@ -216,10 +221,7 @@ impl OneAsrApp {
         } else {
             AsrStage::Converting
         };
-        self.active_stage = Some((
-            id.clone(),
-            SharedString::from(first_stage.label(ui_lang())),
-        ));
+        self.active_stage = Some((id.clone(), SharedString::from(first_stage.label(ui_lang()))));
 
         // Start context: failures log only `{id}` + message, so this entry is
         // what makes a pasted log self-sufficient (which file/model/backend).
@@ -245,7 +247,9 @@ impl OneAsrApp {
         {
             // The worker thread is gone (e.g. it panicked earlier) — every
             // further start click would otherwise look like a silent no-op.
-            crashlog::log_error(format!("asr worker channel closed — task {id} cannot start"));
+            crashlog::log_error(format!(
+                "asr worker channel closed — task {id} cannot start"
+            ));
             self.busy = false;
             self.active_stage = None;
             if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
@@ -302,9 +306,10 @@ impl OneAsrApp {
             self.flash_hint(t(L::LIST_EMPTY), cx);
             return;
         }
-        let had_proc = self.tasks.iter().any(|t| {
-            t.status == TaskStatus::Processing && !self.exiting.contains_key(&t.id)
-        });
+        let had_proc = self
+            .tasks
+            .iter()
+            .any(|t| t.status == TaskStatus::Processing && !self.exiting.contains_key(&t.id));
         self.play_ui(sfx::Sfx::Click);
         let now = Instant::now();
         for t in &self.tasks {
@@ -340,7 +345,10 @@ impl OneAsrApp {
         // OS explorer is the feedback; no in-app banner — but a dead click must
         // still leave a trace for "点开文件夹没反应" reports.
         if let Err(e) = shell::open_containing_folder(&path) {
-            crashlog::log_warn(format!("open output folder failed: {e}\n  file: {}", path.display()));
+            crashlog::log_warn(format!(
+                "open output folder failed: {e}\n  file: {}",
+                path.display()
+            ));
         }
         cx.notify();
     }

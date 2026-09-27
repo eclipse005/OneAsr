@@ -75,7 +75,17 @@ pub(crate) fn format_thousands(n: u64) -> String {
 pub(crate) fn is_video_format(fmt: &str) -> bool {
     matches!(
         fmt.to_ascii_lowercase().as_str(),
-        "mp4" | "mkv" | "mov" | "webm" | "avi" | "flv" | "ts" | "m4v" | "mpeg" | "mpg" | "wmv"
+        "mp4"
+            | "mkv"
+            | "mov"
+            | "webm"
+            | "avi"
+            | "flv"
+            | "ts"
+            | "m4v"
+            | "mpeg"
+            | "mpg"
+            | "wmv"
             | "3gp"
     )
 }
@@ -167,10 +177,5 @@ pub(crate) fn media_type_icon(is_video: bool, status: TaskStatus) -> impl IntoEl
         .flex()
         .items_center()
         .justify_center()
-        .child(
-            svg()
-                .size(px(18.))
-                .path(icon_path)
-                .text_color(ink),
-        )
+        .child(svg().size(px(18.)).path(icon_path).text_color(ink))
 }

@@ -10,8 +10,8 @@ use crate::subtitle::text_rules::{ends_with_terminal_punctuation, strip_trailing
 use super::boundary_rules::{is_ja_turn_start_after, is_japanese_spoken_end};
 use super::profile::LanguageProfile;
 use super::punkt_map::map_sentence_boundaries_to_word_indices;
-use super::util::join_words;
 use super::types::SplitReason;
+use super::util::join_words;
 
 /// Pre-split (hard boundaries): sentence-terminal punctuation (`. ! ? 。`).
 ///
@@ -146,12 +146,12 @@ fn is_terminal_end_rule_fallback(token: &str) -> bool {
 /// 这不是完整的缩写表，只是规则兜底里用来防止误切的高频缩写。
 /// Punkt 负责绝大多数缩写识别，这里只补 Punkt 训练数据覆盖不到的。
 const COMMON_ABBREVIATIONS: &[&str] = &[
-    "mr.", "mrs.", "ms.", "dr.", "prof.", "rev.", "hon.", "sr.", "jr.", "st.", "mt.", "no.",
-    "vs.", "etc.", "al.", "cf.", "fig.", "ed.", "vol.", "pp.", "dept.", "inc.", "ltd.", "co.",
-    "corp.", "bros.", "llc.", "jan.", "feb.", "mar.", "apr.", "jun.", "jul.", "aug.", "sep.",
-    "sept.", "oct.", "nov.", "dec.", "ave.", "blvd.", "rd.", "ln.", "ct.", "pl.", "pres.",
-    "gov.", "sen.", "rep.", "capt.", "cmdr.", "col.", "gen.", "lt.", "maj.", "sgt.", "adm.",
-    "univ.", "assn.", "assoc.", "esq.", "mx.", "fr.", "amb.",
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "rev.", "hon.", "sr.", "jr.", "st.", "mt.", "no.", "vs.",
+    "etc.", "al.", "cf.", "fig.", "ed.", "vol.", "pp.", "dept.", "inc.", "ltd.", "co.", "corp.",
+    "bros.", "llc.", "jan.", "feb.", "mar.", "apr.", "jun.", "jul.", "aug.", "sep.", "sept.",
+    "oct.", "nov.", "dec.", "ave.", "blvd.", "rd.", "ln.", "ct.", "pl.", "pres.", "gov.", "sen.",
+    "rep.", "capt.", "cmdr.", "col.", "gen.", "lt.", "maj.", "sgt.", "adm.", "univ.", "assn.",
+    "assoc.", "esq.", "mx.", "fr.", "amb.",
 ];
 
 fn is_common_abbreviation(lower: &str) -> bool {
@@ -170,9 +170,9 @@ fn is_dotted_abbreviation(lower: &str) -> bool {
     if parts.len() < 2 {
         return false;
     }
-    parts.iter().all(|p| {
-        !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_alphabetic())
-    })
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_alphabetic()))
 }
 
 /// 其他语言路径：规则 + 缩写表。

@@ -111,28 +111,33 @@ pub(super) fn is_closing_punctuation(c: char) -> bool {
 /// "that" — it is both a demonstrative and a complement introducer
 /// ("see that | the..." is a good cut).
 const FUNCTION_WORDS_LEFT: &[&str] = &[
-    "a", "an", "the", "this", "these", "those", "my", "your", "his", "her", "its",
-    "our", "their", "of", "to", "in", "on", "at", "for", "with", "by", "from",
-    "can", "could", "will", "would", "shall", "should", "may", "might", "must",
-    "do", "does", "did", "is", "are", "was", "were", "be", "been", "being", "am",
-    "have", "has", "had", "not", "and", "but", "or", "nor", "so", "as", "than",
-    "towards", "into", "onto", "above", "below", "under", "over", "through",
-    "across", "along", "around", "against", "between", "during", "within",
-    "without", "upon", "near", "behind", "beyond", "among", "inside", "outside",
-    "beside", "off", "via", "per",
+    "a", "an", "the", "this", "these", "those", "my", "your", "his", "her", "its", "our", "their",
+    "of", "to", "in", "on", "at", "for", "with", "by", "from", "can", "could", "will", "would",
+    "shall", "should", "may", "might", "must", "do", "does", "did", "is", "are", "was", "were",
+    "be", "been", "being", "am", "have", "has", "had", "not", "and", "but", "or", "nor", "so",
+    "as", "than", "towards", "into", "onto", "above", "below", "under", "over", "through",
+    "across", "along", "around", "against", "between", "during", "within", "without", "upon",
+    "near", "behind", "beyond", "among", "inside", "outside", "beside", "off", "via", "per",
 ];
 
 /// Chinese function words: cutting after these splits "在|教育", "把|门".
 const CJK_FUNCTION_WORDS_LEFT: &[&str] = &[
-    "和", "与", "及", "或", "在", "是", "把", "被", "将", "从",
-    "对", "向", "往", "于", "给", "让", "使", "还", "也", "都", "就", "又",
-    "而", "但", "会", "要", "能",
+    "和", "与", "及", "或", "在", "是", "把", "被", "将", "从", "对", "向", "往", "于", "给", "让",
+    "使", "还", "也", "都", "就", "又", "而", "但", "会", "要", "能",
 ];
 
 /// Japanese adnominal demonstratives: cutting after その|リオ is "the | price".
 const JA_DEMONSTRATIVES: &[&str] = &[
-    "この", "その", "あの", "どの", "こんな", "そんな", "あんな",
-    "こんなに", "そんなに", "あんなに",
+    "この",
+    "その",
+    "あの",
+    "どの",
+    "こんな",
+    "そんな",
+    "あんな",
+    "こんなに",
+    "そんなに",
+    "あんなに",
 ];
 
 /// Chinese phrase-closing particles: cutting AFTER these is a good cut
@@ -141,8 +146,27 @@ const CJK_PHRASE_CLOSE: &[&str] = &["的", "了", "着", "过", "吗", "呢", "�
 
 /// Japanese (and Korean) phrase-closing particles / postpositions.
 const JA_PHRASE_CLOSE: &[&str] = &[
-    "は", "が", "を", "に", "の", "と", "で", "も", "へ", "や", "より", "まで", "から",
-    "ので", "のに", "なので", "けど", "けれど", "けれども", "ですので", "ですから",
+    "は",
+    "が",
+    "を",
+    "に",
+    "の",
+    "と",
+    "で",
+    "も",
+    "へ",
+    "や",
+    "より",
+    "まで",
+    "から",
+    "ので",
+    "のに",
+    "なので",
+    "けど",
+    "けれど",
+    "けれども",
+    "ですので",
+    "ですから",
 ];
 const KO_PHRASE_CLOSE: &[&str] = &[
     "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "도", "로", "으로",
@@ -151,25 +175,71 @@ const KO_PHRASE_CLOSE: &[&str] = &[
 /// Discourse markers followed by a comma ("Okay," / "Now,"). Cutting after
 /// them isolates a flash line; the comma discount must not apply.
 const DISCOURSE_MARKERS: &[&str] = &[
-    "okay", "ok", "now", "so", "well", "right", "alright", "look", "listen",
-    "then", "hey", "oh", "uh", "um", "hmm",
+    "okay", "ok", "now", "so", "well", "right", "alright", "look", "listen", "then", "hey", "oh",
+    "uh", "um", "hmm",
 ];
 
 /// Words that bind a following "to" ("need to", "going to", "want to"):
 /// cutting after them destroys the modal structure.
 const TO_BINDING_LEFT: &[&str] = &[
-    "need", "needs", "needed", "want", "wants", "wanted", "going", "have", "has",
-    "had", "try", "tries", "trying", "tried", "able", "supposed", "expected",
-    "likely", "unlikely", "required", "meant", "forced", "bound", "about",
-    "prepared", "ready", "willing", "reluctant", "tend", "tends", "tended",
-    "plan", "plans", "planned", "hope", "hopes", "hoped",
+    "need",
+    "needs",
+    "needed",
+    "want",
+    "wants",
+    "wanted",
+    "going",
+    "have",
+    "has",
+    "had",
+    "try",
+    "tries",
+    "trying",
+    "tried",
+    "able",
+    "supposed",
+    "expected",
+    "likely",
+    "unlikely",
+    "required",
+    "meant",
+    "forced",
+    "bound",
+    "about",
+    "prepared",
+    "ready",
+    "willing",
+    "reluctant",
+    "tend",
+    "tends",
+    "tended",
+    "plan",
+    "plans",
+    "planned",
+    "hope",
+    "hopes",
+    "hoped",
 ];
 
 /// Chinese connectors that bind the previous character into a compound
 /// ("只因为", "并不是因为"): the connector is NOT a new clause start there.
 const CJK_CONNECTOR_BIND_LEFT: &[&str] = &[
-    "只", "正", "就", "是", "不", "并", "都", "也", "还", "又", "才", "却", "之",
-    "并不是", "不是", "只是",
+    "只",
+    "正",
+    "就",
+    "是",
+    "不",
+    "并",
+    "都",
+    "也",
+    "还",
+    "又",
+    "才",
+    "却",
+    "之",
+    "并不是",
+    "不是",
+    "只是",
 ];
 
 /// Japanese small kana / lengthening / glottal stops that must stay glued to
@@ -270,11 +340,44 @@ const JA_NOMINALIZER_TAILS: &[&str] = &["ので", "のに", "のだ", "のです
 
 /// Bound particles that must not start a cue (kinsoku / 禁则).
 const JA_LINE_START_PARTICLES: &[&str] = &[
-    "は", "が", "を", "に", "の", "と", "で", "も", "へ", "や", "て", "って",
-    "より", "まで", "から", "です", "ます", "だ", "た", "し",
-    "よ", "ね", "さ", "わ", "か", "よね", "かな", "かい", "かしら",
+    "は",
+    "が",
+    "を",
+    "に",
+    "の",
+    "と",
+    "で",
+    "も",
+    "へ",
+    "や",
+    "て",
+    "って",
+    "より",
+    "まで",
+    "から",
+    "です",
+    "ます",
+    "だ",
+    "た",
+    "し",
+    "よ",
+    "ね",
+    "さ",
+    "わ",
+    "か",
+    "よね",
+    "かな",
+    "かい",
+    "かしら",
     // Conjunctive particles belong on the previous clause, not a new cue.
-    "ので", "のに", "なので", "けど", "けれど", "けれども", "ですので", "ですから",
+    "ので",
+    "のに",
+    "なので",
+    "けど",
+    "けれど",
+    "けれども",
+    "ですので",
+    "ですから",
 ];
 const KO_LINE_START_PARTICLES: &[&str] = &[
     "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "도", "로", "으로",
@@ -305,8 +408,7 @@ pub(super) fn is_katakana_run_bind(left: &str, right: &str) -> bool {
 
 /// ASR often splits ました/でした/だった as まし|た.
 pub(super) fn is_split_copula_ta(prev: &str, left: &str) -> bool {
-    strip_token(left) == "た"
-        && matches!(strip_token(prev), "まし" | "でし" | "だっ")
+    strip_token(left) == "た" && matches!(strip_token(prev), "まし" | "でし" | "だっ")
 }
 
 /// ASR often splits はい as は + い/いじゃあ.
@@ -315,17 +417,21 @@ pub(super) fn is_split_hai(left: &str, right: &str) -> bool {
         return false;
     }
     let r = strip_token(right);
-    r == "い"
-        || r.starts_with("いじゃあ")
-        || r.starts_with("いえ")
-        || r == "いはい"
+    r == "い" || r.starts_with("いじゃあ") || r.starts_with("いえ") || r == "いはい"
 }
 
 /// 漢語+する (対する / 参加した).
 pub(super) fn is_suru_compound_bind(left: &str, right: &str) -> bool {
     let r = strip_ja_end_particles(strip_token(right));
     const SURU: &[&str] = &[
-        "する", "した", "して", "します", "できる", "させる", "される", "しよう",
+        "する",
+        "した",
+        "して",
+        "します",
+        "できる",
+        "させる",
+        "される",
+        "しよう",
     ];
     if !SURU.contains(&r) {
         return false;
@@ -336,8 +442,7 @@ pub(super) fn is_suru_compound_bind(left: &str, right: &str) -> bool {
 /// 皆さん / 木原さん / リサちゃん.
 pub(super) fn is_ja_name_suffix_bind(left: &str, right: &str) -> bool {
     let r = strip_token(right);
-    matches!(r, "さん" | "ちゃん" | "くん" | "様" | "さま" | "氏" | "君")
-        && ja_has_content(left)
+    matches!(r, "さん" | "ちゃん" | "くん" | "様" | "さま" | "氏" | "君") && ja_has_content(left)
 }
 
 /// て-form auxiliary (見てほしい / してください / している).
@@ -350,9 +455,24 @@ pub(super) fn is_te_auxiliary_bind(left: &str, right: &str) -> bool {
     }
     matches!(
         r,
-        "いる" | "います" | "いた" | "いて" | "ほしい" | "欲しい" | "ください" | "下さい"
-            | "もらう" | "くれる" | "あげる" | "しまう" | "おく" | "みる" | "いく" | "くる"
-            | "ある" | "やる"
+        "いる"
+            | "います"
+            | "いた"
+            | "いて"
+            | "ほしい"
+            | "欲しい"
+            | "ください"
+            | "下さい"
+            | "もらう"
+            | "くれる"
+            | "あげる"
+            | "しまう"
+            | "おく"
+            | "みる"
+            | "いく"
+            | "くる"
+            | "ある"
+            | "やる"
     )
 }
 
@@ -369,8 +489,18 @@ pub(super) fn is_hiragana_continuation_bind(left: &str, right: &str) -> bool {
     }
     // Discourse/turn words are new moves, not okurigana.
     const TURN: &[&str] = &[
-        "はい", "ええ", "えっと", "じゃあ", "でも", "また", "あと", "まず", "みんな",
-        "もっと", "こんにちは", "こんばんは",
+        "はい",
+        "ええ",
+        "えっと",
+        "じゃあ",
+        "でも",
+        "また",
+        "あと",
+        "まず",
+        "みんな",
+        "もっと",
+        "こんにちは",
+        "こんばんは",
     ];
     if TURN.contains(&r) || JA_DEMONSTRATIVES.contains(&r) {
         return false;
@@ -386,9 +516,23 @@ pub(super) fn is_hiragana_continuation_bind(left: &str, right: &str) -> bool {
 /// Spoken turn / new-move starters. Cutting BEFORE these is a hard
 /// sentence boundary, even inside the length target (same role as 。).
 pub(super) const JA_TURN_STARTERS: &[&str] = &[
-    "はい", "じゃあ", "それでは", "では", "なるほど", "えっと", "ええ",
-    "皆さん", "みなさん", "みんな", "こんにちは", "こんばんは",
-    "まずは", "まず", "次に", "ところで", "ちなみに",
+    "はい",
+    "じゃあ",
+    "それでは",
+    "では",
+    "なるほど",
+    "えっと",
+    "ええ",
+    "皆さん",
+    "みなさん",
+    "みんな",
+    "こんにちは",
+    "こんばんは",
+    "まずは",
+    "まず",
+    "次に",
+    "ところで",
+    "ちなみに",
 ];
 
 #[allow(dead_code)]
@@ -438,11 +582,22 @@ pub(super) fn is_ja_address_greeting_bind(left: &str, right: &str) -> bool {
     let l = strip_token(left);
     let r = strip_token(right);
     const ADDRESS: &[&str] = &[
-        "皆さん", "みなさん", "みんな", "さん", "ちゃん", "くん",
-        "こんにちは", "こんばんは", "おはよう",
+        "皆さん",
+        "みなさん",
+        "みんな",
+        "さん",
+        "ちゃん",
+        "くん",
+        "こんにちは",
+        "こんばんは",
+        "おはよう",
     ];
     const GREETING: &[&str] = &[
-        "こんにちは", "こんばんは", "おはよう", "ございます", "よろしくお願いします",
+        "こんにちは",
+        "こんばんは",
+        "おはよう",
+        "ございます",
+        "よろしくお願いします",
     ];
     ADDRESS.contains(&l) && GREETING.contains(&r)
 }
@@ -619,7 +774,16 @@ fn is_short_ja_predicate(token: &str) -> bool {
     let t = strip_ja_end_particles(strip_token(token));
     matches!(
         t,
-        "いい" | "良い" | "よい" | "ない" | "ほしい" | "欲しい" | "ある" | "いる" | "です" | "だ"
+        "いい"
+            | "良い"
+            | "よい"
+            | "ない"
+            | "ほしい"
+            | "欲しい"
+            | "ある"
+            | "いる"
+            | "です"
+            | "だ"
             | "だった"
     )
 }
@@ -652,8 +816,20 @@ fn looks_japanese_predicate(token: &str) -> bool {
         return false;
     }
     const STEMS: &[&str] = &[
-        "する", "した", "して", "します", "できる", "ある", "いる", "なる", "やる", "いう",
-        "思う", "見る", "行く", "来る",
+        "する",
+        "した",
+        "して",
+        "します",
+        "できる",
+        "ある",
+        "いる",
+        "なる",
+        "やる",
+        "いう",
+        "思う",
+        "見る",
+        "行く",
+        "来る",
     ];
     if STEMS.contains(&trimmed) {
         return true;
@@ -718,7 +894,10 @@ pub(crate) fn is_discourse_marker_text(text: &str) -> bool {
         .trim()
         .trim_start_matches(|c: char| !is_token_core(c))
         .trim_end_matches(|c: char| {
-            matches!(c, '.' | '!' | '?' | '。' | '！' | '？' | '…' | ',' | '，' | '、')
+            matches!(
+                c,
+                '.' | '!' | '?' | '。' | '！' | '？' | '…' | ',' | '，' | '、'
+            )
         });
     in_list(core, DISCOURSE_MARKERS)
 }
@@ -923,7 +1102,11 @@ mod tests {
         assert!(!is_ja_turn_start("登場", "皆"));
         assert!(!is_suru_compound_bind("は", "する"));
         assert!(!is_split_hai("は", "選手"));
-        assert!(is_japanese_clause_ending_with_peek("ます", "は", "いじゃあ"));
+        assert!(is_japanese_clause_ending_with_peek(
+            "ます",
+            "は",
+            "いじゃあ"
+        ));
         assert!(!is_japanese_clause_ending("ます", "は"));
         assert!(is_connector_like("いじゃあ", &["じゃあ", "はい"]));
         assert!(is_split_connector_pair("なる", "ほど", &["なるほど"]));

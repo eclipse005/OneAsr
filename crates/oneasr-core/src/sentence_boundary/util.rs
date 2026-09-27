@@ -92,7 +92,9 @@ fn token_allows_space_after(token: &str) -> bool {
 }
 
 fn token_has_spacing_word(token: &str) -> bool {
-    token.chars().any(|ch| ch.is_alphanumeric() && !is_no_space_script(ch))
+    token
+        .chars()
+        .any(|ch| ch.is_alphanumeric() && !is_no_space_script(ch))
 }
 
 /// Scripts that do not separate words with spaces: Han ideographs and kana

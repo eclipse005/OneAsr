@@ -18,21 +18,19 @@
 //! markers, "to"-binding, Japanese orthography) live in `boundary_rules` and
 //! are queried from the DP cost + quality functions below.
 
+use super::preset::SubtitleLengthPreset;
 use crate::sentence_boundary::WordTokenDto;
 use crate::subtitle::text_rules::has_break_terminal_punctuation;
-use super::preset::SubtitleLengthPreset;
 
 use super::boundary_rules::{
     COMMA_COST, CONNECTOR_COST, FORBIDDEN_COST, GLUE_GAP_SEC, GLUED_WORD_COST, GOOD_SILENCE_SEC,
-    WORD_COST,
-    LENGTH_GRACE_CHARS, MIN_FRAGMENT_UNITS, SHORT_SEGMENT_PENALTY,
-    SOFT_COST, TERMINAL_COST, is_bound_connector, is_closing_punctuation,
-    is_case_particle_before_predicate, is_connector_like, is_discourse_marker_comma,
-    is_function_word_left, is_japanese_lexical_bind, is_japanese_spoken_end,
-    is_japanese_orthographic_bind, is_line_start_bound_particle, is_numeric_continuation,
-    is_open_genitive_link, is_opening_punctuation, is_phrase_close_particle,
-    is_soft_punctuation, is_split_connector_pair, is_split_hai, is_time_glued_content,
-    is_to_binding_left, lexical_cut_cost, strip_token, token_gap_sec,
+    LENGTH_GRACE_CHARS, MIN_FRAGMENT_UNITS, SHORT_SEGMENT_PENALTY, SOFT_COST, TERMINAL_COST,
+    WORD_COST, is_bound_connector, is_case_particle_before_predicate, is_closing_punctuation,
+    is_connector_like, is_discourse_marker_comma, is_function_word_left, is_japanese_lexical_bind,
+    is_japanese_orthographic_bind, is_japanese_spoken_end, is_line_start_bound_particle,
+    is_numeric_continuation, is_open_genitive_link, is_opening_punctuation,
+    is_phrase_close_particle, is_soft_punctuation, is_split_connector_pair, is_split_hai,
+    is_time_glued_content, is_to_binding_left, lexical_cut_cost, strip_token, token_gap_sec,
 };
 use super::profile::{Advisor, LanguageProfile};
 use super::types::SplitReason;
@@ -178,8 +176,12 @@ fn is_quality_cut_boundary(
     profile: &dyn LanguageProfile,
     vad_index: &SpeechSegmentIndex,
 ) -> bool {
-    let Some(left) = words.get(i) else { return false };
-    let Some(right) = words.get(i + 1) else { return false };
+    let Some(left) = words.get(i) else {
+        return false;
+    };
+    let Some(right) = words.get(i + 1) else {
+        return false;
+    };
 
     if ends_with_opening_punctuation(&left.word) || starts_with_closing_punctuation(&right.word) {
         return false;
@@ -371,10 +373,7 @@ fn dp_split_span(
     }
 
     // Word-segmentation advisor for zh (jieba); no-op elsewhere.
-    let span_text: String = words[start..=end]
-        .iter()
-        .map(|w| w.word.as_str())
-        .collect();
+    let span_text: String = words[start..=end].iter().map(|w| w.word.as_str()).collect();
     let advisor = profile.word_boundary_advisor(&span_text);
     let mut byte_offset = vec![0usize; n + 1];
     let mut acc = 0usize;
@@ -421,7 +420,15 @@ fn dp_split_span(
         DpMode::Force
     };
 
-    let base_cost = compute_base_costs(words, start, end, vad_index, profile, &advisor, &byte_offset);
+    let base_cost = compute_base_costs(
+        words,
+        start,
+        end,
+        vad_index,
+        profile,
+        &advisor,
+        &byte_offset,
+    );
     // quality_ok[k] == cutting after word start+k-1 is linguistically good.
     let quality_ok: Vec<bool> = (1..n)
         .map(|k| is_quality_cut_boundary(words, start + k - 1, profile, vad_index))
@@ -453,11 +460,7 @@ fn dp_split_span(
             }
             // Grace is "only split at good cuts", not "pack until 28".
             // If a good interior cut exists, do not keep the whole span.
-            if mode == DpMode::Quality
-                && j == 0
-                && i == n
-                && quality_ok.iter().any(|ok| *ok)
-            {
+            if mode == DpMode::Quality && j == 0 && i == n && quality_ok.iter().any(|ok| *ok) {
                 continue;
             }
             let length_penalty =
@@ -472,7 +475,11 @@ fn dp_split_span(
             // Tie-break by writing system: Latin → prefer earlier j (balanced
             // lines); CJK → prefer later j (fuller first line, cuts land closer
             // to real word boundaries).
-            let better = if char_based { cost < dp[i] } else { cost <= dp[i] };
+            let better = if char_based {
+                cost < dp[i]
+            } else {
+                cost <= dp[i]
+            };
             if better {
                 dp[i] = cost;
                 prev[i] = j;
@@ -486,13 +493,7 @@ fn dp_split_span(
         }
         // Force mode without a DP solution: fall back to greedy first-fit.
         return Some(greedy_cuts_by_hard_limit(
-            words,
-            start,
-            end,
-            &prefix,
-            &*char_of,
-            &hard,
-            profile,
+            words, start, end, &prefix, &*char_of, &hard, profile,
         ));
     }
 
@@ -507,14 +508,9 @@ fn dp_split_span(
     }
     cuts_rel.reverse();
 
-    absorb_short_fragments(
-        &mut cuts_rel,
-        &prefix,
-        &*char_of,
-        n,
-        &hard,
-        &|cut_k| should_keep_short_cut(words, start, cut_k, profile),
-    );
+    absorb_short_fragments(&mut cuts_rel, &prefix, &*char_of, n, &hard, &|cut_k| {
+        should_keep_short_cut(words, start, cut_k, profile)
+    });
 
     if mode == DpMode::Quality && !all_cuts_quality(&cuts_rel, &quality_ok) {
         return Some(Vec::new());
@@ -550,15 +546,23 @@ fn compute_base_costs(
     let mut base_cost = vec![FORBIDDEN_COST; n + 1];
     base_cost[0] = 0.0;
     for k in 1..n {
-        base_cost[k] =
-            boundary_base_cost(words, start + k - 1, vad_index, profile, advisor, byte_offset[k]);
+        base_cost[k] = boundary_base_cost(
+            words,
+            start + k - 1,
+            vad_index,
+            profile,
+            advisor,
+            byte_offset[k],
+        );
     }
     base_cost[n] = 0.0;
     base_cost
 }
 
 fn all_cuts_quality(cuts_rel: &[usize], quality_ok: &[bool]) -> bool {
-    cuts_rel.iter().all(|&k| k > 0 && k - 1 < quality_ok.len() && quality_ok[k - 1])
+    cuts_rel
+        .iter()
+        .all(|&k| k > 0 && k - 1 < quality_ok.len() && quality_ok[k - 1])
 }
 
 fn peek_word(words: &[WordTokenDto], index: usize) -> &str {
@@ -570,7 +574,12 @@ fn spoken_end_at(words: &[WordTokenDto], i: usize) -> bool {
         return false;
     };
     let prev = if i == 0 { "" } else { peek_word(words, i - 1) };
-    is_japanese_spoken_end(prev, &left.word, peek_word(words, i + 1), peek_word(words, i + 2))
+    is_japanese_spoken_end(
+        prev,
+        &left.word,
+        peek_word(words, i + 1),
+        peek_word(words, i + 2),
+    )
 }
 
 fn should_keep_short_cut(
@@ -631,7 +640,8 @@ fn absorb_short_fragments(
             if seg_idx + 2 < bounds.len() && !keep_cut(b) {
                 let c = bounds[seg_idx + 2];
                 if hard.valid(c - a, prefix[c] - prefix[a], char_of(a, c - 1))
-                    && let Some(ix) = cuts_rel.iter().position(|&k| k == b) {
+                    && let Some(ix) = cuts_rel.iter().position(|&k| k == b)
+                {
                     cuts_rel.remove(ix);
                     absorbed = true;
                     break;
@@ -641,7 +651,8 @@ fn absorb_short_fragments(
             if seg_idx > 0 && !keep_cut(a) {
                 let z = bounds[seg_idx - 1];
                 if hard.valid(b - z, prefix[b] - prefix[z], char_of(z, b - 1))
-                    && let Some(ix) = cuts_rel.iter().position(|&k| k == a) {
+                    && let Some(ix) = cuts_rel.iter().position(|&k| k == a)
+                {
                     cuts_rel.remove(ix);
                     absorbed = true;
                     break;
@@ -683,10 +694,8 @@ fn greedy_cuts_by_hard_limit(
         // Overflow: keep bunsetsu / kinsoku attachments on this line.
         let overflow_left = words[start + i - 1].word.as_str();
         let overflow_right = words[start + i].word.as_str();
-        let overflow_gap = token_gap_sec(
-            Some(words[start + i - 1].end),
-            Some(words[start + i].start),
-        );
+        let overflow_gap =
+            token_gap_sec(Some(words[start + i - 1].end), Some(words[start + i].start));
         let overflow_next2 = peek_word(words, start + i + 1);
         let emergency = units > hard.max_unit + 8.0;
         let structural_hold = (is_line_start_bound_particle(overflow_right)
@@ -736,8 +745,7 @@ fn greedy_cuts_by_hard_limit(
         seg_start = cut;
         i = cut;
     }
-    cuts
-        .into_iter()
+    cuts.into_iter()
         .map(|k| DpCut {
             index: start + k - 1,
             reason: SplitReason::SubtitleLayout,
@@ -763,15 +771,30 @@ fn is_single_cjk_char_token(token: &str) -> bool {
 // ---- punctuation / spacing helpers ----
 
 fn ends_with_opening_punctuation(token: &str) -> bool {
-    token.trim_end().chars().last().map(is_opening_punctuation).unwrap_or(false)
+    token
+        .trim_end()
+        .chars()
+        .last()
+        .map(is_opening_punctuation)
+        .unwrap_or(false)
 }
 
 fn starts_with_closing_punctuation(token: &str) -> bool {
-    token.trim_start().chars().next().map(is_closing_punctuation).unwrap_or(false)
+    token
+        .trim_start()
+        .chars()
+        .next()
+        .map(is_closing_punctuation)
+        .unwrap_or(false)
 }
 
 fn ends_with_soft_punctuation(token: &str) -> bool {
-    token.trim_end().chars().last().map(is_soft_punctuation).unwrap_or(false)
+    token
+        .trim_end()
+        .chars()
+        .last()
+        .map(is_soft_punctuation)
+        .unwrap_or(false)
 }
 
 fn is_comma(token: &str) -> bool {

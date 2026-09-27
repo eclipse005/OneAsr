@@ -21,9 +21,7 @@ impl OneAsrApp {
             return false;
         };
         self.tasks.iter().any(|t| {
-            &t.id == id
-                && !t.status.locks_row_actions()
-                && !self.exiting.contains_key(&t.id)
+            &t.id == id && !t.status.locks_row_actions() && !self.exiting.contains_key(&t.id)
         })
     }
 
@@ -337,7 +335,6 @@ impl OneAsrApp {
         if self.empty_wave_amp < 0.004 && !self.empty_wave_hover {
             self.empty_wave_amp = 0.0;
         }
-        self.empty_wave_smooth_x +=
-            (self.empty_wave_cursor_x - self.empty_wave_smooth_x) * 0.22;
+        self.empty_wave_smooth_x += (self.empty_wave_cursor_x - self.empty_wave_smooth_x) * 0.22;
     }
 }

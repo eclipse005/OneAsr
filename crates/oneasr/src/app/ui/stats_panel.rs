@@ -4,9 +4,9 @@
 //! All the arithmetic and the wording live in [`super::stats_grid`]; this file
 //! only turns those values into a tree.
 
+use crate::app::OneAsrApp;
 use crate::app::prelude::*;
 use crate::app::ui::stats_grid::*;
-use crate::app::OneAsrApp;
 
 impl OneAsrApp {
     /// Floating stats panel, anchored above the status bar (`MENU_Z`).

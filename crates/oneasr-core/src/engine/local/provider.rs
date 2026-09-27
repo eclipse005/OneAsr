@@ -1,18 +1,18 @@
 //! The concrete [`EngineProvider`] the pipeline is handed.
 
-use std::path::PathBuf;
-use std::cell::Cell;
 use super::aligner::QwenAlignerAdapter;
-use super::backend::{ComputeBackend, gpu_load_failure_msg, is_forced_gpu, resolve_compute_backend};
+use super::backend::{
+    ComputeBackend, gpu_load_failure_msg, is_forced_gpu, resolve_compute_backend,
+};
 use super::demucs::DemucsSeparatorAdapter;
 use super::qwen_asr::QwenAsrAdapter;
+use std::cell::Cell;
+use std::path::PathBuf;
 
 #[cfg(debug_assertions)]
 use crate::diagnostics::pipeline_trace;
 use crate::diagnostics::trace_log;
-use crate::engine::{
-    Aligner, AsrEngine, EngineError, EngineProvider, Separator,
-};
+use crate::engine::{Aligner, AsrEngine, EngineError, EngineProvider, Separator};
 use crate::settings::Settings;
 
 /// Real engines backed by local weights, with the product's backend policy.
@@ -93,7 +93,7 @@ impl EngineProvider for LocalEngineProvider {
             &self.demucs_model_dir,
             self.resolved.get(),
             self.forced_gpu(),
-            |msg| trace_log(msg),
+            trace_log,
         )
         .map(|engine| Box::new(engine) as Box<dyn Separator>)
     }

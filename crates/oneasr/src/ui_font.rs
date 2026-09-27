@@ -6,7 +6,7 @@
 //! 1. Prefer the first *installed* family from a sane candidate list
 //! 2. Attach an explicit DirectWrite `FontFallbacks` list of every remaining CJK-capable face
 
-use gpui::{font, App, Font, FontFallbacks};
+use gpui::{App, Font, FontFallbacks, font};
 
 /// Preferred UI primaries (first installed wins).
 const PRIMARY_CANDIDATES: &[&str] = &[
@@ -90,10 +90,7 @@ fn resolve_from_names(installed: &[String]) -> UiFontPlan {
     };
 
     let mut installed_hits = Vec::new();
-    for name in PRIMARY_CANDIDATES
-        .iter()
-        .chain(FALLBACK_CANDIDATES.iter())
-    {
+    for name in PRIMARY_CANDIDATES.iter().chain(FALLBACK_CANDIDATES.iter()) {
         if has(name) {
             let c = canonical(name);
             if !installed_hits.iter().any(|h: &String| h == &c) {
@@ -167,9 +164,7 @@ pub fn diagnose_text(plan: &UiFontPlan) -> String {
         .iter()
         .any(|h| h.contains("YaHei") || h.contains("雅黑"));
     if !yahei {
-        out.push_str(
-            "note: Microsoft YaHei not found — using alternate CJK face if available\n",
-        );
+        out.push_str("note: Microsoft YaHei not found — using alternate CJK face if available\n");
     }
     out
 }
@@ -180,11 +175,7 @@ mod tests {
 
     #[test]
     fn picks_nsimsun_when_yahei_gone() {
-        let names = vec![
-            "Segoe UI".into(),
-            "NSimSun".into(),
-            "Arial".into(),
-        ];
+        let names = vec!["Segoe UI".into(), "NSimSun".into(), "Arial".into()];
         let plan = resolve_from_names(&names);
         assert_eq!(plan.primary, "Segoe UI");
         assert!(plan.fallbacks.iter().any(|f| f == "NSimSun"));

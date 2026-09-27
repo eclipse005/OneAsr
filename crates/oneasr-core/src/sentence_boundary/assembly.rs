@@ -3,12 +3,12 @@
 use crate::sentence_boundary::WordTokenDto;
 use crate::subtitle::srt::{SrtCue, to_srt_from_cues};
 
-use super::util::join_words;
-use super::util::{gap_ms, seconds_to_ms};
 use super::types::{
     BoundaryDecision, BoundaryDecisionKind, MicroChunk, SourceSentence, SourceSentenceStep2,
     SplitReason,
 };
+use super::util::join_words;
+use super::util::{gap_ms, seconds_to_ms};
 use super::vad_align::SpeechSegmentIndex;
 
 pub fn source_sentences_to_srt(step2: &SourceSentenceStep2) -> String {

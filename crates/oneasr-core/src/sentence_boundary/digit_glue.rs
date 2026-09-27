@@ -138,7 +138,14 @@ fn is_decimal_digit(ch: char) -> bool {
 pub(super) fn unglue_fused_ja_copula(words: Vec<WordTokenDto>) -> Vec<WordTokenDto> {
     const COPULA: &[&str] = &["ました", "でした", "ません", "です", "ます"];
     const REST: &[&str] = &[
-        "まず", "まずは", "はい", "じゃあ", "だから", "でも", "それから", "そして",
+        "まず",
+        "まずは",
+        "はい",
+        "じゃあ",
+        "だから",
+        "でも",
+        "それから",
+        "そして",
     ];
     let mut out = Vec::with_capacity(words.len());
     for word in words {
@@ -221,7 +228,10 @@ mod tests {
 
     #[test]
     fn glues_single_digit_plus_counter() {
-        assert_eq!(glued(&["自称", "1", "4歳", "です"]), ["自称", "14歳", "です"]);
+        assert_eq!(
+            glued(&["自称", "1", "4歳", "です"]),
+            ["自称", "14歳", "です"]
+        );
     }
 
     #[test]
@@ -256,7 +266,10 @@ mod tests {
 
     #[test]
     fn leaves_non_digit_neighbors_alone() {
-        assert_eq!(glued(&["episode", "1", "season"]), ["episode", "1", "season"]);
+        assert_eq!(
+            glued(&["episode", "1", "season"]),
+            ["episode", "1", "season"]
+        );
     }
 
     #[test]

@@ -35,11 +35,7 @@ impl SpeechSegmentIndex {
     ///
     /// Fewer than two segments => always false (no silence gap exists, or
     /// no VAD data — caller degrades to punctuation + length budget).
-    pub(super) fn crosses_silence(
-        &self,
-        left_end_sec: f64,
-        right_start_sec: f64,
-    ) -> bool {
+    pub(super) fn crosses_silence(&self, left_end_sec: f64, right_start_sec: f64) -> bool {
         if self.segments.len() < 2 {
             return false;
         }
@@ -52,11 +48,7 @@ impl SpeechSegmentIndex {
     /// cut does not cross a silence gap (same tolerance window as
     /// [`Self::crosses_silence`]). Used to weigh the DP cost: a longer silence
     /// is a stronger sentence-end signal.
-    pub(super) fn silence_duration_sec(
-        &self,
-        left_end_sec: f64,
-        right_start_sec: f64,
-    ) -> f64 {
+    pub(super) fn silence_duration_sec(&self, left_end_sec: f64, right_start_sec: f64) -> f64 {
         let Some(i) = self.gap_index_at((left_end_sec + right_start_sec) / 2.0) else {
             return 0.0;
         };
@@ -105,11 +97,11 @@ pub(super) fn vad_strength(silence_sec: f64) -> f64 {
     // Anchor points: (silence_seconds, strength)
     const ANCHORS: [(f64, f64); 6] = [
         (0.0, 0.0),
-        (0.3, 0.0),   // below this: noise/breath, no signal
+        (0.3, 0.0), // below this: noise/breath, no signal
         (0.5, 0.25),
         (0.8, 0.55),
         (1.2, 0.85),
-        (2.0, 1.0),   // saturated
+        (2.0, 1.0), // saturated
     ];
     if silence_sec <= 0.3 {
         return 0.0;
@@ -227,7 +219,10 @@ mod tests {
         let mut t = 0.0;
         while t <= 3.0 {
             let s = vad_strength(t);
-            assert!(s >= prev - 1e-9, "strength decreased at t={t}: {s} < {prev}");
+            assert!(
+                s >= prev - 1e-9,
+                "strength decreased at t={t}: {s} < {prev}"
+            );
             prev = s;
             t += 0.05;
         }

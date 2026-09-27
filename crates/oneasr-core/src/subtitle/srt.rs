@@ -110,10 +110,7 @@ mod tests {
 
     #[test]
     fn normalize_sorts_and_renumbers() {
-        let out = normalize_cues(&[
-            cue(9, 500, 900, "second"),
-            cue(3, 100, 400, "first"),
-        ]);
+        let out = normalize_cues(&[cue(9, 500, 900, "second"), cue(3, 100, 400, "first")]);
         assert_eq!(out[0].index, 1);
         assert_eq!(out[0].text, "first");
         assert_eq!(out[1].index, 2);

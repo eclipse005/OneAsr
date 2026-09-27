@@ -23,9 +23,7 @@ pub fn open_containing_folder(file: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let path = file
-            .canonicalize()
-            .unwrap_or_else(|_| file.to_path_buf());
+        let path = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
         let arg = format!("/select,\"{}\"", path.display());
         Command::new("explorer")
             .raw_arg(arg)

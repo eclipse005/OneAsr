@@ -1,7 +1,7 @@
 //! The empty state: the animated wave and the copy inviting a first drop.
 
-use crate::app::prelude::*;
 use crate::app::OneAsrApp;
+use crate::app::prelude::*;
 
 impl OneAsrApp {
     pub(super) fn render_empty_wave(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -58,8 +58,7 @@ impl OneAsrApp {
                     .justify_between()
                     .children((0..EMPTY_WAVE_BARS).map(move |i| {
                         let h = heights[i];
-                        let u = ((h - EMPTY_WAVE_FLAT_H)
-                            / (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H))
+                        let u = ((h - EMPTY_WAVE_FLAT_H) / (EMPTY_WAVE_MAX_H - EMPTY_WAVE_FLAT_H))
                             .clamp(0.0, 1.0);
                         let opacity = 0.40 + 0.55 * u;
                         div()

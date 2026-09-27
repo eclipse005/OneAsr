@@ -1,9 +1,8 @@
 //! The OneAsr mark in the title bar.
 
 use gpui::{
-    div, hsla, linear, point, prelude::*, px, radians, size, svg, Animation,
-    AnimationExt as _, BoxShadow,
-    Transformation,
+    Animation, AnimationExt as _, BoxShadow, Transformation, div, hsla, linear, point, prelude::*,
+    px, radians, size, svg,
 };
 use std::f32::consts::TAU;
 use std::time::Duration;
@@ -45,21 +44,12 @@ pub fn app_logo(hovered: bool) -> impl IntoElement {
     };
 
     div()
-        .id(if hovered {
-            "app-logo-hot"
-        } else {
-            "app-logo"
-        })
+        .id(if hovered { "app-logo-hot" } else { "app-logo" })
         .size(px(36.))
         .rounded_xl()
         .bg(crate::theme::LOGO)
         .shadow(vec![BoxShadow {
-            color: hsla(
-                174. / 360.,
-                0.55,
-                0.28,
-                if hovered { 0.42 } else { 0.28 },
-            ),
+            color: hsla(174. / 360., 0.55, 0.28, if hovered { 0.42 } else { 0.28 }),
             offset: point(px(0.), px(if hovered { 2. } else { 1. })),
             blur_radius: px(if hovered { 10. } else { 6. }),
             spread_radius: px(0.),

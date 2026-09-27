@@ -1,10 +1,7 @@
 //! Terminal-punctuation rules: does this token end a sentence, or is it an
 //! abbreviation / ordinal / initial that must not be split after?
 
-pub fn should_split_after_terminal_token(
-    current_token: &str,
-    next_token: Option<&str>,
-) -> bool {
+pub fn should_split_after_terminal_token(current_token: &str, next_token: Option<&str>) -> bool {
     let normalized = strip_trailing_closers(current_token.trim());
     if normalized.is_empty() || !ends_with_terminal_punctuation(normalized) {
         return false;

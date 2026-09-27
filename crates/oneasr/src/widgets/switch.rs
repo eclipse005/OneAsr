@@ -3,7 +3,7 @@
 //! gpui 没有现成的 Switch；轨道 + 滑块两个 div 就够了。状态由调用方持有
 //! （与 [`btn`] 同模式），点击即翻转，天然适配"暂存-保存"语义。
 
-use gpui::{prelude::*, px, div, App, ClickEvent, Window};
+use gpui::{App, ClickEvent, Window, div, prelude::*, px};
 
 /// 36×20 圆角轨道 + 16 圆形滑块。`on` 决定轨道颜色与滑块位置。
 pub fn switch(

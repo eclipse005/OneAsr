@@ -20,8 +20,8 @@ mod ui_font;
 mod widgets;
 
 use gpui::{
-    App, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, actions, prelude::*,
-    px, size,
+    App, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, actions, prelude::*, px,
+    size,
 };
 use oneasr_core::init_runtime;
 

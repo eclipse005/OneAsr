@@ -8,9 +8,7 @@ use super::backend::ComputeBackend;
 use qwen3_aligner_wgpu::align_inference::Aligner as WgpuAligner;
 use qwen3_aligner_wgpu::gpu::DeviceSelector;
 
-use crate::engine::{
-    AlignRequest, AlignedToken, Aligner, EngineError,
-};
+use crate::engine::{AlignRequest, AlignedToken, Aligner, EngineError};
 
 pub(super) struct QwenAlignerAdapter {
     /// wgpu `align` takes `&mut self`; the pipeline trait is `&self`.

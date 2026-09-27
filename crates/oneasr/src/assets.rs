@@ -120,12 +120,17 @@ impl AssetSource for AppAssets {
                 // top-level segment only
                 if let Some(seg) = k.split('/').next() {
                     let s = SharedString::from(seg.to_string());
-                    if !names.iter().any(|x: &SharedString| x.as_ref() == s.as_ref()) {
+                    if !names
+                        .iter()
+                        .any(|x: &SharedString| x.as_ref() == s.as_ref())
+                    {
                         names.push(s);
                     }
                 }
             } else if let Some(rest) = k.strip_prefix(&prefix)
-                && !rest.is_empty() && !rest.contains('/') {
+                && !rest.is_empty()
+                && !rest.contains('/')
+            {
                 names.push(SharedString::from(rest.to_string()));
             }
         }

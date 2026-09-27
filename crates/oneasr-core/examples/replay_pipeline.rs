@@ -74,7 +74,11 @@ fn run(words_path: &str, preset: &str) -> Result<(), String> {
         "replay start task={} words={} lang={:?} preset={preset}",
         dump.id,
         words.len(),
-        if dump.lang.is_empty() { None } else { Some(&dump.lang) }
+        if dump.lang.is_empty() {
+            None
+        } else {
+            Some(&dump.lang)
+        }
     );
 
     let request = SentenceBoundaryRequest {

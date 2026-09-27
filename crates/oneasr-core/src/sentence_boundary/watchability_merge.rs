@@ -1,15 +1,14 @@
 //! Source-side watchability merge. Runs after DP, before translation, so the
 //! translator never sees flash/orphan cues.
 
-use crate::sentence_boundary::WordTokenDto;
 use super::preset::SubtitleLengthPreset;
+use crate::sentence_boundary::WordTokenDto;
 
 use super::boundary_rules::{
     is_case_particle_before_predicate, is_connector_like, is_discourse_marker_text,
     is_function_word_left, is_ja_address_greeting_bind, is_ja_turn_start_after,
-    is_japanese_spoken_end,
-    is_japanese_lexical_bind, is_line_start_bound_particle, is_open_genitive_link,
-    is_split_hai, strip_token,
+    is_japanese_lexical_bind, is_japanese_spoken_end, is_line_start_bound_particle,
+    is_open_genitive_link, is_split_hai, strip_token,
 };
 use super::profile::LanguageProfile;
 use super::util::join_words;
@@ -164,7 +163,8 @@ fn can_merge(
         return false;
     }
 
-    let right_orphan = is_orphan_tail(words, right, profile) && !is_orphan_tail(words, left, profile);
+    let right_orphan =
+        is_orphan_tail(words, right, profile) && !is_orphan_tail(words, left, profile);
     if right_orphan {
         return !pair_exceeds_caps(
             words,
@@ -176,7 +176,8 @@ fn can_merge(
             ORPHAN_MERGE_GRACE_UNITS,
         );
     }
-    let left_orphan = is_orphan_tail(words, left, profile) && !is_orphan_tail(words, right, profile);
+    let left_orphan =
+        is_orphan_tail(words, left, profile) && !is_orphan_tail(words, right, profile);
     if left_orphan {
         let grace = if cue_duration(words, right) >= FLASH_SEC {
             ORPHAN_MERGE_GRACE_UNITS
@@ -231,9 +232,9 @@ fn is_line_end_connector_token(token: &str, profile: &dyn LanguageProfile) -> bo
         "and", "or", "to", "for", "with", "that", "which", "when", "if", "but", "so",
     ];
     const CJK: &[&str] = &[
-        "然后", "而且", "并且", "因为", "所以", "但是", "如果", "为了", "以及", "还有", "并",
-        "和", "与", "及", "或", "来", "去", "在", "对", "把", "将", "大约", "这", "那", "这个",
-        "那个", "一个",
+        "然后", "而且", "并且", "因为", "所以", "但是", "如果", "为了", "以及", "还有", "并", "和",
+        "与", "及", "或", "来", "去", "在", "对", "把", "将", "大约", "这", "那", "这个", "那个",
+        "一个",
     ];
     LATIN.contains(&t.as_str())
         || CJK.contains(&t.as_str())
@@ -397,7 +398,8 @@ fn is_closed_sentence_pair(
         return false;
     }
     let right_units = cue_units(words, right, profile);
-    let afterthought = right_units > 0.0 && right_units <= if profile.is_char_based() { 4.0 } else { 2.0 };
+    let afterthought =
+        right_units > 0.0 && right_units <= if profile.is_char_based() { 4.0 } else { 2.0 };
     if afterthought || is_short_interjection(words, right, profile) {
         return false;
     }
@@ -443,7 +445,11 @@ fn pair_exceeds_caps(
         return true;
     }
     if char_cap.is_finite() {
-        let merged = join_words(words[left.start..=right.end].iter().map(|w| w.word.as_str()));
+        let merged = join_words(
+            words[left.start..=right.end]
+                .iter()
+                .map(|w| w.word.as_str()),
+        );
         let char_grace = if unit_grace > 0.0 {
             (unit_grace * CHARS_PER_WORD_BUDGET).round()
         } else {
@@ -519,12 +525,8 @@ mod tests {
         ]);
         let spans = vec![(0usize, 15), (16, 18)];
         let profile = super::super::profile::profile_for_lang("en");
-        let merged = merge_watchability_spans(
-            &words,
-            &spans,
-            &*profile,
-            SubtitleLengthPreset::Standard,
-        );
+        let merged =
+            merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged, vec![(0, 18)]);
     }
 
@@ -541,12 +543,8 @@ mod tests {
         ]);
         let spans = vec![(0usize, 7), (8, 10)];
         let profile = super::super::profile::profile_for_lang("en");
-        let merged = merge_watchability_spans(
-            &words,
-            &spans,
-            &*profile,
-            SubtitleLengthPreset::Standard,
-        );
+        let merged =
+            merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged.len(), 2);
     }
 
@@ -561,12 +559,8 @@ mod tests {
         ];
         let spans = vec![(0usize, 0), (1, 4)];
         let profile = super::super::profile::profile_for_lang("en");
-        let merged = merge_watchability_spans(
-            &words,
-            &spans,
-            &*profile,
-            SubtitleLengthPreset::Standard,
-        );
+        let merged =
+            merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged, vec![(0, 4)]);
     }
 
@@ -582,12 +576,8 @@ mod tests {
         ];
         let spans = vec![(0usize, 1), (2, 5)];
         let profile = super::super::profile::profile_for_lang("ja");
-        let merged = merge_watchability_spans(
-            &words,
-            &spans,
-            &*profile,
-            SubtitleLengthPreset::Standard,
-        );
+        let merged =
+            merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged.len(), 2, "です must not reglue: {merged:?}");
     }
 
@@ -603,12 +593,8 @@ mod tests {
         ];
         let spans = vec![(0usize, 1), (2, 5)];
         let profile = super::super::profile::profile_for_lang("ja");
-        let merged = merge_watchability_spans(
-            &words,
-            &spans,
-            &*profile,
-            SubtitleLengthPreset::Standard,
-        );
+        let merged =
+            merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged.len(), 2, "はい turn must not reglue: {merged:?}");
     }
 
@@ -618,12 +604,8 @@ mod tests {
         // w(8) starts at 4.0s, w(1) ends at 0.8 — gap >> 0.8s
         let spans = vec![(0usize, 1), (2, 2)];
         let profile = super::super::profile::profile_for_lang("en");
-        let merged = merge_watchability_spans(
-            &words,
-            &spans,
-            &*profile,
-            SubtitleLengthPreset::Standard,
-        );
+        let merged =
+            merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged.len(), 2);
     }
 }

@@ -1,8 +1,8 @@
 //! Buttons, pills, icons and the name tooltip.
 
 use gpui::{
-    AnyElement, div, linear, percentage, prelude::*, px, svg, Animation, AnimationExt as _, App,
-    ClickEvent, Context, SharedString, Transformation, Window, WindowControlArea,
+    Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, SharedString,
+    Transformation, Window, WindowControlArea, div, linear, percentage, prelude::*, px, svg,
 };
 use std::time::Duration;
 
@@ -87,7 +87,11 @@ pub fn settings_gear_btn(
     let gear = svg()
         .size(px(18.))
         .path("icons/gear.svg")
-        .text_color(if active { crate::theme::ACCENT } else { crate::theme::MUTED });
+        .text_color(if active {
+            crate::theme::ACCENT
+        } else {
+            crate::theme::MUTED
+        });
 
     // Distinct element ids so GPUI remounts when download starts/stops (reliable spin on/off).
     let gear_el = if downloading {
@@ -129,7 +133,8 @@ pub fn settings_gear_btn(
         .cursor_pointer()
         .hover(|s| {
             if open {
-                s.bg(crate::theme::ACCENT_SOFT).border_color(crate::theme::ACCENT)
+                s.bg(crate::theme::ACCENT_SOFT)
+                    .border_color(crate::theme::ACCENT)
             } else {
                 s.bg(crate::theme::BG).border_color(crate::theme::ACCENT)
             }
@@ -188,14 +193,18 @@ pub fn ui_language_btn(
                 .border_color(crate::theme::ACCENT)
         })
         .tooltip(move |_, cx| {
-            cx.new(|_| NameTooltip { text: tooltip.clone() }).into()
+            cx.new(|_| NameTooltip {
+                text: tooltip.clone(),
+            })
+            .into()
         })
         .on_click(on_click)
         .child(glyph)
 }
 
 /// Primary CTA. When disabled: not clickable + tooltip explains why.
-pub fn btn_cta(    label: &str,
+pub fn btn_cta(
+    label: &str,
     enabled: bool,
     disabled_tip: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -221,9 +230,7 @@ pub fn btn_cta(    label: &str,
             .hover(|s| s.opacity(0.92))
             .on_click(on_click);
     } else {
-        el = el.tooltip(move |_, cx| {
-            cx.new(|_| NameTooltip { text: tip.clone() }).into()
-        });
+        el = el.tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into());
     }
     el
 }
@@ -236,12 +243,42 @@ pub fn btn(
 ) -> impl IntoElement {
     let id = SharedString::from(format!("btn-{label}-{}-{enabled}", kind as u8));
     let (bg, fg, border, opacity) = match (kind, enabled) {
-        (BtnKind::Primary, true) => (crate::theme::ACCENT, crate::theme::PANEL, crate::theme::ACCENT, 1.0),
-        (BtnKind::Primary, false) => (crate::theme::ACCENT, crate::theme::PANEL, crate::theme::ACCENT, 0.42),
-        (BtnKind::Secondary, true) => (crate::theme::PANEL, crate::theme::TEXT, crate::theme::LINE, 1.0),
-        (BtnKind::Secondary, false) => (crate::theme::PANEL, crate::theme::MUTED_SOFT, crate::theme::LINE, 1.0),
-        (BtnKind::Quiet, true) => (crate::theme::PANEL, crate::theme::MUTED, crate::theme::LINE, 1.0),
-        (BtnKind::Quiet, false) => (crate::theme::PANEL, crate::theme::MUTED_SOFT, crate::theme::LINE, 1.0),
+        (BtnKind::Primary, true) => (
+            crate::theme::ACCENT,
+            crate::theme::PANEL,
+            crate::theme::ACCENT,
+            1.0,
+        ),
+        (BtnKind::Primary, false) => (
+            crate::theme::ACCENT,
+            crate::theme::PANEL,
+            crate::theme::ACCENT,
+            0.42,
+        ),
+        (BtnKind::Secondary, true) => (
+            crate::theme::PANEL,
+            crate::theme::TEXT,
+            crate::theme::LINE,
+            1.0,
+        ),
+        (BtnKind::Secondary, false) => (
+            crate::theme::PANEL,
+            crate::theme::MUTED_SOFT,
+            crate::theme::LINE,
+            1.0,
+        ),
+        (BtnKind::Quiet, true) => (
+            crate::theme::PANEL,
+            crate::theme::MUTED,
+            crate::theme::LINE,
+            1.0,
+        ),
+        (BtnKind::Quiet, false) => (
+            crate::theme::PANEL,
+            crate::theme::MUTED_SOFT,
+            crate::theme::LINE,
+            1.0,
+        ),
     };
     let mut el = div()
         .id(id)
@@ -265,7 +302,10 @@ pub fn btn(
             .hover(|s| match kind {
                 BtnKind::Primary => s.opacity(0.92),
                 BtnKind::Secondary => s.border_color(crate::theme::ACCENT),
-                BtnKind::Quiet => s.text_color(crate::theme::DANGER).bg(crate::theme::DANGER_SOFT).border_color(crate::theme::DANGER),
+                BtnKind::Quiet => s
+                    .text_color(crate::theme::DANGER)
+                    .bg(crate::theme::DANGER_SOFT)
+                    .border_color(crate::theme::DANGER),
             })
             .on_click(on_click);
     }
@@ -289,10 +329,22 @@ pub fn pill(
         .py_1()
         .rounded_lg()
         .text_sm()
-        .bg(if active { crate::theme::ACCENT } else { crate::theme::PANEL })
-        .text_color(if active { crate::theme::PANEL } else { crate::theme::TEXT })
+        .bg(if active {
+            crate::theme::ACCENT
+        } else {
+            crate::theme::PANEL
+        })
+        .text_color(if active {
+            crate::theme::PANEL
+        } else {
+            crate::theme::TEXT
+        })
         .border_1()
-        .border_color(if active { crate::theme::ACCENT } else { crate::theme::LINE })
+        .border_color(if active {
+            crate::theme::ACCENT
+        } else {
+            crate::theme::LINE
+        })
         .font_weight(if active {
             gpui::FontWeight::SEMIBOLD
         } else {
@@ -312,11 +364,7 @@ pub struct NameTooltip {
 }
 
 impl gpui::Render for NameTooltip {
-    fn render(
-        &mut self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .px_2()
             .py_1()
@@ -348,22 +396,35 @@ pub fn icon_btn(
     row_hovered: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let id = SharedString::from(format!(
-        "ico-{tip}-{enabled}-{}-{row_hovered}",
-        kind as u8
-    ));
+    let id = SharedString::from(format!("ico-{tip}-{enabled}-{}-{row_hovered}", kind as u8));
     let tip_s: SharedString = tip.into();
     let (fg, bg, border) = if !enabled {
-        (crate::theme::MUTED_SOFT, crate::theme::BG, crate::theme::LINE_SOFT)
+        (
+            crate::theme::MUTED_SOFT,
+            crate::theme::BG,
+            crate::theme::LINE_SOFT,
+        )
     } else if row_hovered {
         match kind {
-            IconKind::Play => (crate::theme::ACCENT, crate::theme::ACCENT_SOFT, crate::theme::ACCENT_SOFT),
+            IconKind::Play => (
+                crate::theme::ACCENT,
+                crate::theme::ACCENT_SOFT,
+                crate::theme::ACCENT_SOFT,
+            ),
             IconKind::Trash => (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE),
-            IconKind::Folder => (crate::theme::ACCENT, crate::theme::ACCENT_SOFT, crate::theme::ACCENT_SOFT),
+            IconKind::Folder => (
+                crate::theme::ACCENT,
+                crate::theme::ACCENT_SOFT,
+                crate::theme::ACCENT_SOFT,
+            ),
         }
     } else {
         match kind {
-            IconKind::Folder => (crate::theme::ACCENT, crate::theme::ACCENT_SOFT, crate::theme::ACCENT_SOFT),
+            IconKind::Folder => (
+                crate::theme::ACCENT,
+                crate::theme::ACCENT_SOFT,
+                crate::theme::ACCENT_SOFT,
+            ),
             IconKind::Play => (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE),
             IconKind::Trash => (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE),
         }
@@ -380,12 +441,7 @@ pub fn icon_btn(
         .border_color(border)
         .text_color(fg)
         .opacity(if enabled { 1.0 } else { 0.55 })
-        .child(
-            svg()
-                .size(px(17.))
-                .path(icon_svg_path(kind))
-                .text_color(fg),
-        )
+        .child(svg().size(px(17.)).path(icon_svg_path(kind)).text_color(fg))
         .tooltip(move |_, cx| {
             cx.new(|_| NameTooltip {
                 text: tip_s.clone(),
@@ -396,11 +452,17 @@ pub fn icon_btn(
         el = el
             .cursor_pointer()
             .hover(|s| match kind {
-                IconKind::Play => s.bg(crate::theme::ACCENT_SOFT).border_color(crate::theme::ACCENT),
-                IconKind::Trash => s.bg(crate::theme::DANGER_SOFT).border_color(crate::theme::DANGER),
+                IconKind::Play => s
+                    .bg(crate::theme::ACCENT_SOFT)
+                    .border_color(crate::theme::ACCENT),
+                IconKind::Trash => s
+                    .bg(crate::theme::DANGER_SOFT)
+                    .border_color(crate::theme::DANGER),
                 // Keep the bg light so the ACCENT icon stays readable (unlike a
                 // solid-ACCENT fill, which would eat the icon of the same color).
-                IconKind::Folder => s.bg(crate::theme::ACCENT_SOFT).border_color(crate::theme::ACCENT),
+                IconKind::Folder => s
+                    .bg(crate::theme::ACCENT_SOFT)
+                    .border_color(crate::theme::ACCENT),
             })
             .on_click(on_click);
     }

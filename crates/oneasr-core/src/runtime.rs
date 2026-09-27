@@ -27,6 +27,9 @@ pub fn demote_current_thread() {
             fn GetCurrentThread() -> *mut core::ffi::c_void;
             fn SetThreadPriority(thread: *mut core::ffi::c_void, priority: i32) -> i32;
         }
+        // SAFETY: `GetCurrentThread()` 返回调用线程的伪句柄，恒有效、无需释放；
+        // `SetThreadPriority` 只接受该句柄与一个优先级常量，失败仅返回 0（此处忽略）。
+        // 两者都不解引用指针、不持有跨调用状态，无前置条件。
         unsafe {
             let _ = SetThreadPriority(GetCurrentThread(), -1);
         }

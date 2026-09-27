@@ -5,7 +5,7 @@ use crate::app::prelude::*;
 #[cfg(target_os = "linux")]
 use gpui::MouseButton;
 
-/// Version shown in the titlebar, e.g. `v0.1.9`.
+/// Version label shown in the title bar, built from the Cargo package version.
 ///
 /// Single source is the Cargo package version (same one `crashlog` reports at
 /// startup). Never hand-write a version string here — it will drift from the
@@ -23,11 +23,15 @@ const SHOW_CAPTION_BUTTONS: bool = !cfg!(target_os = "macos");
 /// Left padding of the title bar.
 ///
 /// macOS floats the native traffic lights above the content view (transparent
-/// title bar), so without an inset the self-drawn `OneAsr v1.0.0` label sits under
-/// them and reads as a truncated version number. 78px ≈ 13px edge + three 14pt
+/// title bar), so without an inset the self-drawn version label sits under them
+/// and reads as a truncated version number. 78px ≈ 13px edge + three 14pt
 /// buttons + two 6pt gaps, plus a little slack — worth a one-time eyeball check on
 /// real hardware (anything within ±8px is fine).
-const TITLEBAR_PAD_LEFT: Pixels = if cfg!(target_os = "macos") { px(78.) } else { px(12.) };
+const TITLEBAR_PAD_LEFT: Pixels = if cfg!(target_os = "macos") {
+    px(78.)
+} else {
+    px(12.)
+};
 
 impl OneAsrApp {
     /// Custom title bar. GPUI never sets `WS_CAPTION`, so the "native" caption is only
@@ -201,5 +205,4 @@ impl OneAsrApp {
                     )),
             )
     }
-
 }

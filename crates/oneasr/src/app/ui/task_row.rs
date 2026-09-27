@@ -70,7 +70,8 @@ pub(super) fn task_row_view(
 
     // Meta: size · duration · status text (no free-floating status circle).
     let dur = row.duration_label.clone();
-    let stage_for_row = ctx.active_stage
+    let stage_for_row = ctx
+        .active_stage
         .as_ref()
         .filter(|(sid, _)| sid == &row.id)
         .map(|(_, s)| s.as_ref());
@@ -81,10 +82,7 @@ pub(super) fn task_row_view(
         .as_ref()
         .filter(|t| t.has_breakdown())
         .map(|t| t.total_label());
-    let timing_for_card = row
-        .timing
-        .as_ref()
-        .filter(|t| t.has_breakdown());
+    let timing_for_card = row.timing.as_ref().filter(|t| t.has_breakdown());
     let timing_open = ctx.timing_popover.as_ref() == Some(&row.id) && ctx.timing_visible;
     let timing_pop_p = if timing_open || ctx.timing_popover.as_ref() == Some(&row.id) {
         ctx.timing_progress

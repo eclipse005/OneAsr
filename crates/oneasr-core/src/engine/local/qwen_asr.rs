@@ -1,13 +1,11 @@
 //! Qwen3-ASR adapter (wgpu).
 
-use std::path::Path;
 use super::backend::ComputeBackend;
+use std::path::Path;
 
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
-use crate::engine::{
-    AsrEngine, EngineError, TranscribeRequest, Transcript,
-};
+use crate::engine::{AsrEngine, EngineError, TranscribeRequest, Transcript};
 
 pub(super) struct QwenAsrAdapter {
     inner: AsrInference,
