@@ -1,5 +1,12 @@
 # OneAsr 标题栏问题交接（给接手 AI）
 
+> **⚠️ 历史文档 —— 只当作当初的排查记录读，别当作现状。**
+> 本文写于 `master` 时期的 `1e18f46`，其中「第 3 节 当前代码里窗口是怎么开的」与
+> 「第 9 节 当前仓库状态」已经被后来的实现推翻：现在主分支是 `wgpu`，应用**已经自绘标题栏**
+> （`crates/oneasr/src/app/ui/chrome.rs` 的 `render_titlebar`，由 `app/ui/mod.rs` 挂进根布局），
+> 窗口以 `appears_transparent: true` 打开、标题为 `OneAsr`（`crates/oneasr/src/main.rs`）。
+> 需要现状请直接读这两个文件。
+
 > 本文只陈述现状、反馈、代码事实与已尝试记录。**不含**推荐方案或结论性判断。  
 > 最后提交：`1e18f46`（`feat: allow custom SRT output directory in settings`）。  
 > 标题栏相关试验代码已从工作区还原，当前 `main` 工作树无标题栏 WIP。

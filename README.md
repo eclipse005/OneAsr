@@ -39,7 +39,7 @@ Main window (empty state) and the task list + settings drawer (same window size,
 
 ## Features
 
-- **Fully local**: recognition and alignment run on your machine; after the models are downloaded you can go offline
+- **Fully local**: transcription and alignment run on your machine; after the models are downloaded you can go offline
 - **Batch queue**: drop in many files at once; progress and stage are always visible
 - **Reliable timing**: ForcedAligner word-level alignment + smart sentence segmentation — not whole-segment guesses
 - **11 source languages**: 中文普通话, English, 粤语, 日本語, 한국어, Français, Deutsch, Italiano, Español, Português, Русский (set manually per task; no auto-detection)
@@ -77,12 +77,16 @@ oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --out
 - OS: Windows 10 / 11, Linux, macOS (Apple Silicon)
 - GPU: 4 GB+ VRAM recommended for 0.6B, 6 GB+ for 1.7B; CPU works without a discrete GPU (slower but usable)
 - Network: only for the first model download
+- ffmpeg: already bundled in every release. **Building from source?** Either way works — unpack the
+  matching archive from [ffmpeg 7.1.2](https://github.com/Tyrrrz/FFmpegBin/releases/tag/7.1.2) and
+  drop `ffmpeg.exe` (Windows) or `ffmpeg` (Linux / macOS) into `bin/`; or do nothing at all if ffmpeg
+  is already installed system-wide (the app uses the copy in `bin/` first, then the one on `PATH`)
 
 ## Tips
 
 - **Picking the wrong source language** is the most common failure; choose 粤语 for Cantonese, and 中文普通话 for other Chinese dialects
 - With heavy BGM / noise, turn on vocal separation first — accuracy improves a lot
-- The macOS build is unsigned: the DMG includes 安装 OneAsr.command + 安装说明.txt; install once following the notes
+- The macOS build is unsigned: the DMG includes 安装 OneAsr.command + 安装说明.txt; follow the notes — the Terminal method is listed first and works on every macOS version
 - On Linux, extract the tar.gz into your home folder
 - On Linux, run `bash install-desktop.sh` from the portable package on first use — it registers the app icon and launcher (Linux does not embed icons in ELF executables)
 

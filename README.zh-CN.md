@@ -9,7 +9,7 @@
 </div>
 
 ```text
-音视频 → [人声分离] → VAD 分段 → 识别 → 对齐打轴 → 智能断句 → *.srt / *.txt
+音视频 → [人声分离] → VAD 分段 → 转写 → 对齐打轴 → 智能断句 → *.srt / *.txt
 ```
 
 ## 下载安装
@@ -39,7 +39,7 @@
 
 ## 功能
 
-- **完全本地**：识别与对齐都在本机，下完模型可断网用
+- **完全本地**：转写与对齐都在本机，下完模型可断网用
 - **批量队列**：一次丢多个文件，进度与阶段一目了然
 - **时间轴可靠**：ForcedAligner 词级对齐 + 智能断句，不是整段估时间
 - **11 种语言**：中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский（需手动指定，不自动检测）
@@ -60,7 +60,7 @@
 | Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | 必需，所有 ASR 共用 |
 | HTDemucs v4 人声权重 | ~84 MB | 可选 |
 
-常用组合约 3.5～6.0 GB。仅下模型需要联网，识别过程可离线。
+常用组合约 3.5～6.0 GB。仅下模型需要联网，转写过程可离线。
 
 ## CLI 命令行
 
@@ -77,12 +77,16 @@ oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --out
 - 系统：Windows 10 / 11、Linux、macOS（Apple Silicon）
 - 显卡：0.6B 推荐 4GB+ 显存，1.7B 建议 6GB+；无独显走 CPU（慢但可用）
 - 网络：仅首次下载模型需要
+- ffmpeg：发布包里已经带好了。**从源码自己编译**的话，两条路任选 —— 把
+  [ffmpeg 7.1.2](https://github.com/Tyrrrz/FFmpegBin/releases/tag/7.1.2) 里对应平台的
+  压缩包解开，把 `ffmpeg.exe`（Windows）或 `ffmpeg`（Linux / macOS）放进 `bin/`；
+  或者系统里已经装了 ffmpeg 就什么都不用做（程序先用 `bin/` 里那份，找不到再用 `PATH` 上的）
 
 ## 提示
 
 - **语种选错**是最常见的翻车原因；粤语选「粤语」，其他中文方言一般选「中文普通话」
 - 带 BGM / 噪声先开「人声分离」，准得多
-- macOS 包未签名：dmg 里有「安装 OneAsr.command」+「安装说明.txt」，按说明装一次即可
+- macOS 包未签名：dmg 里有「安装 OneAsr.command」+「安装说明.txt」，按说明装一次即可（说明里终端方式排在前面，任何版本都能用）
 - Linux 建议把 tar.gz 解压到用户目录
 - Linux 便携包首次使用运行 `bash install-desktop.sh`，注册应用图标和启动器（Linux 不会把图标嵌入 ELF 可执行文件）
 
