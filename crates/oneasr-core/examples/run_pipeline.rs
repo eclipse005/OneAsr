@@ -17,9 +17,7 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use oneasr_core::{
-    process_media_file_with_progress, StageClock, StageUpdate, Settings,
-};
+use oneasr_core::{Settings, StageClock, StageUpdate, process_media_file_with_progress};
 
 fn usage() -> ! {
     eprintln!(
@@ -31,9 +29,7 @@ fn usage() -> ! {
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|w| w[0] == name)
-        .map(|w| w[1].clone())
+    args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
 }
 
 fn main() {
@@ -67,6 +63,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    // This harness is a portable single-folder layout: the data directory
+    // (`models/`, `output/`, `runs/`, settings.json) is the app root itself.
+    // Pin it **before** `Settings::default()` resolves any path.
+    oneasr_core::paths::set_data_root_override(&app_root_path);
+
     let mut settings = Settings {
         language,
         chunk_target_seconds: chunk_seconds.clamp(30, 180),
@@ -77,7 +78,9 @@ fn main() {
         settings.max_new_tokens = n;
     }
     let asr_06 = app_root_path.join("models").join("Qwen3-ASR-0.6B-hf");
-    let align = app_root_path.join("models").join("Qwen3-ForcedAligner-0.6B-hf");
+    let align = app_root_path
+        .join("models")
+        .join("Qwen3-ForcedAligner-0.6B-hf");
     if asr_06.is_dir() {
         settings.asr_model_dir = asr_06;
     }
@@ -158,5 +161,3 @@ fn main() {
         }
     }
 }
-
-

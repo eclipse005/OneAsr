@@ -13,8 +13,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use oneasr_core::media::slice_wav;
 use oneasr_core::Settings;
+use oneasr_core::media::slice_wav;
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -41,10 +41,7 @@ fn main() {
     settings.language = language;
     settings.normalize();
 
-    let tmp = env::temp_dir().join(format!(
-        "oneasr_dump_{}_{}.wav",
-        start as u32, end as u32
-    ));
+    let tmp = env::temp_dir().join(format!("oneasr_dump_{}_{}.wav", start as u32, end as u32));
     slice_wav(&wav, start, end, &tmp).expect("slice_wav");
     eprintln!(
         "slice {:.3}-{:.3} ({:.1}s) -> {}",
@@ -54,8 +51,7 @@ fn main() {
         tmp.display()
     );
 
-    let asr = AsrInference::load(&settings.asr_model_dir, AsrBackend::Auto)
-        .expect("load ASR");
+    let asr = AsrInference::load(&settings.asr_model_dir, AsrBackend::Auto).expect("load ASR");
     let lang = oneasr_core::lang::to_qwen_language_label(&settings.language);
     let opts = TranscribeOptions::default()
         .with_max_new_tokens(settings.max_new_tokens)
@@ -76,5 +72,3 @@ fn main() {
 
     let _ = std::fs::remove_file(&tmp);
 }
-
-

@@ -9,6 +9,13 @@
 //! synthesized, and the fake separator writes the pipeline's own 16 kHz mono
 //! master format so the transcode step takes its copy fast-path.
 
+// 这里必须用 `cfg(debug_assertions)` 而不是 `cfg(test)`：集成测试是独立 crate，
+// 把 oneasr-core 当普通依赖编译，`cfg(test)` 只在 lib 自己那一侧成立，在这一侧
+// 恒为假 —— 那样整份文件被剔除、一个测试也不跑。`debug_assertions` 在调试/测试
+// profile 下成立，与 `engine/mod.rs` 中 `engine::testing` 的门控对齐；
+// `cargo test --release` 下本文件被整段 cfg 掉（release 构建里没有测试替身）。
+#![cfg(debug_assertions)]
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -158,7 +165,10 @@ fn engines_are_used_one_at_a_time() {
     assert_eq!(provider.separator_loads(), 0);
 
     // Stage stream still describes the run for the UI.
-    let labels: Vec<String> = stages.iter().map(|s| s.label(oneasr_core::i18n::UiLang::Zh)).collect();
+    let labels: Vec<String> = stages
+        .iter()
+        .map(|s| s.label(oneasr_core::i18n::UiLang::Zh))
+        .collect();
     assert!(labels.iter().any(|l| l == "转码音频"));
     assert!(labels.iter().any(|l| l == "加载识别模型"));
     assert!(labels.iter().any(|l| l == "加载对齐模型"));
@@ -231,7 +241,10 @@ fn separation_reports_progress_and_cpu_fallback() {
     result.expect("pipeline should succeed with a fake separator");
 
     assert_eq!(provider.separator_loads(), 1, "separator must load once");
-    let labels: Vec<String> = stages.iter().map(|s| s.label(oneasr_core::i18n::UiLang::Zh)).collect();
+    let labels: Vec<String> = stages
+        .iter()
+        .map(|s| s.label(oneasr_core::i18n::UiLang::Zh))
+        .collect();
     assert!(
         labels.iter().any(|l| l == "人声分离 1/3") && labels.iter().any(|l| l == "人声分离 3/3"),
         "progress labels missing: {labels:?}"

@@ -195,7 +195,9 @@ impl OneAsrApp {
             stats_open: false,
             stats_hover_day: None,
             // Read the ledger once at startup; refreshed on every finished task.
-            stats: oneasr_core::stats::summarize(&oneasr_core::stats::load(&app_root)),
+            stats: oneasr_core::stats::summarize(&oneasr_core::stats::load(
+                &oneasr_core::paths::data_dir(),
+            )),
             tx: tx.clone(),
             rx,
             job_tx,
@@ -211,9 +213,11 @@ impl OneAsrApp {
     /// any single task, so something has to collect its messages while the UI
     /// sits idle.
     fn start_worker_poller(cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| loop {
-            Timer::after(Duration::from_millis(80)).await;
-            this.update(cx, |app, cx| app.poll_worker(cx)).ok();
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_millis(80)).await;
+                this.update(cx, |app, cx| app.poll_worker(cx)).ok();
+            }
         })
         .detach();
     }
@@ -252,33 +256,24 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                         let mut clock = StageClock::new();
                         // A panic inside the pipeline must not kill the shared
                         // worker (that would strand `Processing` rows forever).
-                        let result =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                run_task(&path, &name, &settings, |update| {
-                                    clock.note(&update);
-                                    let warning = update.warning.as_ref().map(SharedString::from);
-                                    let _ = ptx.send(WorkerMsg::Progress {
-                                        id: id_for_progress.clone(),
-                                        stage: SharedString::from(
-                                            update.label(ui_lang()),
-                                        ),
-                                        warning,
-                                    });
-                                })
-                            }))
-                            .unwrap_or_else(|payload| {
-                                let message = panic_message(payload);
-                                crashlog::log_error(format!(
-                                    "ASR worker panic (task {id}): {message}"
-                                ));
-                                Err(crate::i18n::task_thread_panic(&message))
-                            });
-                        let timing = clock.finish();
-                        let _ = worker_tx.send(WorkerMsg::Finished {
-                            id,
-                            result,
-                            timing,
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            run_task(&path, &name, &settings, |update| {
+                                clock.note(&update);
+                                let warning = update.warning.as_ref().map(SharedString::from);
+                                let _ = ptx.send(WorkerMsg::Progress {
+                                    id: id_for_progress.clone(),
+                                    stage: SharedString::from(update.label(ui_lang())),
+                                    warning,
+                                });
+                            })
+                        }))
+                        .unwrap_or_else(|payload| {
+                            let message = panic_message(payload);
+                            crashlog::log_error(format!("ASR worker panic (task {id}): {message}"));
+                            Err(crate::i18n::task_thread_panic(&message))
                         });
+                        let timing = clock.finish();
+                        let _ = worker_tx.send(WorkerMsg::Finished { id, result, timing });
                     }
                 }
             }
@@ -321,8 +316,9 @@ fn log_settings_report(report: &oneasr_core::SettingsLoadReport) {
 }
 
 /// Environment snapshot: everything support asks for in one block — install
-/// location + writability (the os-error-5 class of report), ffmpeg, backend and
-/// per-model readiness. Probes files only; never loads weights.
+/// location + writability (the os-error-5 class of report), the resolved data
+/// directory and where it came from, ffmpeg, backend and per-model readiness.
+/// Probes files only; never loads weights.
 fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
     let writable = match probe_writable(app_root) {
         Ok(()) => "yes".to_string(),
@@ -340,16 +336,21 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
         format!(
             "{}={}",
             id.as_str(),
-            if is_model_ready(id) { "ready" } else { "missing" }
+            if is_model_ready(id) {
+                "ready"
+            } else {
+                "missing"
+            }
         )
     })
     .join(" ");
     crashlog::log_info(format!(
-        "environment:\n  settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  models: {models_line}",
+        "environment:\n  settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  data_root: {}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  models: {models_line}",
         Settings::config_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unknown>".into()),
         app_root.display(),
+        oneasr_core::paths::data_root_log_line(),
         ffmpeg_source()
             .map(|source| source.to_string())
             .unwrap_or_else(|| "MISSING".into()),
@@ -377,10 +378,12 @@ pub(crate) fn run_task(
 ) -> Result<PathBuf, String> {
     // `bin/ffmpeg` is the usual app-root marker, but a system ffmpeg on PATH
     // leaves the install dir without one — fall back to the exe directory.
-    let app_root = resolve_app_root_dir();
+    // The pipeline's scratch dir belongs to the **data** directory, not the
+    // install directory: a read-only install (system package) still runs.
+    let data_root = oneasr_core::paths::data_dir();
     // Primary deliverable: {target_dir}/{stem}.srt, or .txt when SRT output is
     // switched off (real ASR, no stubs). Runs only on the dedicated worker thread.
-    process_media_file_with_progress(path, name, settings, &app_root, on_stage)
+    process_media_file_with_progress(path, name, settings, &data_root, on_stage)
         .map_err(|e| e.to_string())
 }
 

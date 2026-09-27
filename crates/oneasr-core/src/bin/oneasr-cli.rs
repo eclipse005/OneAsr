@@ -10,6 +10,11 @@
 //!   --start 722.75 --end 842.75 --language zh
 //! ```
 //!
+//! Layout: `--app-root` is the **install** directory (`bin/ffmpeg`) and keeps its
+//! old meaning; `--data-root` (or `ONEASR_DATA_DIR`) pins the **data** directory
+//! that owns `models/`, `output/`, `runs/` and `settings.json`. Without
+//! `--data-root` the two are the same, exactly as before.
+//!
 //! Env: `ONEASR_PIPELINE_TRACE=1` prints per-chunk ASR/align detail.
 
 use std::env;
@@ -17,10 +22,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use oneasr_core::i18n;
 use oneasr_core::media::slice_wav;
+use oneasr_core::model::{HTDEMUCS_FT, QWEN_ALIGN_06B};
 use oneasr_core::{
-    ffmpeg_source, process_media_file_with_export, resolve_app_root, ProcessExportOptions,
-    StageClock, StageUpdate, Settings, ModelId,
+    ModelId, ProcessExportOptions, Settings, StageClock, StageUpdate, ffmpeg_source,
+    process_media_file_with_export, resolve_app_root,
 };
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
@@ -35,8 +42,16 @@ fn main() -> ExitCode {
         };
     }
 
-    // CLI 不读 settings.json（全部走参数），消息语言直接跟随系统——
-    // 对所有子命令生效（transcribe / asr-chunk 的错误与提示都走 i18n）。
+    // 线程池 / 线程优先级：这里**刻意不调用** `oneasr_core::init_runtime()`。
+    // 它做的唯一一件事是"给 GPUI 事件循环留一个核"（为全局 rayon 池保留一个
+    // 逻辑核），理由是让 UI 不被模型 CPU 算子饿死；CLI 没有事件循环要保护，
+    // 一次性批处理把整台机器用满才是对的，ffmpeg 作为子进程也不需要别人让路。
+    // `demote_current_thread()` 同理，那是 GUI worker 线程的优先级策略。
+
+    // CLI 不读 settings.json（全部走参数），文案语言直接跟随系统语言——
+    // 对所有子命令、所有输出生效：用法、参数校验错误、运行摘要都取自
+    // `oneasr_core::i18n`，本文件里不出现硬编码文案（键值摘要的键名即 flag 名，
+    // 两种语言一致，同样定义在 i18n）。
     oneasr_core::i18n::set_ui_lang(oneasr_core::i18n::detect_system_lang());
 
     // Default subcommand: bare flags act as `transcribe`.
@@ -54,7 +69,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         other => {
-            eprintln!("unknown command: {other}");
+            eprintln!("{}", i18n::cli_unknown_command(other));
             print_help();
             Err(2)
         }
@@ -66,52 +81,9 @@ fn main() -> ExitCode {
     }
 }
 
+/// `--help` 全文取自 `i18n::cli_help()`，两种语言各一份，改文案只改 i18n。
 fn print_help() {
-    eprintln!(
-        "\
-oneasr-cli — headless Qwen ASR + ForcedAligner pipeline
-
-Usage:
-  oneasr-cli transcribe --input <media> [options]
-  oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
-
-Commands:
-  transcribe   Full pipeline → {{app-root}}/output/{{stem}}.srt by default  (alias: run, pipeline)
-  asr-chunk    ASR only for one time range (hallucination / length debug)
-
-transcribe options:
-  --input <path>           Media file (required)
-  --app-root <dir>         App root with bin/ffmpeg, models/  (default: this exe's install dir)
-  --language <code>        zh|en|yue|ja|ko|...  (default: zh)
-  --chunk-seconds <30-180> VAD chunk target (default: 60)
-  --backend <gpu|cpu|auto> Default: auto (GPU if a driver is present, else CPU)
-  --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
-  --output <path>          Copy the primary result (SRT, else TXT) to this path
-  --txt                    Also write {{stem}}.txt (one transcript line per cue)
-  --no-srt                 Suppress the .srt file (requires --txt)
-  --script <simplified|traditional>
-                           Chinese output script for zh / yue (default: simplified)
-  --vocal-separation       Run HTDemucs vocal separation before ASR
-  --demucs-model-dir <dir> Directory holding htdemucs_ft_vocals.safetensors
-  --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
-
-asr-chunk options:
-  --wav <path>             16 kHz mono wav (required)
-  --start <sec>  --end <sec>
-  --language <code>
-  --app-root <dir>
-  --max-new-tokens <n>
-  --out <path>             Write ASR text to file
-  --backend <gpu|cpu|auto>
-
-Env:
-  ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
-
-Examples:
-  oneasr-cli transcribe --input video.mp4 --app-root D:\\OneAsr --chunk-seconds 120 --backend auto
-  oneasr-cli asr-chunk --wav runs\\x\\input_16k.wav --start 722 --end 843 --language zh
-"
-    );
+    eprintln!("{}", i18n::cli_help());
 }
 
 // ─── transcribe ───────────────────────────────────────────────────
@@ -123,6 +95,8 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     }
     let input = require_arg(args, "--input")?;
     let app_root = parse_app_root(args)?;
+    // 数据目录必须在任何 `Settings::default()` / 路径解析之前钉住。
+    let data_root = pin_data_root(args, &app_root)?;
     let language = arg(args, "--language").unwrap_or_else(|| "zh".into());
     let chunk_seconds: u32 = arg(args, "--chunk-seconds")
         .and_then(|s| s.parse().ok())
@@ -139,7 +113,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
 
     let input_path = PathBuf::from(&input);
     if !input_path.is_file() {
-        eprintln!("input not found: {}", input_path.display());
+        eprintln!("{}", i18n::cli_input_not_found(&input_path));
         return Err(1);
     }
     ensure_ffmpeg(&app_root)?;
@@ -157,13 +131,13 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     settings.output_txt = want_txt;
     settings.output_srt = !no_srt;
     if no_srt && !want_txt {
-        eprintln!("{}", oneasr_core::i18n::cli_no_srt_warning());
+        eprintln!("{}", i18n::cli_no_srt_warning());
     }
     if let Some(s) = script {
         settings.text_script = s;
     }
     settings.vocal_separation = vocal_separation;
-    apply_app_root_paths(&mut settings, &app_root);
+    apply_app_root_paths(&mut settings, &app_root, &data_root);
     if let Some(dir) = demucs_model_dir {
         settings.demucs_model_dir = dir;
     }
@@ -173,22 +147,36 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         return Err(1);
     }
 
-    eprintln!("=== OneAsr CLI · transcribe ===");
-    eprintln!("input:   {}", input_path.display());
-    eprintln!("app:     {}", app_root.display());
-    eprintln!("asr:     {}", settings.asr_model_dir.display());
-    eprintln!("align:   {}", settings.aligner_model_dir.display());
-    eprintln!("output:  {}", settings.resolved_output_dir().display());
+    eprintln!("{}", i18n::cli_transcribe_banner());
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_INPUT, &input_path));
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_APP, &app_root));
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_DATA, &data_root));
     eprintln!(
-        "lang={} chunk={}s backend={} max_new_tokens={} srt={} txt={} script={} vocal_sep={}",
-        settings.language,
-        settings.chunk_target_seconds,
-        settings.backend,
-        settings.max_new_tokens,
-        settings.output_srt,
-        settings.output_txt,
-        settings.text_script_choice().label(oneasr_core::i18n::ui_lang()),
-        settings.vocal_separation,
+        "{}",
+        i18n::cli_kv(i18n::CLI_KV_ASR, &settings.asr_model_dir)
+    );
+    eprintln!(
+        "{}",
+        i18n::cli_kv(i18n::CLI_KV_ALIGN, &settings.aligner_model_dir)
+    );
+    eprintln!(
+        "{}",
+        i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.resolved_output_dir())
+    );
+    eprintln!(
+        "{} {}",
+        i18n::cli_run_flags_decode(
+            &settings.language,
+            settings.chunk_target_seconds,
+            &settings.backend,
+            settings.max_new_tokens,
+        ),
+        i18n::cli_run_flags_output(
+            settings.output_srt,
+            settings.output_txt,
+            settings.text_script_choice().label(i18n::ui_lang()),
+            settings.vocal_separation,
+        ),
     );
 
     let media_name = input_path
@@ -205,13 +193,13 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         &input_path,
         &media_name,
         &settings,
-        &app_root,
+        &data_root,
         |update: StageUpdate| {
             clock.note(&update);
             if let Some(w) = &update.warning {
-                eprintln!("[warn] {w}");
+                eprintln!("{}", i18n::cli_warn(w));
             }
-            eprintln!("[stage] {}", update.label(oneasr_core::i18n::ui_lang()));
+            eprintln!("{}", i18n::cli_stage(&update.label(i18n::ui_lang())));
         },
         export,
     );
@@ -220,42 +208,44 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
 
     match result {
         Ok(primary) => {
-            eprintln!("OK output={}", primary.display());
+            eprintln!("{}", i18n::cli_ok_output(&primary));
             if let Some(dst) = output_copy {
                 if let Some(parent) = dst.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
                 std::fs::copy(&primary, &dst).map_err(|e| {
-                    eprintln!("copy output failed: {e}");
+                    eprintln!("{}", i18n::cli_copy_failed(&e.to_string()));
                     1
                 })?;
-                eprintln!("copied → {}", dst.display());
+                eprintln!("{}", i18n::cli_copied(&dst));
             }
             if let Some(wj) = words_json {
-                eprintln!("words → {}", wj.display());
+                eprintln!("{}", i18n::cli_words_written(&wj));
             }
             eprintln!(
-                "wall={:.1}s total_ms={} stages={}",
-                wall.as_secs_f64(),
-                timing.total_ms,
-                timing.stages.len()
+                "{}",
+                i18n::cli_timing(wall.as_secs_f64(), timing.total_ms, timing.stages.len())
             );
             for s in &timing.stages {
                 eprintln!(
-                    "  {:12} {:>8}",
-                    s.stage.label(oneasr_core::i18n::ui_lang()),
-                    oneasr_core::format_process_ms(s.elapsed_ms)
+                    "{}",
+                    i18n::cli_stage_row(
+                        s.stage.label(i18n::ui_lang()),
+                        &oneasr_core::format_process_ms(s.elapsed_ms)
+                    )
                 );
             }
             Ok(())
         }
         Err(e) => {
-            eprintln!("FAIL after {:.1}s: {e}", wall.as_secs_f64());
+            eprintln!("{}", i18n::cli_failed(wall.as_secs_f64(), &e.to_string()));
             for s in &timing.stages {
                 eprintln!(
-                    "  {:12} {:>8}",
-                    s.stage.label(oneasr_core::i18n::ui_lang()),
-                    oneasr_core::format_process_ms(s.elapsed_ms)
+                    "{}",
+                    i18n::cli_stage_row(
+                        s.stage.label(i18n::ui_lang()),
+                        &oneasr_core::format_process_ms(s.elapsed_ms)
+                    )
                 );
             }
             Err(1)
@@ -271,18 +261,16 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
         return Ok(());
     }
     let wav = PathBuf::from(require_arg(args, "--wav")?);
-    let start: f32 = require_arg(args, "--start")?
-        .parse()
-        .map_err(|_| {
-            eprintln!("--start must be a number (seconds)");
-            2
-        })?;
+    let start: f32 = require_arg(args, "--start")?.parse().map_err(|_| {
+        eprintln!("{}", i18n::cli_flag_not_number("--start"));
+        2
+    })?;
     let end: f32 = require_arg(args, "--end")?.parse().map_err(|_| {
-        eprintln!("--end must be a number (seconds)");
+        eprintln!("{}", i18n::cli_flag_not_number("--end"));
         2
     })?;
     if end <= start {
-        eprintln!("--end must be > --start");
+        eprintln!("{}", i18n::cli_end_before_start());
         return Err(2);
     }
     let language = arg(args, "--language").unwrap_or_else(|| "zh".into());
@@ -290,9 +278,10 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     let backend_s = arg(args, "--backend").unwrap_or_else(|| "auto".into());
     let max_new_tokens = arg(args, "--max-new-tokens").and_then(|s| s.parse().ok());
     let app_root = parse_app_root(args).unwrap_or_else(|_| default_app_root());
+    let data_root = pin_data_root(args, &app_root)?;
 
     if !wav.is_file() {
-        eprintln!("wav not found: {}", wav.display());
+        eprintln!("{}", i18n::cli_wav_not_found(&wav));
         return Err(1);
     }
 
@@ -304,7 +293,7 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
-    apply_app_root_paths(&mut settings, &app_root);
+    apply_app_root_paths(&mut settings, &app_root, &data_root);
     settings.normalize();
 
     let tmp = env::temp_dir().join(format!(
@@ -312,16 +301,16 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
         (start * 1000.0) as u32,
         (end * 1000.0) as u32
     ));
-    slice_wav(&wav, start, end, &tmp).map_err(|e| {
-        eprintln!("slice_wav: {e}");
+    // 拿到路径就交给守卫：下面任何一步提前返回（切片失败、路径非 UTF-8、
+    // 转写失败、写 `--out` 失败）都不会把临时切片留在 %TEMP% 里。
+    let tmp = TempFileGuard::new(tmp);
+    slice_wav(&wav, start, end, tmp.path()).map_err(|e| {
+        eprintln!("{}", i18n::cli_slice_failed(&e.to_string()));
         1
     })?;
     eprintln!(
-        "slice {:.3}-{:.3} ({:.1}s) → {}",
-        start,
-        end,
-        end - start,
-        tmp.display()
+        "{}",
+        i18n::cli_slice_done(start, end, end - start, tmp.path())
     );
 
     let backend = match settings.backend.to_ascii_lowercase().as_str() {
@@ -330,79 +319,156 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
         _ => AsrBackend::Auto,
     };
     let asr = AsrInference::load(&settings.asr_model_dir, backend).map_err(|e| {
-        eprintln!("load ASR: {e}");
+        eprintln!("{}", i18n::load_asr_failed(&e.to_string()));
         1
     })?;
     let lang = oneasr_core::lang::to_qwen_language_label(&settings.language);
     let opts = TranscribeOptions::default()
         .with_max_new_tokens(settings.max_new_tokens)
         .with_language(lang);
-    let path_str = tmp.to_str().ok_or_else(|| {
-        eprintln!("wav path is not valid UTF-8");
+    let path_str = tmp.path().to_str().ok_or_else(|| {
+        eprintln!("{}", i18n::audio_path_not_utf8());
         1
     })?;
     let t0 = Instant::now();
     let report = asr.transcribe(path_str, opts).map_err(|e| {
-        eprintln!("transcribe: {e}");
+        eprintln!("{}", i18n::cli_transcribe_failed(&e.to_string()));
         1
     })?;
     let text = report.text.trim();
     let chars = text.chars().count();
     eprintln!(
-        "chars={chars} raw_chars={} elapsed={:.1}s",
-        report.raw_output.chars().count(),
-        t0.elapsed().as_secs_f64()
+        "{}",
+        i18n::cli_chars(
+            chars,
+            report.raw_output.chars().count(),
+            t0.elapsed().as_secs_f64()
+        )
     );
-    eprintln!("--- ASR TEXT BEGIN ---");
+    eprintln!("{}", i18n::t(i18n::CLI_ASR_TEXT_BEGIN));
     println!("{text}");
-    eprintln!("--- ASR TEXT END ---");
+    eprintln!("{}", i18n::t(i18n::CLI_ASR_TEXT_END));
 
     if let Some(p) = out {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         std::fs::write(&p, text.as_bytes()).map_err(|e| {
-            eprintln!("write: {e}");
+            eprintln!("{}", i18n::cli_write_failed(&e.to_string()));
             1
         })?;
-        eprintln!("wrote {}", p.display());
+        eprintln!("{}", i18n::cli_wrote(&p));
     }
 
-    let _ = std::fs::remove_file(&tmp);
+    // 临时切片的清理交给 `TempFileGuard`（函数返回时删除，含上面每条早退路径）。
     Ok(())
+}
+
+/// 删除临时文件的 RAII 守卫。
+///
+/// `asr-chunk` 会在切片之后经历转写、写 `--out` 等多个可能提前 `?` 返回的步骤；
+/// 只有成功路径才 `remove_file` 会把几 MB 的切片永久留在 `%TEMP%` 里。守卫让
+/// 成功、失败、切片本身失败三种情况都清理，且不必在每个 `?` 旁边写一次。
+struct TempFileGuard(PathBuf);
+
+impl TempFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 // ─── shared ───────────────────────────────────────────────────────
 
-/// Bind model dirs + SRT output folder to the CLI `--app-root` layout.
+/// Bind model dirs + SRT output folder to the CLI's `--app-root` / `--data-root`.
 ///
-/// SRT path is driven by `settings.output_dir` (not the pipeline `app_root`
+/// SRT path is driven by `settings.output_dir` (not the pipeline `data_root`
 /// argument alone), so headless runs must pin it here.
-fn apply_app_root_paths(settings: &mut Settings, app_root: &Path) {
-    let models = app_root.join("models");
-    // Bind whichever catalog ASR variant is actually installed under
-    // --app-root (fp16 preferred over its int8 sibling); otherwise keep the
-    // default path so the model check reports the missing directory.
+///
+/// 目录扫描顺序 = 数据目录优先、安装目录兜底。
+///
+/// 这是**显式根**之间的选择，不是 `resolve_model_dir` 那条"显式覆盖不回头找安装
+/// 目录"的规则：CLI 的 `--app-root` / `--data-root` 都是用户自己指的路，两边都查
+/// 一遍最不容易"看不见已下好的模型"（老脚本把权重放在 `--app-root` 下，换到
+/// `--data-root` 后权重在新家）；那里防的是程序自己猜出来的 exe 目录。
+fn apply_app_root_paths(settings: &mut Settings, app_root: &Path, data_root: &Path) {
+    let roots: Vec<&Path> = if data_root == app_root {
+        vec![data_root]
+    } else {
+        vec![data_root, app_root]
+    };
+    // Bind whichever catalog ASR variant is actually installed under the data
+    // root (fp16 preferred over its int8 sibling); otherwise keep the default
+    // path so the model check reports the missing directory.
     let candidates = ModelId::ASR_CHOICES
         .into_iter()
         .chain([ModelId::Qwen3Asr06BInt8, ModelId::Qwen3Asr17BInt8]);
-    if let Some(id) = candidates.into_iter().find(|id| models.join(id.as_str()).is_dir())
-    {
+    let found = roots.iter().find_map(|root| {
+        let models = root.join("models");
+        candidates
+            .clone()
+            .find(|id| models.join(id.as_str()).is_dir())
+            .map(|id| (models.join(id.as_str()), id))
+    });
+    if let Some((dir, id)) = found {
         settings.asr_model = id.as_str().into();
-        settings.asr_model_dir = models.join(id.as_str());
+        settings.asr_model_dir = dir;
     }
-    let align = models.join("Qwen3-ForcedAligner-0.6B-hf");
-    if align.is_dir() {
-        settings.aligner_model_dir = align;
+    let align = roots
+        .iter()
+        .map(|root| root.join("models").join(QWEN_ALIGN_06B))
+        .find(|dir| dir.is_dir());
+    if let Some(dir) = align {
+        settings.aligner_model_dir = dir;
     }
-    let demucs = models.join("htdemucs_ft");
-    if demucs.is_dir() {
-        settings.demucs_model_dir = demucs;
+    let demucs = roots
+        .iter()
+        .map(|root| root.join("models").join(HTDEMUCS_FT))
+        .find(|dir| dir.is_dir());
+    if let Some(dir) = demucs {
+        settings.demucs_model_dir = dir;
     }
-    settings.output_dir = app_root.join("output");
-    // Headless runs keep writing to {app_root}/output (GUI's "next to source"
+    settings.output_dir = oneasr_core::paths::output_dir_under(data_root);
+    // Headless runs keep writing to {data-root}/output (GUI's "next to source"
     // default would be surprising for batch scripts).
     settings.save_next_to_source = false;
+}
+
+/// `--data-root`：给了就必须是目录（可以还不存在——第一次运行会在那里建
+/// `models/`）；没给返回 `None`。
+fn data_root_arg(args: &[String]) -> Result<Option<PathBuf>, i32> {
+    let Some(s) = arg(args, "--data-root") else {
+        return Ok(None);
+    };
+    let p = PathBuf::from(s);
+    if p.exists() && !p.is_dir() {
+        eprintln!("{}", i18n::cli_data_root_not_dir(&p));
+        return Err(1);
+    }
+    Ok(Some(p))
+}
+
+/// 钉住数据目录并返回它：`--data-root` 优先，否则沿用 `--app-root`
+/// （老语义：给了 `--app-root`，`models/`、`output/`、`runs/` 就都在它下面）。
+///
+/// 必须在任何 `Settings::default()` / 路径解析**之前**调用——数据目录在进程内
+/// 只解析一次（`oneasr_core::paths`）。
+fn pin_data_root(args: &[String], app_root: &Path) -> Result<PathBuf, i32> {
+    let dir = match data_root_arg(args)? {
+        Some(dir) => dir,
+        None => app_root.to_path_buf(),
+    };
+    oneasr_core::paths::set_data_root_override(dir.clone());
+    Ok(dir)
 }
 
 fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
@@ -414,30 +480,25 @@ fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
     // when that is empty too.
     match ffmpeg_source() {
         Some(source) => {
-            eprintln!("ffmpeg: no binary under {} — using {source}", bin.display());
+            eprintln!("{}", i18n::cli_ffmpeg_fallback(&bin, &source.to_string()));
             Ok(())
         }
         None => {
-            eprintln!(
-                "ffmpeg not found: put a binary in {} or install ffmpeg on PATH",
-                bin.display()
-            );
+            eprintln!("{}", i18n::cli_ffmpeg_not_found(&bin));
             Err(1)
         }
     }
 }
 
 fn default_app_root() -> PathBuf {
-    resolve_app_root().unwrap_or_else(|| {
-        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    })
+    resolve_app_root().unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn parse_app_root(args: &[String]) -> Result<PathBuf, i32> {
     if let Some(s) = arg(args, "--app-root") {
         let p = PathBuf::from(s);
         if !p.is_dir() {
-            eprintln!("--app-root not a directory: {}", p.display());
+            eprintln!("{}", i18n::cli_app_root_not_dir(&p));
             return Err(1);
         }
         return Ok(p);
@@ -446,9 +507,7 @@ fn parse_app_root(args: &[String]) -> Result<PathBuf, i32> {
 }
 
 fn arg(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|w| w[0] == name)
-        .map(|w| w[1].clone())
+    args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
 }
 
 fn flag(args: &[String], name: &str) -> bool {
@@ -457,7 +516,7 @@ fn flag(args: &[String], name: &str) -> bool {
 
 fn require_arg(args: &[String], name: &str) -> Result<String, i32> {
     arg(args, name).ok_or_else(|| {
-        eprintln!("missing required {name}");
+        eprintln!("{}", i18n::cli_missing_required(name));
         2
     })
 }
@@ -465,5 +524,3 @@ fn require_arg(args: &[String], name: &str) -> Result<String, i32> {
 fn is_help(s: &str) -> bool {
     matches!(s, "--help" | "-h" | "help")
 }
-
-

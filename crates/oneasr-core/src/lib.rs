@@ -8,8 +8,8 @@
 
 pub mod asr;
 mod diagnostics;
-pub mod i18n;
 pub mod engine;
+pub mod i18n;
 pub mod lang;
 pub mod media;
 pub mod model;
@@ -25,6 +25,7 @@ pub mod vad;
 pub use asr::{
     AsrStage, ProcessExportOptions, StageClock, StageTiming, StageUpdate, TaskTiming,
     check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir, format_process_ms,
+    invalidate_all_model_checks, invalidate_model_check, is_model_ready,
     process_media_file_with_export, process_media_file_with_progress,
     process_media_file_with_provider,
 };
@@ -41,8 +42,13 @@ pub use media::{
 pub use model::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, HTDEMUCS_FT, ModelId,
     ModelKind, QWEN3_ASR_06B, QWEN3_ASR_17B, default_aligner_model_dir, default_asr_model_dir,
-    default_demucs_model_dir, download_model, is_model_ready, probe_writable, resolve_app_root_dir,
+    default_demucs_model_dir, download_model, probe_writable, resolve_app_root_dir,
     resolve_models_root,
+};
+pub use paths::{
+    DataEnv, DataRoot, DataRootError, DataRootSource, Platform, data_dir, data_root,
+    data_root_log_line, default_output_dir, install_settings_path, redact_home, resolve_data_root,
+    runs_dir, set_data_root_override, settings_path, user_data_base,
 };
 pub use runtime::{demote_current_thread, init_runtime};
 pub use settings::{

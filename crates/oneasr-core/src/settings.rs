@@ -7,12 +7,11 @@ use std::path::{Path, PathBuf};
 
 use crate::i18n;
 use crate::lang::{default_source_language, normalize_source_language};
-use crate::media::resolve_app_root;
 use crate::model::{
     ModelId, ModelKind, QWEN3_ASR_06B, default_aligner_model_dir, default_asr_model_dir,
-    resolve_app_root_dir, resolve_model_dir,
+    resolve_model_dir,
 };
-use crate::paths::default_output_dir_for;
+use crate::paths;
 use crate::text_script::{self, TextScript};
 
 /// Inclusive lower bound for VAD ASR chunk target (seconds).
@@ -39,7 +38,9 @@ pub fn clamp_chunk_target_seconds(value: u32) -> u32 {
 
 /// User-facing settings for the Qwen ASR + ForcedAligner pipeline.
 ///
-/// Persisted as `{app_root}/settings.json` when possible.
+/// Persisted as `{data}/settings.json` — the data directory (`crate::paths`),
+/// which is the install directory in the portable layout and the platform user
+/// directory when the install directory is read-only.
 ///
 /// # ASR selection model
 /// - [`Self::asr_model`] is the **active** catalog id (`Qwen3-ASR-0.6B-hf` | `1.7B-hf`).
@@ -95,7 +96,7 @@ pub struct Settings {
     /// [`CHUNK_TARGET_DEFAULT_SEC`]).
     #[serde(default = "default_chunk_target_seconds")]
     pub chunk_target_seconds: u32,
-    /// Directory for finished `.srt` files. Default: `{app_root}/output`.
+    /// Directory for finished `.srt` files. Default: `{data}/output`.
     #[serde(default = "default_output_dir")]
     pub output_dir: PathBuf,
     /// `true` → SRT saved next to the source media file; `output_dir` is the
@@ -129,7 +130,11 @@ pub struct Settings {
     #[serde(default, rename = "ui_sound", skip_serializing_if = "Option::is_none")]
     pub legacy_ui_sound: Option<bool>,
     /// Pre-0.2.0 switch, read-only — see [`Self::legacy_ui_sound`].
-    #[serde(default, rename = "task_notify", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "task_notify",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub legacy_task_notify: Option<bool>,
 }
 
@@ -159,7 +164,7 @@ fn default_chunk_target_seconds() -> u32 {
 }
 
 fn default_output_dir() -> PathBuf {
-    default_output_dir_for(&resolve_app_root_dir())
+    paths::default_output_dir()
 }
 
 fn default_save_next_to_source() -> bool {
@@ -217,6 +222,8 @@ impl Default for Settings {
 /// portable-move model-dir self-heal without guessing.
 #[derive(Debug, Default, Clone)]
 pub struct SettingsLoadReport {
+    /// `settings.json` 实际读到的那份（数据目录优先、安装目录兜底）；都没读到
+    /// 时是数据目录里的写路径。写入永远只走数据目录。
     pub config_path: Option<PathBuf>,
     /// Non-NotFound read failure (permission, file lock, …).
     pub read_error: Option<String>,
@@ -234,13 +241,15 @@ impl SettingsLoadReport {
 }
 
 impl Settings {
+    /// `settings.json` 的**写**路径：数据目录里（`crate::paths`）。
+    ///
+    /// 数据目录解析不出来（既没有可写安装目录、也没有平台用户目录）时返回
+    /// `None`：那说明这台机器没有别的可写位置，[`Self::save`] 会给出清晰错误，
+    /// 而不是悄悄落进操作系统临时目录。
     pub fn config_path() -> Option<PathBuf> {
-        if let Some(root) = resolve_app_root() {
-            return Some(root.join("settings.json"));
-        }
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("settings.json")))
+        crate::paths::data_root()
+            .is_ok()
+            .then(crate::paths::settings_path)
     }
 
     pub fn load() -> Self {
@@ -249,32 +258,66 @@ impl Settings {
 
     /// Load + report why defaults were used, so the GUI can log it and a pasted
     /// `oneasr-error.log` explains "my settings are gone" without guessing.
+    ///
+    /// **老数据不丢**：数据目录里的 `settings.json` 优先；读不到时（老用户升级
+    /// 前把配置写在了安装目录，或安装目录后来变只读）再兜底读安装目录里的那一份，
+    /// 不下沉到默认值。写入永远只走数据目录。
     pub fn load_with_report() -> (Self, SettingsLoadReport) {
         let mut report = SettingsLoadReport {
             config_path: Self::config_path(),
             ..SettingsLoadReport::default()
         };
-        let Some(path) = report.config_path.clone() else {
-            return (Self::default(), report);
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(text) => match serde_json::from_str::<Settings>(&text) {
-                Ok(mut s) => {
-                    s.normalize_with_notes(&mut report.repairs);
-                    (s, report)
+        let candidates =
+            Self::read_candidates(&report.config_path, &paths::install_settings_path());
+        match Self::load_first_of(&candidates, &mut report) {
+            Some(settings) => (settings, report),
+            // 一个候选都没读到：落默认值（原因已记进 report）。
+            None => (Self::default(), report),
+        }
+    }
+
+    /// 按候选顺序读第一份存在的 `settings.json`；一个都没有就返回 `None`，
+    /// 由调用方落默认值。
+    ///
+    /// 候选列表由调用方注入（[`Self::read_candidates`]），所以"老数据不丢"
+    /// 这条兜底能在单测里跑真文件断言，不必去碰进程全局的数据目录。
+    fn load_first_of(candidates: &[PathBuf], report: &mut SettingsLoadReport) -> Option<Self> {
+        for path in candidates {
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    report.config_path = Some(path.clone());
+                    return Some(match serde_json::from_str::<Settings>(&text) {
+                        Ok(mut s) => {
+                            s.normalize_with_notes(&mut report.repairs);
+                            s
+                        }
+                        Err(e) => {
+                            report.parse_error = Some(e.to_string());
+                            Self::default()
+                        }
+                    });
                 }
+                // 缺失不是错误：继续看下一个候选（老用户升级后第一次读）。
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => {
-                    report.parse_error = Some(e.to_string());
-                    (Self::default(), report)
-                }
-            },
-            Err(e) => {
-                // Missing file = first run, not an error; keep only real failures.
-                if e.kind() != std::io::ErrorKind::NotFound {
                     report.read_error = Some(e.to_string());
+                    report.config_path = Some(path.clone());
+                    return Some(Self::default());
                 }
-                (Self::default(), report)
             }
+        }
+        None
+    }
+
+    /// 读取顺序：数据目录优先、安装目录兜底；两处同路径时只读一次。
+    ///
+    /// 纯函数：数据目录那份（`primary`）与老布局那份（`legacy`）都由调用方注入
+    /// —— `primary` 在数据目录解析不出来时是 `None` —— 顺序因此可直接单测。
+    fn read_candidates(primary: &Option<PathBuf>, legacy: &Path) -> Vec<PathBuf> {
+        match primary {
+            Some(primary) if primary != legacy => vec![primary.clone(), legacy.to_path_buf()],
+            Some(primary) => vec![primary.clone()],
+            None => vec![legacy.to_path_buf()],
         }
     }
 
@@ -294,12 +337,15 @@ impl Settings {
     }
 
     /// [`Self::normalize`] while recording every self-heal into `notes`.
+    ///
+    /// `notes` 是诊断文本：和 `repair_stale_model_dir` 一样写英文，GUI 会用
+    /// 英文前缀 `settings repaired: {note}` 落进同一份日志，中英混排不可读。
     pub fn normalize_with_notes(&mut self, notes: &mut Vec<String>) {
         self.language = normalize_source_language(&self.language);
         let ui_lang = i18n::normalize_ui_language(&self.ui_language);
         if ui_lang != self.ui_language {
             self.ui_language = ui_lang;
-            notes.push(format!("界面语言非法 → {}", self.ui_language));
+            notes.push(format!("invalid ui_language -> {}", self.ui_language));
         }
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
         self.normalize_output_dir();
@@ -311,7 +357,7 @@ impl Settings {
             && (self.legacy_ui_sound == Some(false) || self.legacy_task_notify == Some(false))
         {
             self.sound = false;
-            notes.push("升级前关过界面音效 / 完成提醒 → 提示音保持关闭".into());
+            notes.push("legacy ui_sound / task_notify was off -> sound stays off".into());
         }
         if self.legacy_ui_sound.is_some() || self.legacy_task_notify.is_some() {
             self.legacy_ui_sound = None;
@@ -320,7 +366,7 @@ impl Settings {
         // At least one output format must stay enabled.
         if !self.output_srt && !self.output_txt {
             self.output_srt = true;
-            notes.push("输出格式全关 → 恢复 SRT".into());
+            notes.push("all output formats were off -> SRT restored".into());
         }
         let script = TextScript::from_id(&self.text_script).id();
         if script != self.text_script {
@@ -364,9 +410,8 @@ impl Settings {
             // Install-layout defaults are recomputed per id on every read —
             // the only thing worth seeding is a genuine hand-picked folder.
             if dir != resolve_model_dir(id.as_str())
-                && ModelId::try_from_asr_dir(&dir).is_none_or(|named| {
-                    dir != resolve_model_dir(named.as_str())
-                })
+                && ModelId::try_from_asr_dir(&dir)
+                    .is_none_or(|named| dir != resolve_model_dir(named.as_str()))
             {
                 self.remember_asr_dir(id, &dir);
             }
@@ -388,14 +433,15 @@ impl Settings {
         );
     }
 
-    /// Default empty → `{app}/output`; relative → join app root (stable vs CWD).
+    /// Default empty → `{data}/output`; relative → join the data directory
+    /// (stable vs CWD, and the same place the models live).
     fn normalize_output_dir(&mut self) {
         if self.output_dir.as_os_str().is_empty() {
             self.output_dir = default_output_dir();
             return;
         }
         if self.output_dir.is_relative() {
-            self.output_dir = resolve_app_root_dir().join(&self.output_dir);
+            self.output_dir = paths::data_dir().join(&self.output_dir);
         }
     }
 
@@ -405,7 +451,7 @@ impl Settings {
             return default_output_dir();
         }
         if self.output_dir.is_relative() {
-            return resolve_app_root_dir().join(&self.output_dir);
+            return paths::data_dir().join(&self.output_dir);
         }
         self.output_dir.clone()
     }
@@ -424,8 +470,6 @@ impl Settings {
         self.resolved_output_dir()
     }
 
-    /// Chunk target used by the pipeline (always within product range).
-    #[inline]
     /// 把 `ui_language` 设置解析成具体语言：`system` 时探测操作系统，
     /// 探测失败保守回退中文（见 [`i18n::detect_system_lang`]）。
     pub fn resolved_ui_language(&self) -> i18n::UiLang {
@@ -436,6 +480,8 @@ impl Settings {
         }
     }
 
+    /// Chunk target used by the pipeline (always within product range).
+    #[inline]
     pub fn chunk_target_seconds_clamped(&self) -> u32 {
         clamp_chunk_target_seconds(self.chunk_target_seconds)
     }
@@ -483,11 +529,11 @@ impl Settings {
     }
 
     /// Directory bound to one ASR size: the folder hand-picked for it, else
-    /// the install-layout default.
+    /// the layout default ([`resolve_model_dir`] — 数据目录优先)。
     ///
     /// WYSIWYG — no folder-name guessing, no sibling lookups: what the user
     /// picked is what that size loads, and a size nobody picked simply uses
-    /// the install layout. Lookups never persist — nothing here writes
+    /// the layout default. Lookups never persist — nothing here writes
     /// `asr_dirs`.
     pub fn asr_dir_for(&self, id: ModelId) -> PathBuf {
         self.asr_dirs
@@ -509,10 +555,10 @@ impl Settings {
         id
     }
 
-    /// Remember `dir` for `id` — the install-layout default is *removed*
-    /// rather than stored: it is recomputed from the app location on every
-    /// read, and keeping it would pin this machine's absolute path into the
-    /// config (and break a moved app).
+    /// Remember `dir` for `id` — the layout default ([`resolve_model_dir`]) is
+    /// *removed* rather than stored: it is recomputed from the resolved data
+    /// directory on every read, and keeping it would pin this machine's absolute
+    /// path into the config (and break a moved app).
     fn remember_asr_dir(&mut self, id: ModelId, dir: &Path) {
         if dir == resolve_model_dir(id.as_str()).as_path() {
             self.asr_dirs.remove(id.as_str());
@@ -523,22 +569,33 @@ impl Settings {
     }
 
     /// Switch active ASR size; every size keeps its own directory — the
-    /// folder picked for it, or the install layout when it has none.
+    /// folder picked for it, or the layout default when it has none.
     pub fn select_asr_model(&mut self, id: ModelId) {
         if id.kind() != ModelKind::Asr {
             return;
         }
         self.asr_model = id.as_str().into();
         // Per-size memory: switching *back* to a size restores the folder that
-        // size was given, instead of resetting it to the install layout.
+        // size was given, instead of resetting it to the layout default.
         self.asr_model_dir = self.asr_dir_for(id);
     }
 
     /// Normalize in place, then persist to `settings.json`.
     pub fn save(&mut self) -> Result<PathBuf, String> {
         self.normalize();
-        let path = Self::config_path()
-            .ok_or_else(|| crate::i18n::settings_no_dir())?;
+        let path = match Self::config_path() {
+            Some(path) => path,
+            None => {
+                // 清晰错误：说清"没有可写的数据目录"，而不是笼统的"找不到应用目录"，
+                // 也不要在这里退回临时目录。
+                let reason = crate::paths::data_root()
+                    .as_ref()
+                    .err()
+                    .map(|e| e.message())
+                    .unwrap_or("data directory unavailable");
+                return Err(crate::i18n::settings_no_writable_dir(reason));
+            }
+        };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -638,22 +695,26 @@ mod tests {
 
     #[test]
     fn normalize_repairs_bad_ui_language() {
-        let mut s = Settings::default();
-        s.ui_language = "klingon".into();
+        let mut s = Settings {
+            ui_language: "klingon".into(),
+            ..Settings::default()
+        };
         let mut notes = Vec::new();
         s.normalize_with_notes(&mut notes);
         assert_eq!(s.ui_language, i18n::UI_LANGUAGE_SYSTEM);
-        assert!(notes.iter().any(|n| n.contains("界面语言")));
+        assert!(notes.iter().any(|n| n.contains("ui_language")));
     }
 
     #[test]
     fn normalize_keeps_valid_ui_language() {
-        let mut s = Settings::default();
-        s.ui_language = "en".into();
+        let mut s = Settings {
+            ui_language: "en".into(),
+            ..Settings::default()
+        };
         let mut notes = Vec::new();
         s.normalize_with_notes(&mut notes);
         assert_eq!(s.ui_language, "en");
-        assert!(!notes.iter().any(|n| n.contains("界面语言")));
+        assert!(!notes.iter().any(|n| n.contains("ui_language")));
     }
 
     #[test]
@@ -674,10 +735,8 @@ mod tests {
 
     #[test]
     fn can_start_requires_demucs_only_when_separation_on() {
-        let root = std::env::temp_dir().join(format!(
-            "oneasr_can_start_demucs_{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("oneasr_can_start_demucs_{}", std::process::id()));
         let asr = root.join("asr-test");
         let align = root.join("align-test");
         let demucs = root.join("demucs-test");
@@ -704,9 +763,7 @@ mod tests {
         assert!(s.can_start().is_ok(), "{:?}", s.can_start());
 
         s.vocal_separation = true;
-        let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || {
-            s.can_start().unwrap_err()
-        });
+        let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || s.can_start().unwrap_err());
         assert!(err.contains("人声分离"), "{err}");
         assert!(err.contains("htdemucs_ft_vocals.safetensors"), "{err}");
 
@@ -738,7 +795,11 @@ mod tests {
         let dir_06 = PathBuf::from(r"C:\App\models\Qwen3-ASR-0.6B-hf");
         assert!(!s.bind_download_if_active(ModelId::Qwen3Asr06B, dir_06));
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
-        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-hf"));
+        assert!(
+            s.asr_model_dir
+                .to_string_lossy()
+                .contains("Qwen3-ASR-1.7B-hf")
+        );
 
         let dir_17 = PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B-hf");
         assert!(s.bind_download_if_active(ModelId::Qwen3Asr17B, dir_17.clone()));
@@ -750,7 +811,11 @@ mod tests {
         let mut s = Settings::default();
         s.select_asr_model(ModelId::Qwen3Asr17B);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17B);
-        assert!(s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-hf"));
+        assert!(
+            s.asr_model_dir
+                .to_string_lossy()
+                .contains("Qwen3-ASR-1.7B-hf")
+        );
     }
 
     #[test]
@@ -775,7 +840,9 @@ mod tests {
         s.set_asr_quantized(false);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06B);
         assert!(
-            s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-0.6B-hf"),
+            s.asr_model_dir
+                .to_string_lossy()
+                .contains("Qwen3-ASR-0.6B-hf"),
             "{}",
             s.asr_model_dir.display()
         );
@@ -790,7 +857,9 @@ mod tests {
         s.set_asr_quantized(true);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr17BInt8);
         assert!(
-            s.asr_model_dir.to_string_lossy().contains("Qwen3-ASR-1.7B-int8"),
+            s.asr_model_dir
+                .to_string_lossy()
+                .contains("Qwen3-ASR-1.7B-int8"),
             "{}",
             s.asr_model_dir.display()
         );
@@ -805,10 +874,8 @@ mod tests {
     fn parse_round_trips_an_int8_active_model() {
         // A settings.json saved with the int8 variant active must load back as
         // exactly that variant, not fall back to fp16 0.6B.
-        let mut s: Settings = serde_json::from_str(
-            r#"{"asr_model":"Qwen3-ASR-0.6B-int8"}"#,
-        )
-        .unwrap();
+        let mut s: Settings =
+            serde_json::from_str(r#"{"asr_model":"Qwen3-ASR-0.6B-int8"}"#).unwrap();
         s.normalize();
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06BInt8);
         assert!(s.asr_quantized());
@@ -1107,6 +1174,75 @@ mod tests {
         assert!(!clean.is_notable());
     }
 
+    /// 候选顺序：数据目录优先、安装目录兜底；两处同路径只读一次。
+    #[test]
+    fn read_candidates_prefers_data_dir_then_legacy() {
+        let data = PathBuf::from(r"D:\data\settings.json");
+        let legacy = PathBuf::from(r"D:\app\settings.json");
+        assert_eq!(
+            Settings::read_candidates(&Some(data.clone()), &legacy),
+            vec![data.clone(), legacy.clone()]
+        );
+        // 便携布局：两处其实是同一个文件，只读一次。
+        assert_eq!(
+            Settings::read_candidates(&Some(data.clone()), &data),
+            vec![data.clone()]
+        );
+        // 数据目录解析不出来（既无写权限又无平台用户目录）时，只剩安装目录兜底。
+        assert_eq!(Settings::read_candidates(&None, &legacy), vec![legacy]);
+    }
+
+    /// 临时目录里造一对 `(数据目录 settings.json, 安装目录 settings.json)`。
+    fn scratch_settings_pair(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("oneasr_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("data").join(paths::SETTINGS_FILE);
+        let legacy = root.join("install").join(paths::SETTINGS_FILE);
+        (root, data, legacy)
+    }
+
+    fn write_settings(path: &Path, secs: u32) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let s = Settings {
+            chunk_target_seconds: secs,
+            ..Settings::default()
+        };
+        std::fs::write(path, serde_json::to_string(&s).unwrap()).unwrap();
+    }
+
+    /// 数据目录里没有 `settings.json`（老用户升级，或安装目录后来变只读）→
+    /// 仍读到安装目录里那一份，"老数据不丢"。
+    #[test]
+    fn load_falls_back_to_install_settings() {
+        let (root, data, legacy) = scratch_settings_pair("settings_legacy");
+        write_settings(&legacy, 90);
+        // `data` 故意不创建：读它必然 NotFound，候选要顺延到 legacy。
+
+        let mut report = SettingsLoadReport::default();
+        let candidates = Settings::read_candidates(&Some(data), &legacy);
+        let loaded = Settings::load_first_of(&candidates, &mut report).expect("legacy settings");
+        assert_eq!(loaded.chunk_target_seconds, 90);
+        assert_eq!(report.config_path.as_deref(), Some(legacy.as_path()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 两份都在 → 数据目录那份优先（写入也只走那里，安装目录那份不动）。
+    #[test]
+    fn load_prefers_data_dir_settings_over_install_copy() {
+        let (root, data, legacy) = scratch_settings_pair("settings_both");
+        write_settings(&legacy, 30);
+        write_settings(&data, 120);
+
+        let mut report = SettingsLoadReport::default();
+        let candidates = Settings::read_candidates(&Some(data.clone()), &legacy);
+        let loaded = Settings::load_first_of(&candidates, &mut report).expect("data settings");
+        assert_eq!(loaded.chunk_target_seconds, 120);
+        assert_eq!(report.config_path.as_deref(), Some(data.as_path()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn output_formats_never_end_up_all_off() {
         let mut s = Settings {
@@ -1119,7 +1255,7 @@ mod tests {
         assert!(s.output_srt, "SRT must come back when everything is off");
         assert!(!s.output_txt);
         assert!(
-            notes.iter().any(|n| n.contains("输出格式")),
+            notes.iter().any(|n| n.contains("output format")),
             "repair should be reported: {notes:?}"
         );
 
@@ -1228,16 +1364,15 @@ mod tests {
         );
 
         // Both on (or neither present) keeps the shipped default.
-        let mut loud: Settings = serde_json::from_str(
-            r#"{"language":"zh","ui_sound":true,"task_notify":true}"#,
-        )
-        .expect("0.1.9 config parses");
+        let mut loud: Settings =
+            serde_json::from_str(r#"{"language":"zh","ui_sound":true,"task_notify":true}"#)
+                .expect("0.1.9 config parses");
         loud.normalize();
         assert!(loud.sound);
 
         // The new switch itself is never overridden by anything.
-        let mut off: Settings =
-            serde_json::from_str(r#"{"language":"zh","sound":false}"#).expect("0.2.0 config parses");
+        let mut off: Settings = serde_json::from_str(r#"{"language":"zh","sound":false}"#)
+            .expect("0.2.0 config parses");
         off.normalize();
         assert!(!off.sound);
     }

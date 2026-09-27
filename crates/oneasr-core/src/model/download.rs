@@ -7,11 +7,11 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use super::catalog::{model_definition, ModelDownloadFile, ModelId};
+use super::catalog::{ModelDownloadFile, ModelId, model_definition};
 
 use super::http::{
     content_length_total, content_range_start, discard_part, download_client, initial_bytes,
@@ -35,7 +35,10 @@ pub enum DownloadState {
 pub struct DownloadProgress {
     pub state: DownloadState,
     pub model_id: ModelId,
-    /// Install-layout destination (`{app}/models/{name}`).
+    /// Directory the bytes actually land in: exactly the `model_dir` the caller
+    /// handed to [`DownloadHandle::new`] (the install layout when nothing was
+    /// picked, the user's own folder otherwise) — never a re-derived one, so
+    /// progress and the terminal outcome describe the same place.
     pub model_dir: PathBuf,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
@@ -139,6 +142,11 @@ impl DownloadHandle {
 
 /// Download (or resume) into `handle.model_dir`.
 ///
+/// The caller's directory is the contract (see [`DownloadHandle::new`]): the
+/// GUI passes whatever the settings point at for that component, so bytes must
+/// land there — re-deriving an install-layout path here is what once made the
+/// UI announce "download complete" while the weights sat somewhere else.
+///
 /// Progress callback receives **Downloading only**. Terminal state is `DownloadOutcome`.
 pub fn download_model(
     handle: &DownloadHandle,
@@ -146,7 +154,7 @@ pub fn download_model(
 ) -> DownloadOutcome {
     let id = handle.model_id;
     let definition = model_definition(id);
-    let model_dir = definition.model_dir.clone();
+    let model_dir = handle.model_dir.clone();
     let cancel = Arc::clone(&handle.cancel);
 
     if let Err(e) = std::fs::create_dir_all(&model_dir) {
@@ -157,7 +165,7 @@ pub fn download_model(
         };
     }
 
-    let (downloaded_bytes, total_bytes) = initial_bytes(&definition);
+    let (downloaded_bytes, total_bytes) = initial_bytes(&definition, &model_dir);
 
     let client = match download_client() {
         Ok(c) => c,
@@ -201,7 +209,8 @@ pub fn download_model(
         }
 
         if let Some(parent) = target.parent()
-            && let Err(e) = std::fs::create_dir_all(parent) {
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
             return ctx.failed(e.to_string());
         }
 
@@ -239,7 +248,7 @@ pub fn download_model(
         .download_files
         .iter()
         .filter_map(|f| {
-            let path = definition.model_dir.join(&f.file_name);
+            let path = model_dir.join(&f.file_name);
             if file_meets_ready_threshold(&path, f.expected_size) {
                 return None;
             }
@@ -259,9 +268,7 @@ pub fn download_model(
         };
     }
 
-    DownloadOutcome::Completed {
-        model_dir: definition.model_dir,
-    }
+    DownloadOutcome::Completed { model_dir }
 }
 
 /// Shared mutable download state for the current file + progress emission.
@@ -522,10 +529,7 @@ mod tests {
 
     #[test]
     fn catalog_size_rejects_empty_truncated_and_oversized() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr-ready-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr-ready-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("x.bin");
@@ -561,10 +565,7 @@ mod tests {
 
     #[test]
     fn sha256_matches_lowercase_and_uppercase() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr-sha-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr-sha-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("abc.bin");
@@ -592,10 +593,7 @@ mod tests {
 
     #[test]
     fn probe_writable_creates_dir_and_cleans_up() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr-probe-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr-probe-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
 
         probe_writable(&dir).expect("fresh temp dir must be writable");
@@ -607,7 +605,10 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .filter(|n| n.to_string_lossy().starts_with(".oneasr-write-probe"))
             .collect();
-        assert!(leftovers.is_empty(), "probe files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "probe files left behind: {leftovers:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

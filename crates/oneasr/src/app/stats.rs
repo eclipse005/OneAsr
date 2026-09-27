@@ -4,9 +4,9 @@
 use crate::app::prelude::*;
 
 impl OneAsrApp {
-    /// Ledger root — the app folder, next to `settings.json`.
+    /// Ledger root — the data directory, next to `settings.json`.
     pub(crate) fn stats_root() -> PathBuf {
-        resolve_app_root_dir()
+        paths::data_dir()
     }
 
     /// Re-aggregate the ledger into the cached summary.

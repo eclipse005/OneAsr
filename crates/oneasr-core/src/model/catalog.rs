@@ -1,9 +1,5 @@
 //! File lists + ModelScope URLs for the official Qwen `-hf` checkpoints.
 
-use std::path::PathBuf;
-
-use super::path::resolve_model_dir;
-
 pub const QWEN3_ASR_06B: &str = "Qwen3-ASR-0.6B-hf";
 pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B-hf";
 /// Int8-quantized checkpoints of the two ASR sizes, published by the same
@@ -166,10 +162,15 @@ pub struct ModelDownloadFile {
     pub sha256: &'static str,
 }
 
+/// 一个模型"要下什么、要查什么"——**不含落点**。
+///
+/// 落点由调用方给出（[`super::DownloadHandle::new`] 的 `model_dir`，也就是设置
+/// 里为这个组件配的那个目录）；目录策略只在 `crate::paths` / `resolve_model_dir`
+/// 判定一次。这里不留第二份 `model_dir`，否则"定义自带的目录"和"调用方要的目录"
+/// 迟早会分叉——那正是下载落到别处却报"完成"的根因。
 #[derive(Debug, Clone)]
 pub struct ModelDefinition {
     pub id: ModelId,
-    pub model_dir: PathBuf,
     pub required_files: Vec<String>,
     pub download_files: Vec<ModelDownloadFile>,
 }
@@ -185,64 +186,31 @@ struct CatalogFile {
 
 pub fn model_definition(id: ModelId) -> ModelDefinition {
     match id {
-        ModelId::Qwen3Asr06B => model_def(
-            id,
-            "Qwen",
-            QWEN3_ASR_06B,
-            resolve_model_dir(QWEN3_ASR_06B),
-            qwen3_asr_06b_files(),
-        ),
-        ModelId::Qwen3Asr17B => model_def(
-            id,
-            "Qwen",
-            QWEN3_ASR_17B,
-            resolve_model_dir(QWEN3_ASR_17B),
-            qwen3_asr_17b_files(),
-        ),
+        ModelId::Qwen3Asr06B => model_def(id, "Qwen", QWEN3_ASR_06B, qwen3_asr_06b_files()),
+        ModelId::Qwen3Asr17B => model_def(id, "Qwen", QWEN3_ASR_17B, qwen3_asr_17b_files()),
         // The int8 checkpoints are published by the same account as the Demucs
         // shard; loader treats them identically to the fp16 ones.
         ModelId::Qwen3Asr06BInt8 => model_def(
             id,
             "eclipse005",
             QWEN3_ASR_06B_INT8,
-            resolve_model_dir(QWEN3_ASR_06B_INT8),
             qwen3_asr_06b_int8_files(),
         ),
         ModelId::Qwen3Asr17BInt8 => model_def(
             id,
             "eclipse005",
             QWEN3_ASR_17B_INT8,
-            resolve_model_dir(QWEN3_ASR_17B_INT8),
             qwen3_asr_17b_int8_files(),
         ),
-        ModelId::QwenAlign06B => model_def(
-            id,
-            "Qwen",
-            QWEN_ALIGN_06B,
-            resolve_model_dir(QWEN_ALIGN_06B),
-            qwen_align_files(),
-        ),
+        ModelId::QwenAlign06B => model_def(id, "Qwen", QWEN_ALIGN_06B, qwen_align_files()),
         // ModelScope repo name differs from the install-layout folder name.
-        ModelId::HtdemucsFt => model_def(
-            id,
-            "eclipse005",
-            "htdemucs",
-            resolve_model_dir(HTDEMUCS_FT),
-            htdemucs_ft_files(),
-        ),
+        ModelId::HtdemucsFt => model_def(id, "eclipse005", "htdemucs", htdemucs_ft_files()),
     }
 }
 
-fn model_def(
-    id: ModelId,
-    owner: &str,
-    repo: &str,
-    model_dir: PathBuf,
-    files: Vec<CatalogFile>,
-) -> ModelDefinition {
+fn model_def(id: ModelId, owner: &str, repo: &str, files: Vec<CatalogFile>) -> ModelDefinition {
     ModelDefinition {
         id,
-        model_dir,
         required_files: files.iter().map(|f| f.file_name.to_string()).collect(),
         download_files: files
             .iter()
@@ -412,30 +380,39 @@ mod tests {
     fn asr_and_align_catalogs_are_official_qwen_hf() {
         let asr = model_definition(ModelId::Qwen3Asr06B);
         let align = model_definition(ModelId::QwenAlign06B);
-        assert!(asr
-            .download_files
-            .iter()
-            .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-0.6B-hf/")));
-        assert!(align
-            .download_files
-            .iter()
-            .all(|f| f.url.contains("models/Qwen/Qwen3-ForcedAligner-0.6B-hf/")));
+        assert!(
+            asr.download_files
+                .iter()
+                .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-0.6B-hf/"))
+        );
+        assert!(
+            align
+                .download_files
+                .iter()
+                .all(|f| f.url.contains("models/Qwen/Qwen3-ForcedAligner-0.6B-hf/"))
+        );
         let asr17 = model_definition(ModelId::Qwen3Asr17B);
-        assert!(asr17
-            .download_files
-            .iter()
-            .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-1.7B-hf/")));
+        assert!(
+            asr17
+                .download_files
+                .iter()
+                .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-1.7B-hf/"))
+        );
         // The int8 checkpoints ship from the same account as the Demucs shard.
         let asr06_int8 = model_definition(ModelId::Qwen3Asr06BInt8);
-        assert!(asr06_int8
-            .download_files
-            .iter()
-            .all(|f| f.url.contains("models/eclipse005/Qwen3-ASR-0.6B-int8/")));
+        assert!(
+            asr06_int8
+                .download_files
+                .iter()
+                .all(|f| f.url.contains("models/eclipse005/Qwen3-ASR-0.6B-int8/"))
+        );
         let asr17_int8 = model_definition(ModelId::Qwen3Asr17BInt8);
-        assert!(asr17_int8
-            .download_files
-            .iter()
-            .all(|f| f.url.contains("models/eclipse005/Qwen3-ASR-1.7B-int8/")));
+        assert!(
+            asr17_int8
+                .download_files
+                .iter()
+                .all(|f| f.url.contains("models/eclipse005/Qwen3-ASR-1.7B-int8/"))
+        );
         // int8 weights are smaller than their fp16 counterparts.
         let fp16 = model_definition(ModelId::Qwen3Asr06B);
         let int8_size = asr06_int8
@@ -496,12 +473,11 @@ mod tests {
         let file = &def.download_files[0];
         assert_eq!(file.file_name, weights);
         assert!(file.url.contains("models/eclipse005/htdemucs/"));
-        assert!(file.url.contains("/resolve/d7057b07a0432fede79326e7d56f50c031d9cb50/"));
         assert!(
-            file.url.ends_with(&format!("/{weights}")),
-            "{}",
             file.url
+                .contains("/resolve/d7057b07a0432fede79326e7d56f50c031d9cb50/")
         );
+        assert!(file.url.ends_with(&format!("/{weights}")), "{}", file.url);
         assert_eq!(file.expected_size, 84_025_440);
         assert_eq!(
             file.sha256,
@@ -532,9 +508,7 @@ mod tests {
             Some(ModelId::Qwen3Asr17B)
         );
         assert_eq!(
-            ModelId::try_from_asr_dir(std::path::Path::new(
-                r"C:\m\Qwen3-ASR-0.6B-int8"
-            )),
+            ModelId::try_from_asr_dir(std::path::Path::new(r"C:\m\Qwen3-ASR-0.6B-int8")),
             Some(ModelId::Qwen3Asr06BInt8)
         );
         assert_eq!(
@@ -560,9 +534,15 @@ mod tests {
             ModelId::Qwen3Asr17BInt8.with_quant(false),
             ModelId::Qwen3Asr17B
         );
-        assert_eq!(ModelId::Qwen3Asr06B.with_quant(true), ModelId::Qwen3Asr06BInt8);
+        assert_eq!(
+            ModelId::Qwen3Asr06B.with_quant(true),
+            ModelId::Qwen3Asr06BInt8
+        );
         // Non-ASR ids are unaffected.
-        assert_eq!(ModelId::QwenAlign06B.with_quant(true), ModelId::QwenAlign06B);
+        assert_eq!(
+            ModelId::QwenAlign06B.with_quant(true),
+            ModelId::QwenAlign06B
+        );
         assert_eq!(ModelId::QwenAlign06B.asr_base(), ModelId::QwenAlign06B);
         // The four ASR ids carry their own size label.
         assert_eq!(ModelId::Qwen3Asr17BInt8.short_label(), "1.7B");

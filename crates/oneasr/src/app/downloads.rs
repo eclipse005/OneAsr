@@ -17,30 +17,33 @@ impl OneAsrApp {
             return;
         }
 
+        // Downloads land where the app looks for the weights: the user's own
+        // folder when one was picked, else the install layout. Single source for
+        // the rest of this function — the gate and the job must agree.
+        let model_dir = match id.kind() {
+            ModelKind::Asr => self.settings.asr_model_dir.clone(),
+            ModelKind::Align => self.settings.aligner_model_dir.clone(),
+            ModelKind::Demucs => self.settings.resolved_demucs_model_dir(),
+        };
+
+        // 就绪缓存失效（下载前置）: the user may have deleted files since the
+        // last successful probe, and a cached "ready" would then block the very
+        // re-download they asked for. Re-stat here, once.
+        oneasr_core::invalidate_model_check(&model_dir);
+
         // Re-download gate: verify what is already on disk **before** entering
         // the download state, so clicking 重新下载 on a complete install never
         // flashes the card into progress mode — it only reports completeness.
         let verified = match id.kind() {
-            ModelKind::Asr => check_asr_model_dir(&self.settings.asr_model_dir),
-            ModelKind::Align => {
-                oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir)
-            }
-            ModelKind::Demucs => {
-                oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir())
-            }
+            ModelKind::Asr => check_asr_model_dir(&model_dir),
+            ModelKind::Align => oneasr_core::check_aligner_model_dir(&model_dir),
+            ModelKind::Demucs => oneasr_core::check_demucs_model_dir(&model_dir),
         };
         if verified.is_ok() {
             self.flash_hint(t(L::MODEL_FILES_COMPLETE), cx);
             return;
         }
 
-        // Downloads land where the app looks for the weights: the user's own
-        // folder when one was picked, else the install layout.
-        let model_dir = match id.kind() {
-            ModelKind::Asr => self.settings.asr_model_dir.clone(),
-            ModelKind::Align => self.settings.aligner_model_dir.clone(),
-            ModelKind::Demucs => self.settings.resolved_demucs_model_dir(),
-        };
         let handle = DownloadHandle::new(id, model_dir);
         let model_dir = handle.model_dir.clone();
         // Environment snapshot before the thread starts: when a download later
@@ -60,17 +63,15 @@ impl OneAsrApp {
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
             ModelKind::Demucs => self.demucs_dl_handle = Some(handle.clone()),
         }
-        self.set_download_progress(
-            DownloadProgress {
-                state: DownloadState::Downloading,
-                model_id: id,
-                model_dir: model_dir.clone(),
-                downloaded_bytes: 0,
-                total_bytes: 0,
-                speed_bytes_per_sec: 0,
-                message: String::new(),
-            },
-        );
+        self.set_download_progress(DownloadProgress {
+            state: DownloadState::Downloading,
+            model_id: id,
+            model_dir: model_dir.clone(),
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0,
+            message: String::new(),
+        });
 
         let tx = self.tx.clone();
         let spawn_dir = model_dir.clone();
@@ -110,7 +111,8 @@ impl OneAsrApp {
             ModelKind::Demucs => self.demucs_dl_handle.as_ref(),
         };
         if let Some(h) = handle
-            && h.model_id == id {
+            && h.model_id == id
+        {
             h.cancel();
             self.flash_hint(t(L::CANCELLING_DOWNLOAD), cx);
         }
@@ -120,7 +122,10 @@ impl OneAsrApp {
     /// True while **this** model id is downloading (UI busy / cancel for that row).
     pub(crate) fn download_busy(&self, id: ModelId) -> bool {
         let handle_match = match id.kind() {
-            ModelKind::Asr => self.asr_dl_handle.as_ref().is_some_and(|h| h.model_id == id),
+            ModelKind::Asr => self
+                .asr_dl_handle
+                .as_ref()
+                .is_some_and(|h| h.model_id == id),
             ModelKind::Align => self
                 .align_dl_handle
                 .as_ref()
@@ -131,7 +136,9 @@ impl OneAsrApp {
                 .is_some_and(|h| h.model_id == id),
         };
         handle_match
-            || self.progress_for(id).is_some_and(|p| p.state == DownloadState::Downloading)
+            || self
+                .progress_for(id)
+                .is_some_and(|p| p.state == DownloadState::Downloading)
     }
 
     /// One concurrent download per kind (0.6B and 1.7B share the ASR slot).
@@ -175,11 +182,7 @@ impl OneAsrApp {
             ModelKind::Align => self.align_download.as_ref(),
             ModelKind::Demucs => self.demucs_download.as_ref(),
         }?;
-        if p.model_id == id {
-            Some(p)
-        } else {
-            None
-        }
+        if p.model_id == id { Some(p) } else { None }
     }
 
     pub(crate) fn set_download_progress(&mut self, progress: DownloadProgress) {

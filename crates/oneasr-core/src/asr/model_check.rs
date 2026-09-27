@@ -1,4 +1,9 @@
 //! Model-directory validation: does this folder hold a complete, loadable set of weights? Cached, because the settings drawer probes on every repaint.
+//!
+//! **唯一的就绪判定**：设置抽屉、状态栏、下载前置校验、环境快照都走这里的
+//! `check_*_model_dir` / [`is_model_ready`]，不再有第二套判据对同一个问题给出
+//! 相反答案。缓存只存成功，并有明确的失效入口（[`invalidate_model_check`] /
+//! [`invalidate_all_model_checks`]）：下载完成、模型目录变更时失效。
 
 use super::AsrError;
 use crate::i18n::{self, ROLE_ALIGNER, ROLE_ASR, ROLE_DEMUCS};
@@ -7,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
+
+use crate::model::{ModelId, ModelKind, resolve_model_dir};
 
 // Ready-dir cache: sequential jobs hit the same model path; a poisoned lock
 // is a miss (re-stat) rather than a worker panic. Failures are not cached —
@@ -37,6 +44,44 @@ fn cached_ready_store(role: ModelRole, canonical: PathBuf) {
     }
 }
 
+/// 丢掉某个目录的"就绪"缓存。
+///
+/// **失效策略**：`(role, canonical)` 只在被写入的目录上内存活；下载完成、
+/// 模型目录被换掉 / 重新选择、目录里的文件被删改之后必须调用，否则同一个目录
+/// 会因为一次成功而永远算"就绪"。两个入口：
+/// - 下载开始前（让重下载闸门看到磁盘真实状态）；
+/// - 下载完成后、以及设置里换目录之后。
+pub fn invalidate_model_check(model_dir: &Path) {
+    let Ok(canonical) = std::fs::canonicalize(model_dir) else {
+        // 目录不存在 → 缓存键它本来就不在（`run_cached_model_check` 只在
+        // canonicalize 成功时才写缓存），无需清理。
+        return;
+    };
+    if let Ok(mut guard) = model_dir_ready_cache().lock() {
+        guard.retain(|(_, dir)| dir != &canonical);
+    }
+}
+
+/// 清空全部缓存（换根、以及测试用）。
+pub fn invalidate_all_model_checks() {
+    if let Ok(mut guard) = model_dir_ready_cache().lock() {
+        guard.clear();
+    }
+}
+
+/// 安装布局里那个目录（按 id）算不算就绪 —— 与 `check_*_model_dir` **同一判据**。
+///
+/// 供环境快照这类"按 id 报一行状态"的场景使用：它问的就是
+/// `{models}/{id}` 这个安装布局目录。
+pub fn is_model_ready(id: ModelId) -> bool {
+    let dir = resolve_model_dir(id.as_str());
+    match id.kind() {
+        ModelKind::Asr => check_asr_model_dir(&dir).is_ok(),
+        ModelKind::Align => check_aligner_model_dir(&dir).is_ok(),
+        ModelKind::Demucs => check_demucs_model_dir(&dir).is_ok(),
+    }
+}
+
 /// Check ASR model directory with success-path caching.
 ///
 /// Catalog-named install-layout dirs are validated against the catalog's exact
@@ -47,11 +92,7 @@ pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Asr, model_dir, || {
         match crate::model::ModelId::try_from_asr_dir(model_dir) {
             Some(id) => check_model_dir_against_catalog(ROLE_ASR, model_dir, id),
-            None => check_model_dir_inner(
-                ROLE_ASR,
-                model_dir,
-                &["config.json", "tokenizer.json"],
-            ),
+            None => check_model_dir_inner(ROLE_ASR, model_dir, &["config.json", "tokenizer.json"]),
         }
     })
 }

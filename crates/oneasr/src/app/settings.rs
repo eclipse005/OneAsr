@@ -5,13 +5,18 @@ use crate::app::prelude::*;
 impl OneAsrApp {
     /// Fast FS check for status bar + settings dots. Does not touch GPU / weights.
     /// Call after path / download / backend changes — not on every scroll paint.
+    ///
+    /// **唯一的就绪缓存失效入口**：这个函数只在"路径 / 下载 / 后端刚变过"时被
+    /// 调用，正是磁盘内容可能已经变了的时刻（下载落盘、用户换目录、删掉文件）。
+    /// 抽屉与状态栏每帧只读下面这几个布尔值，不重复打文件系统；真正的
+    /// "一个目录算不算就绪"判据只有 `check_*_model_dir`（见 `model_check`）。
     pub(crate) fn refresh_model_probe(&mut self) {
+        oneasr_core::invalidate_all_model_checks();
         self.asr_ready = check_asr_model_dir(&self.settings.asr_model_dir).is_ok();
         self.align_ready =
             oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
         self.demucs_ready =
-            oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir())
-                .is_ok();
+            oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir()).is_ok();
         self.model_status = if self.settings.can_start().is_ok() {
             ModelStatus::Ready
         } else {
@@ -216,9 +221,7 @@ impl OneAsrApp {
             let anim_id = task.id.clone();
             self.tasks.push(task);
             // Wave: fade the new row in (symmetric with delete exit).
-            self.entering
-                .entry(anim_id)
-                .or_insert_with(Instant::now);
+            self.entering.entry(anim_id).or_insert_with(Instant::now);
         }
         // Feedback = list itself (no toast) — plus one tap for the whole drop.
         // Deliberately NOT one per file: dropping 20 files must not stutter.

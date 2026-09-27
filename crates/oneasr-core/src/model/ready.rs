@@ -1,21 +1,11 @@
-//! Readiness probes: are the weight files in place, and can we write to the install directory?
+//! 就绪探测的**零件**：单个文件够不够大、以及某个目录收不收写。
+//!
+//! 「一个模型目录算不算就绪」只有一处判定 ——
+//! [`crate::asr::model_check`] 的 `check_*_model_dir`（带过期策略的缓存），
+//! 这里只提供它和下载流程共用的两个基础谓词。别在这里再造第二套判据。
 
 use std::io::Write;
 use std::path::Path;
-
-use super::catalog::{model_definition, ModelId};
-
-/// Whether all catalog files are present at their exact pinned sizes.
-///
-/// Hashing multi-GB weights on every readiness probe would be far too slow, so
-/// readiness is size-based; SHA-256 is verified once at download time.
-pub fn is_model_ready(id: ModelId) -> bool {
-    let def = model_definition(id);
-    def.download_files.iter().all(|file| {
-        let path = def.model_dir.join(&file.file_name);
-        file_meets_ready_threshold(&path, file.expected_size)
-    })
-}
 
 /// File exists at exactly `expected_size` bytes (size read from the pinned
 /// revision). Returns `false` for missing, zero-byte, truncated, or oversized

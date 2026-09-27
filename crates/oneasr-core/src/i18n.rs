@@ -124,12 +124,15 @@ pub const ERR_IO: Str = Str::new("I/O 错误", "I/O error");
 pub const ERR_MEDIA: Str = Str::new("音频处理错误", "Audio processing error");
 pub const ERR_EMPTY_ALIGNMENT: Str =
     Str::new("对齐后词列表为空", "Word list is empty after alignment");
-pub const ERR_EMPTY_SENTENCE_BOUNDARY: Str =
-    Str::new("断句后字幕为空", "Subtitle is empty after sentence segmentation");
-pub const ERR_READ_DURATION: Str =
-    Str::new("无法读取转码后音频时长", "Cannot read the converted audio duration");
-pub const ERR_NO_OUTPUT_FORMAT: Str =
-    Str::new("未启用任何输出格式", "No output format is enabled");
+pub const ERR_EMPTY_SENTENCE_BOUNDARY: Str = Str::new(
+    "断句后字幕为空",
+    "Subtitle is empty after sentence segmentation",
+);
+pub const ERR_READ_DURATION: Str = Str::new(
+    "无法读取转码后音频时长",
+    "Cannot read the converted audio duration",
+);
+pub const ERR_NO_OUTPUT_FORMAT: Str = Str::new("未启用任何输出格式", "No output format is enabled");
 
 /// `语音识别未产生任何有效文本（{n} 段全部为空）`
 /// / `Transcription produced no usable text ({n} segments, all empty)`。
@@ -197,7 +200,9 @@ pub fn sep_gpu_fallback(reason: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("人声分离 GPU 不可用，已改用 CPU（速度明显变慢）：{reason}"),
         UiLang::En => {
-            format!("Vocal separation: GPU unavailable, falling back to CPU (much slower): {reason}")
+            format!(
+                "Vocal separation: GPU unavailable, falling back to CPU (much slower): {reason}"
+            )
         }
     }
 }
@@ -322,7 +327,10 @@ pub fn sep_no_vocals() -> &'static str {
 pub fn sep_read_input_failed(path: &std::path::Path, e: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("读取分离输入失败 {}: {e}", path.display()),
-        UiLang::En => format!("Failed to read the separation input {}: {e}", path.display()),
+        UiLang::En => format!(
+            "Failed to read the separation input {}: {e}",
+            path.display()
+        ),
     }
 }
 
@@ -487,12 +495,17 @@ pub fn weight_file_missing() -> String {
     }
 }
 
-/// `找不到应用目录，无法保存设置`
-/// / `Cannot find the app folder — settings were not saved`。
-pub fn settings_no_dir() -> String {
+/// `找不到可写的数据目录（…），设置未保存`
+/// / `Cannot find a writable data directory (…) — settings were not saved`。
+///
+/// `reason` 是 [`crate::paths::DataRootError::message`] 的英文技术原因（哪个
+/// 环境变量缺失），两种语言都原样带上，用户照着补环境变量即可。
+pub fn settings_no_writable_dir(reason: &str) -> String {
     match ui_lang() {
-        UiLang::Zh => "找不到应用目录，无法保存设置".into(),
-        UiLang::En => "Cannot find the app folder — settings were not saved".into(),
+        UiLang::Zh => format!("找不到可写的数据目录（{reason}），设置未保存"),
+        UiLang::En => {
+            format!("Cannot find a writable data directory ({reason}) — settings were not saved")
+        }
     }
 }
 
@@ -505,12 +518,383 @@ pub fn cli_no_srt_warning() -> &'static str {
     }
 }
 
+// ─── CLI（oneasr-cli）自产文案的双语表 ──────────────────────────────
+//
+// `oneasr-cli` 随安装包发货，是用户可见入口，所以 **CLI 的每一条输出（用法、
+// 参数校验错误、运行摘要、诊断行）都从这里取词**，bin 里不再出现硬编码文案。
+// 不一致的地方才是真正的例外：`lang=` / `wall=` / `chars=` 这类键值摘要的键名
+// 就是 flag 名，`--- ASR TEXT ---` 是定位标记，两种语言文本一致，但仍集中
+// 定义在这里，保证「所有 CLI 输出只有一个来源」。
+
+/// `--help` 全文；两种语言各一份，成对维护。
+pub fn cli_help() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => CLI_HELP_ZH,
+        UiLang::En => CLI_HELP_EN,
+    }
+}
+
+const CLI_HELP_EN: &str = "\
+oneasr-cli — headless Qwen ASR + ForcedAligner pipeline
+
+Usage:
+  oneasr-cli transcribe --input <media> [options]
+  oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
+
+Commands:
+  transcribe   Full pipeline → {data-root}/output/{stem}.srt by default  (alias: run, pipeline)
+  asr-chunk    ASR only for one time range (hallucination / length debug)
+
+transcribe options:
+  --input <path>           Media file (required)
+  --app-root <dir>         App root with bin/ffmpeg  (default: this exe's install dir)
+  --data-root <dir>        Directory holding models/, output/, runs/ and settings.json
+                           (default: --app-root; when the install dir is not writable
+                           the platform user data dir is used instead)
+  --language <code>        zh|en|yue|ja|ko|...  (default: zh)
+  --chunk-seconds <30-180> VAD chunk target (default: 60)
+  --backend <gpu|cpu|auto> Default: auto (GPU if a driver is present, else CPU)
+  --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
+  --output <path>          Copy the primary result (SRT, else TXT) to this path
+  --txt                    Also write {stem}.txt (one transcript line per cue)
+  --no-srt                 Suppress the .srt file (requires --txt)
+  --script <simplified|traditional>
+                           Chinese output script for zh / yue (default: simplified)
+  --vocal-separation       Run HTDemucs vocal separation before ASR
+  --demucs-model-dir <dir> Directory holding htdemucs_ft_vocals.safetensors
+  --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
+
+asr-chunk options:
+  --wav <path>             16 kHz mono wav (required)
+  --start <sec>  --end <sec>
+  --language <code>
+  --app-root <dir>
+  --data-root <dir>
+  --max-new-tokens <n>
+  --out <path>             Write ASR text to file
+  --backend <gpu|cpu|auto>
+
+Env:
+  ONEASR_DATA_DIR=<dir>    Override the data directory (same as --data-root)
+  ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
+
+Examples:
+  oneasr-cli transcribe --input video.mp4 --app-root D:\\OneAsr --chunk-seconds 120 --backend auto
+  oneasr-cli asr-chunk --wav runs\\x\\input_16k.wav --start 722 --end 843 --language zh";
+
+const CLI_HELP_ZH: &str = "\
+oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
+
+用法：
+  oneasr-cli transcribe --input <音视频> [选项]
+  oneasr-cli asr-chunk  --wav <16k.wav> --start <秒> --end <秒> [选项]
+
+子命令：
+  transcribe   完整流水线，默认输出到 {data-root}/output/{stem}.srt（别名：run、pipeline）
+  asr-chunk    只对一段时间做转写（排查幻觉 / 长度问题）
+
+transcribe 选项：
+  --input <路径>           音视频文件（必填）
+  --app-root <目录>        应用目录（含 bin/ffmpeg；默认取本程序安装目录）
+  --data-root <目录>       数据目录（放 models/、output/、runs/ 与 settings.json；
+                           默认取 --app-root；安装目录不可写时自动改用平台用户目录）
+  --language <代码>        zh|en|yue|ja|ko|...（默认 zh）
+  --chunk-seconds <30-180> VAD 分段目标时长（默认 60）
+  --backend <gpu|cpu|auto> 推理后端，默认 auto（有显卡驱动走 GPU，否则 CPU）
+  --max-new-tokens <n>     转写解码上限（默认取设置 / 2048）
+  --output <路径>          把主产物（SRT，没有则 TXT）复制到该路径
+  --txt                    额外写出 {stem}.txt（每条字幕一行转写）
+  --no-srt                 不写 .srt 文件（需配合 --txt）
+  --script <simplified|traditional>
+                           zh / yue 的中文字形（默认 simplified）
+  --vocal-separation       转写前先做人声分离
+  --demucs-model-dir <目录> 存放 htdemucs_ft_vocals.safetensors 的目录
+  --words-json <路径>      写出 ForcedAligner 的词/字级时间轴（JSON）
+
+asr-chunk 选项：
+  --wav <路径>             16 kHz 单声道 wav（必填）
+  --start <秒>  --end <秒>
+  --language <代码>
+  --app-root <目录>
+  --data-root <目录>
+  --max-new-tokens <n>
+  --out <路径>             把转写文本写入文件
+  --backend <gpu|cpu|auto>
+
+环境变量：
+  ONEASR_DATA_DIR=<目录>   覆盖数据目录（等价于 --data-root）
+  ONEASR_PIPELINE_TRACE=1  打印每个分段的转写/对齐细节
+
+示例：
+  oneasr-cli transcribe --input video.mp4 --app-root D:\\OneAsr --chunk-seconds 120 --backend auto
+  oneasr-cli asr-chunk --wav runs\\x\\input_16k.wav --start 722 --end 843 --language zh";
+
+/// `未知命令: {other}` / `unknown command: {other}`。
+pub fn cli_unknown_command(other: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("未知命令: {other}"),
+        UiLang::En => format!("unknown command: {other}"),
+    }
+}
+
+/// `缺少必需参数 {name}` / `missing required {name}`。
+pub fn cli_missing_required(name: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("缺少必需参数 {name}"),
+        UiLang::En => format!("missing required {name}"),
+    }
+}
+
+/// `{flag} 必须是数字（秒）` / `{flag} must be a number (seconds)`。
+pub fn cli_flag_not_number(flag: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("{flag} 必须是数字（秒）"),
+        UiLang::En => format!("{flag} must be a number (seconds)"),
+    }
+}
+
+/// `--end 必须大于 --start` / `--end must be > --start`。
+pub fn cli_end_before_start() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "--end 必须大于 --start",
+        UiLang::En => "--end must be > --start",
+    }
+}
+
+/// `找不到输入文件: {path}` / `input not found: {path}`。
+pub fn cli_input_not_found(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("找不到输入文件: {}", path.display()),
+        UiLang::En => format!("input not found: {}", path.display()),
+    }
+}
+
+/// `找不到 wav 文件: {path}` / `wav not found: {path}`。
+pub fn cli_wav_not_found(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("找不到 wav 文件: {}", path.display()),
+        UiLang::En => format!("wav not found: {}", path.display()),
+    }
+}
+
+/// `--app-root 不是目录: {path}` / `--app-root not a directory: {path}`。
+pub fn cli_app_root_not_dir(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("--app-root 不是目录: {}", path.display()),
+        UiLang::En => format!("--app-root not a directory: {}", path.display()),
+    }
+}
+
+/// `--data-root 已存在但不是目录: {path}`
+/// / `--data-root exists but is not a directory: {path}`。
+///
+/// 不存在的目录是合法的（第一次运行会在那里建 `models/`），只有"存在但不是
+/// 目录"才是参数错误。
+pub fn cli_data_root_not_dir(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("--data-root 已存在但不是目录: {}", path.display()),
+        UiLang::En => format!(
+            "--data-root exists but is not a directory: {}",
+            path.display()
+        ),
+    }
+}
+
+/// `=== OneAsr CLI · 转写 ===` / `=== OneAsr CLI · transcribe ===`。
+pub fn cli_transcribe_banner() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "=== OneAsr CLI · 转写 ===",
+        UiLang::En => "=== OneAsr CLI · transcribe ===",
+    }
+}
+
+/// 运行摘要的字段名（与 CLI flag 对应，两种语言各自排版）。
+pub const CLI_KV_INPUT: Str = Str::new("输入:    ", "input:   ");
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_APP: Str = Str::new("应用:    ", "app:     ");
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_DATA: Str = Str::new("数据:    ", "data:    ");
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_ASR: Str = Str::new("ASR 模型:", "asr:     ");
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_ALIGN: Str = Str::new("对齐模型:", "align:   ");
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_OUTPUT: Str = Str::new("输出:    ", "output:  ");
+
+/// 运行摘要的一行：`{label}{path}`（label 取 [`CLI_KV_INPUT`] 等）。
+pub fn cli_kv(label: Str, path: &std::path::Path) -> String {
+    format!("{}{}", t(label), path.display())
+}
+
+/// `lang={lang} chunk={chunk}s backend={backend} max_new_tokens={n}`（键名即 flag 名）。
+pub fn cli_run_flags_decode(
+    lang: &str,
+    chunk: u32,
+    backend: &str,
+    max_new_tokens: usize,
+) -> String {
+    format!("lang={lang} chunk={chunk}s backend={backend} max_new_tokens={max_new_tokens}")
+}
+
+/// `srt={srt} txt={txt} script={script} vocal_sep={vocal_sep}`（键名即 flag 名）。
+pub fn cli_run_flags_output(srt: bool, txt: bool, script: &str, vocal_sep: bool) -> String {
+    format!("srt={srt} txt={txt} script={script} vocal_sep={vocal_sep}")
+}
+
+/// `[阶段] {label}` / `[stage] {label}`。
+pub fn cli_stage(label: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("[阶段] {label}"),
+        UiLang::En => format!("[stage] {label}"),
+    }
+}
+
+/// `[警告] {msg}` / `[warn] {msg}`。
+pub fn cli_warn(msg: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("[警告] {msg}"),
+        UiLang::En => format!("[warn] {msg}"),
+    }
+}
+
+/// `完成 output={path}` / `OK output={path}`。
+pub fn cli_ok_output(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("完成 output={}", path.display()),
+        UiLang::En => format!("OK output={}", path.display()),
+    }
+}
+
+/// `复制输出失败: {e}` / `copy output failed: {e}`。
+pub fn cli_copy_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("复制输出失败: {e}"),
+        UiLang::En => format!("copy output failed: {e}"),
+    }
+}
+
+/// `已复制 → {path}` / `copied → {path}`。
+pub fn cli_copied(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("已复制 → {}", path.display()),
+        UiLang::En => format!("copied → {}", path.display()),
+    }
+}
+
+/// `词级时间轴 → {path}` / `words → {path}`。
+pub fn cli_words_written(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("词级时间轴 → {}", path.display()),
+        UiLang::En => format!("words → {}", path.display()),
+    }
+}
+
+/// `wall={wall:.1}s total_ms={total_ms} stages={stages}`（机器可读摘要）。
+pub fn cli_timing(wall_secs: f64, total_ms: u64, stages: usize) -> String {
+    format!("wall={wall_secs:.1}s total_ms={total_ms} stages={stages}")
+}
+
+/// 阶段耗时行：`  {label:<12} {dur:>8}`（列宽对齐，两种语言一致）。
+pub fn cli_stage_row(label: &str, dur: &str) -> String {
+    format!("  {label:<12} {dur:>8}")
+}
+
+/// `失败（耗时 {wall:.1}s）: {e}` / `FAIL after {wall:.1}s: {e}`。
+pub fn cli_failed(wall_secs: f64, e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("失败（耗时 {wall_secs:.1}s）: {e}"),
+        UiLang::En => format!("FAIL after {wall_secs:.1}s: {e}"),
+    }
+}
+
+/// `切片 {start:.3}-{end:.3}（{len:.1}s）→ {path}` / `slice … ({len:.1}s) → {path}`。
+pub fn cli_slice_done(start: f32, end: f32, len_secs: f32, path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "切片 {start:.3}-{end:.3}（{len_secs:.1}s）→ {}",
+            path.display()
+        ),
+        UiLang::En => format!(
+            "slice {start:.3}-{end:.3} ({len_secs:.1}s) → {}",
+            path.display()
+        ),
+    }
+}
+
+/// `切片失败: {e}` / `slice_wav: {e}`。
+pub fn cli_slice_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("切片失败: {e}"),
+        UiLang::En => format!("slice_wav: {e}"),
+    }
+}
+
+/// `转写失败: {e}` / `transcription failed: {e}`。
+pub fn cli_transcribe_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("转写失败: {e}"),
+        UiLang::En => format!("transcription failed: {e}"),
+    }
+}
+
+/// `chars={chars} raw_chars={raw} elapsed={secs:.1}s`（机器可读摘要）。
+pub fn cli_chars(chars: usize, raw_chars: usize, elapsed_secs: f64) -> String {
+    format!("chars={chars} raw_chars={raw_chars} elapsed={elapsed_secs:.1}s")
+}
+
+/// `--- 识别文本开始 ---` / `--- ASR TEXT BEGIN ---`（定位标记）。
+pub const CLI_ASR_TEXT_BEGIN: Str = Str::new("--- 识别文本开始 ---", "--- ASR TEXT BEGIN ---");
+/// 见 [`CLI_ASR_TEXT_BEGIN`]。
+pub const CLI_ASR_TEXT_END: Str = Str::new("--- 识别文本结束 ---", "--- ASR TEXT END ---");
+
+/// `写入失败: {e}` / `write: {e}`。
+pub fn cli_write_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("写入失败: {e}"),
+        UiLang::En => format!("write: {e}"),
+    }
+}
+
+/// `已写入 {path}` / `wrote {path}`。
+pub fn cli_wrote(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("已写入 {}", path.display()),
+        UiLang::En => format!("wrote {}", path.display()),
+    }
+}
+
+/// `ffmpeg: {bin} 下没有 ffmpeg，改用 {source}`
+/// / `ffmpeg: no binary under {bin} — using {source}`。
+pub fn cli_ffmpeg_fallback(bin: &std::path::Path, source: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("ffmpeg: {} 下没有 ffmpeg，改用 {source}", bin.display()),
+        UiLang::En => format!("ffmpeg: no binary under {} — using {source}", bin.display()),
+    }
+}
+
+/// `找不到 ffmpeg：把二进制放进 {bin}，或把 ffmpeg 加进 PATH`
+/// / `ffmpeg not found: put a binary in {bin} or install ffmpeg on PATH`。
+pub fn cli_ffmpeg_not_found(bin: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "找不到 ffmpeg：把二进制放进 {}，或把 ffmpeg 加进 PATH",
+            bin.display()
+        ),
+        UiLang::En => format!(
+            "ffmpeg not found: put a binary in {} or install ffmpeg on PATH",
+            bin.display()
+        ),
+    }
+}
+
 #[cfg(windows)]
 fn system_lang_code() -> Option<String> {
     // kernel32 的 GetUserDefaultUILanguage：不引新依赖，主语言 ID 直接映射。
     unsafe extern "system" {
         fn GetUserDefaultUILanguage() -> u16;
     }
+    // SAFETY: 无参数、无前置条件，只读系统 UI 语言设置；不返回指针、不转移所有权、
+    // 不会失败（未知时返回 0，下面的掩码映射已把它归到 en）。调用可重复、无副作用。
     let langid = unsafe { GetUserDefaultUILanguage() };
     Some(match langid & 0x3ff {
         0x0004 => "zh".to_string(),
@@ -576,5 +960,98 @@ mod tests {
         let s = Str::new("设置", "Settings");
         with_ui_lang(UiLang::Zh, || assert_eq!(t(s), "设置"));
         with_ui_lang(UiLang::En, || assert_eq!(t(s), "Settings"));
+    }
+
+    #[test]
+    fn cli_help_is_bilingual() {
+        let zh = with_ui_lang(UiLang::Zh, cli_help);
+        let en = with_ui_lang(UiLang::En, cli_help);
+        assert!(zh.contains("用法："), "zh help must be Chinese: {zh}");
+        assert!(
+            zh.contains("转写"),
+            "zh help must use the glossary term 转写"
+        );
+        assert!(
+            en.contains("Usage:"),
+            "en help keeps the upstream wording: {en}"
+        );
+        assert!(en.contains("transcribe"));
+        assert_ne!(zh, en);
+    }
+
+    #[test]
+    fn cli_messages_follow_the_ui_language() {
+        let path = std::path::Path::new("C:/tmp/video.mp4");
+        with_ui_lang(UiLang::Zh, || {
+            assert_eq!(cli_unknown_command("foo"), "未知命令: foo");
+            assert_eq!(cli_flag_not_number("--start"), "--start 必须是数字（秒）");
+            assert_eq!(cli_missing_required("--input"), "缺少必需参数 --input");
+            assert_eq!(
+                cli_input_not_found(path),
+                "找不到输入文件: C:/tmp/video.mp4"
+            );
+            assert_eq!(cli_stage("转写中"), "[阶段] 转写中");
+            assert_eq!(cli_kv(CLI_KV_INPUT, path), "输入:    C:/tmp/video.mp4");
+            assert_eq!(t(CLI_ASR_TEXT_BEGIN), "--- 识别文本开始 ---");
+        });
+        with_ui_lang(UiLang::En, || {
+            assert_eq!(cli_unknown_command("foo"), "unknown command: foo");
+            assert_eq!(
+                cli_flag_not_number("--start"),
+                "--start must be a number (seconds)"
+            );
+            assert_eq!(cli_missing_required("--input"), "missing required --input");
+            assert_eq!(
+                cli_input_not_found(path),
+                "input not found: C:/tmp/video.mp4"
+            );
+            assert_eq!(cli_stage("Transcribing"), "[stage] Transcribing");
+            assert_eq!(cli_kv(CLI_KV_INPUT, path), "input:   C:/tmp/video.mp4");
+            assert_eq!(t(CLI_ASR_TEXT_END), "--- ASR TEXT END ---");
+        });
+    }
+
+    #[test]
+    fn cli_machine_readable_lines_stay_language_neutral() {
+        // 键名就是 flag 名，两种语言必须逐字相同：贴日志的人和脚本都按它检索。
+        for lang in [UiLang::Zh, UiLang::En] {
+            with_ui_lang(lang, || {
+                assert_eq!(
+                    cli_run_flags_decode("zh", 60, "auto", 2048),
+                    "lang=zh chunk=60s backend=auto max_new_tokens=2048"
+                );
+                assert_eq!(
+                    cli_run_flags_output(true, false, "原文", false),
+                    "srt=true txt=false script=原文 vocal_sep=false"
+                );
+                assert_eq!(
+                    cli_timing(12.3, 12_300, 3),
+                    "wall=12.3s total_ms=12300 stages=3"
+                );
+                assert_eq!(cli_chars(5, 7, 2.0), "chars=5 raw_chars=7 elapsed=2.0s");
+                let row = cli_stage_row("asr", "12.3s");
+                assert!(row.starts_with("  asr"), "{row}");
+                assert!(row.ends_with("12.3s"), "{row}");
+                assert_eq!(row.chars().count(), 2 + 12 + 1 + 8, "{row}");
+            });
+        }
+    }
+
+    #[test]
+    fn cli_str_table_has_no_single_sided_entries() {
+        let table = [
+            ("CLI_KV_INPUT", CLI_KV_INPUT),
+            ("CLI_KV_APP", CLI_KV_APP),
+            ("CLI_KV_DATA", CLI_KV_DATA),
+            ("CLI_KV_ASR", CLI_KV_ASR),
+            ("CLI_KV_ALIGN", CLI_KV_ALIGN),
+            ("CLI_KV_OUTPUT", CLI_KV_OUTPUT),
+            ("CLI_ASR_TEXT_BEGIN", CLI_ASR_TEXT_BEGIN),
+            ("CLI_ASR_TEXT_END", CLI_ASR_TEXT_END),
+        ];
+        for (name, s) in table {
+            assert!(!s.zh.trim().is_empty(), "{name}: zh 侧为空");
+            assert!(!s.en.trim().is_empty(), "{name}: en 侧为空");
+        }
     }
 }

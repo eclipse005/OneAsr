@@ -17,22 +17,19 @@ pub(crate) use std::time::{Duration, Instant};
 
 pub(crate) use gpui::{
     AnyElement, Bounds, BoxShadow, Context, ExternalPaths, FocusHandle, IntoElement,
-    MouseMoveEvent,
-    Pixels, Rgba,
-    SharedString, Timer, Window, WindowControlArea, canvas, deferred, div, hsla, point,
-    prelude::*, px, svg,
+    MouseMoveEvent, Pixels, Rgba, SharedString, Timer, Window, WindowControlArea, canvas, deferred,
+    div, hsla, point, prelude::*, px, svg,
 };
 
 pub(crate) use oneasr_core::{
-    AsrStage, DownloadHandle, DownloadProgress, DownloadState, ModelId, ModelKind, Settings,
-    StageClock, StageUpdate, TaskTiming, TextScript, check_asr_model_dir, demote_current_thread,
-    download_model, ffmpeg_source, is_model_ready,
-    i18n::{t, UiLang, ui_lang},
-    normalize_source_language, process_media_file_with_progress, probe_duration_async,
-    probe_writable, resolve_app_root_dir,
-    source_language_by_id,
+    AsrStage, CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS, DownloadHandle,
+    DownloadProgress, DownloadState, ModelId, ModelKind, Settings, StageClock, StageUpdate,
+    TaskTiming, TextScript, check_asr_model_dir, demote_current_thread, download_model,
+    ffmpeg_source,
+    i18n::{UiLang, t, ui_lang},
+    is_model_ready, normalize_source_language, paths, probe_duration_async, probe_writable,
+    process_media_file_with_progress, resolve_app_root_dir, source_language_by_id,
     stats::{StatsRecord, StatsSummary},
-    CHUNK_TARGET_MAX_SEC, CHUNK_TARGET_MIN_SEC, CHUNK_TARGET_PRESETS,
 };
 
 pub(crate) use crate::i18n::L;
@@ -50,4 +47,4 @@ pub(crate) use crate::app::{
 pub(crate) use crate::theme::*;
 pub(crate) use crate::ui_font;
 pub(crate) use crate::widgets::*;
-pub(crate) use crate::{crashlog, shell, sfx};
+pub(crate) use crate::{crashlog, sfx, shell};

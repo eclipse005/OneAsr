@@ -20,20 +20,31 @@ pub fn ledger_path(root: &Path) -> PathBuf {
     root.join(LEDGER_FILE)
 }
 
-/// Fallback home when `{app_root}` is not writable — a portable copy dropped in
-/// `C:\Program Files` would otherwise accrue nothing, and a stats panel that
-/// silently stays at zero is worse than no panel. Same shape as the crash log's
-/// fallback (`%LOCALAPPDATA%\OneAsr\`, else the temp dir).
-fn fallback_ledger_path() -> PathBuf {
-    let base = match std::env::var_os("LOCALAPPDATA") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => std::env::temp_dir(),
-    };
-    base.join("OneAsr").join(LEDGER_FILE)
+/// Fallback home when `{root}` is not writable — a portable copy dropped in a
+/// read-only directory would otherwise accrue nothing, and a stats panel that
+/// silently stays at zero is worse than no panel.
+///
+/// The base is the **data directory** (`oneasr_core::paths`): the one place that
+/// decides where user data lives, so the ledger cannot drift to a second
+/// `%LOCALAPPDATA%` guess. When that resolves to `primary` itself (portable
+/// layout) or cannot be located at all, the OS temp dir is the last resort — a
+/// stats file is one of the few things that may live there.
+///
+/// `None` only when no distinct path exists, so a record is never read back
+/// twice.
+fn fallback_ledger_path(primary: &Path) -> Option<PathBuf> {
+    let base = crate::paths::log_fallback_base().unwrap_or_else(std::env::temp_dir);
+    for base in [base, std::env::temp_dir()] {
+        let path = base.join(LEDGER_FILE);
+        if path != primary {
+            return Some(path);
+        }
+    }
+    None
 }
 
-/// Append one record. Creates the directory if needed, and falls back to
-/// `fallback_ledger_path` when the app folder is read-only.
+/// Append one record. Creates the directory if needed, and falls back to the
+/// data-directory `stats.jsonl` when the given folder is read-only.
 ///
 /// A single `write_all` of one line keeps records atomic against concurrent
 /// readers; the caller is expected to treat failure as non-fatal (a stats
@@ -41,8 +52,11 @@ fn fallback_ledger_path() -> PathBuf {
 pub fn append(root: &Path, rec: &StatsRecord) -> std::io::Result<()> {
     let mut line = serde_json::to_string(rec).map_err(std::io::Error::other)?;
     line.push('\n');
-    append_at(&ledger_path(root), &line)
-        .or_else(|primary| append_at(&fallback_ledger_path(), &line).map_err(|_| primary))
+    let primary = ledger_path(root);
+    append_at(&primary, &line).or_else(|err| match fallback_ledger_path(&primary) {
+        Some(fallback) => append_at(&fallback, &line).map_err(|_| err),
+        None => Err(err),
+    })
 }
 
 fn append_at(path: &Path, line: &str) -> std::io::Result<()> {
@@ -56,13 +70,18 @@ fn append_at(path: &Path, line: &str) -> std::io::Result<()> {
     file.write_all(line.as_bytes())
 }
 
-/// Read every record, from the app folder and from the fallback location.
+/// Read every record, from the given folder and from the data-directory
+/// fallback.
 ///
 /// Both are read (not just the first that exists): an install that started
 /// read-only and later became writable — or the reverse — has real records in
-/// each, and a ledger that forgets half of them would be lying.
+/// each, and a ledger that forgets half of them would be lying. When the
+/// fallback resolves to the same file (portable layout), it is read once.
 pub fn load(root: &Path) -> Vec<StatsRecord> {
-    load_from(&[ledger_path(root), fallback_ledger_path()])
+    let primary = ledger_path(root);
+    let mut paths = vec![primary.clone()];
+    paths.extend(fallback_ledger_path(&primary));
+    load_from(&paths)
 }
 
 /// Read and concatenate ledger files in order. Unreadable or malformed lines

@@ -12,19 +12,23 @@
 //! (staging, engine lifetime, export rules) and knows nothing about concrete
 //! model crates — see `crate::engine` for the ports and their adapters.
 //!
-//! **Scratch lifecycle**: `runs/{stem}_{ts}/` holds only the full 16 kHz WAV
-//! plus at most one temporary chunk file. Product output is
-//! `{settings.output_dir}/{stem}.srt` (default `{app}/output`, atomic write).
+//! **Scratch lifecycle**: `{data}/runs/{stem}_{ts}/` holds only the full 16 kHz
+//! WAV plus at most one temporary chunk file. Product output is
+//! `{settings.output_dir}/{stem}.srt` (default `{data}/output`, atomic write).
 //! The scratch dir is removed when `ConvertedAudio` drops — success, failure,
 //! or panic — unless `ONEASR_KEEP_SCRATCH=1` is set for debugging.
 
-use export::{MIN_ALIGN_SEC, attach_transcript_punctuation, has_alignable_word, write_export_file, write_words_json};
+use export::{
+    MIN_ALIGN_SEC, attach_transcript_punctuation, has_alignable_word, write_export_file,
+    write_words_json,
+};
 
 mod export;
 mod model_check;
 
 pub use model_check::{
     check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir,
+    invalidate_all_model_checks, invalidate_model_check, is_model_ready,
 };
 
 use std::cell::RefCell;
@@ -38,9 +42,7 @@ use crate::engine::{
 };
 use crate::i18n::{self, UiLang, t};
 use crate::lang::{to_lang_key, to_qwen_language_label};
-use crate::media::{
-    MediaError, convert_to_16k_mono_wav, slice_wav, wav_duration_sec,
-};
+use crate::media::{MediaError, convert_to_16k_mono_wav, slice_wav, wav_duration_sec};
 use crate::paths::media_stem;
 use crate::sentence_boundary::{
     SentenceBoundaryRequest, WordTokenDto, build_source_sentences_from_words,
@@ -333,7 +335,8 @@ impl StageClock {
 
 fn push_or_merge_stage(stages: &mut Vec<StageTiming>, stage: AsrStage, elapsed_ms: u64) {
     if let Some(last) = stages.last_mut()
-        && last.stage == stage {
+        && last.stage == stage
+    {
         last.elapsed_ms = last.elapsed_ms.saturating_add(elapsed_ms);
         return;
     }
@@ -376,18 +379,21 @@ pub struct ProcessExportOptions {
 }
 
 /// Full pipeline: convert → VAD plan → ASR all → unload → align all → SRT.
+///
+/// `data_root` 是**数据目录**（`crate::paths::data_dir()`）：本次运行的临时目录
+/// 开在它下面。调用方传入而不是在这里重新解析，测试才能塞一个 scratch 目录。
 pub fn process_media_file_with_progress<'a>(
     input: &Path,
     media_name: &str,
     settings: &Settings,
-    app_root: &Path,
+    data_root: &Path,
     on_stage: impl FnMut(StageUpdate) + 'a,
 ) -> Result<PathBuf, AsrError> {
     process_media_file_with_export(
         input,
         media_name,
         settings,
-        app_root,
+        data_root,
         on_stage,
         ProcessExportOptions::default(),
     )
@@ -398,14 +404,14 @@ pub fn process_media_file_with_export<'a>(
     input: &Path,
     media_name: &str,
     settings: &Settings,
-    app_root: &Path,
+    data_root: &Path,
     on_stage: impl FnMut(StageUpdate) + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
     let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
         .map_err(|e| AsrError::Other(e.message().to_string()))?;
     process_media_file_with_provider(
-        input, media_name, settings, app_root, &provider, on_stage, export,
+        input, media_name, settings, data_root, &provider, on_stage, export,
     )
 }
 
@@ -413,18 +419,19 @@ pub fn process_media_file_with_export<'a>(
 /// `EngineProvider`.
 ///
 /// Production calls go through the wrapper above (local Qwen / HTDemucs
-/// engines); embedding and tests inject their own provider — see
-/// [`crate::engine::testing`].
+/// engines); embedding and tests pass their own
+/// [`crate::engine::EngineProvider`] — the in-memory doubles live in the
+/// `engine::testing` module, which only debug builds ship.
 pub fn process_media_file_with_provider<'a>(
     input: &Path,
     media_name: &str,
     settings: &Settings,
-    app_root: &Path,
+    data_root: &Path,
     provider: &dyn crate::engine::EngineProvider,
     on_stage: impl FnMut(StageUpdate) + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
-    Pipeline::new(settings, provider, on_stage).run(input, media_name, app_root, export)
+    Pipeline::new(settings, provider, on_stage).run(input, media_name, data_root, export)
 }
 
 /// Converted 16 kHz mono PCM WAV + the scratch dir that owns it.
@@ -503,10 +510,10 @@ impl<'a> Pipeline<'a> {
         self,
         input: &Path,
         media_name: &str,
-        app_root: &Path,
+        data_root: &Path,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
-        let conv = self.stage_prepare(input, app_root)?;
+        let conv = self.stage_prepare(input, data_root)?;
         let vad = self.stage_vad_plan(&conv)?;
         let asr = self.stage_transcribe_all(&conv, &vad)?;
         let align = self.stage_align_all(&conv, &vad, &asr)?;
@@ -524,13 +531,15 @@ impl<'a> Pipeline<'a> {
     ///
     /// The scratch dir is owned by [`ConvertedAudio`] from before the first
     /// decode, so every early return (and panic) cleans up through `Drop`.
-    fn stage_prepare(&self, input: &Path, app_root: &Path) -> Result<ConvertedAudio, AsrError> {
+    fn stage_prepare(&self, input: &Path, data_root: &Path) -> Result<ConvertedAudio, AsrError> {
         let stem = media_stem(input);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let work_dir = app_root.join("runs").join(format!("{stem}_{stamp}"));
+        let work_dir = data_root
+            .join(crate::paths::RUNS_DIR)
+            .join(format!("{stem}_{stamp}"));
         std::fs::create_dir_all(&work_dir)?;
 
         let mut conv = ConvertedAudio {
@@ -943,7 +952,7 @@ impl<'a> Pipeline<'a> {
             }
         }
         let primary =
-        primary.ok_or_else(|| AsrError::Other(t(i18n::ERR_NO_OUTPUT_FORMAT).into()))?;
+            primary.ok_or_else(|| AsrError::Other(t(i18n::ERR_NO_OUTPUT_FORMAT).into()))?;
 
         if let Some(words_path) = export.words_json.as_ref() {
             match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {
@@ -1139,10 +1148,8 @@ mod tests {
 
     #[test]
     fn check_demucs_rejects_legacy_merged_weights() {
-        let parent = std::env::temp_dir().join(format!(
-            "oneasr_demucs_legacy_{}",
-            std::process::id()
-        ));
+        let parent =
+            std::env::temp_dir().join(format!("oneasr_demucs_legacy_{}", std::process::id()));
         let dir = parent.join("htdemucs_ft");
         let _ = std::fs::remove_dir_all(&parent);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1170,10 +1177,7 @@ mod tests {
 
     #[test]
     fn check_demucs_custom_dir_looks_for_vocals_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "oneasr_demucs_custom_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("oneasr_demucs_custom_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("htdemucs_ft.safetensors"), vec![0u8; 4096]).unwrap();

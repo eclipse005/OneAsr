@@ -17,6 +17,17 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub mod local;
+// 测试替身（无权重、无 GPU、无 ffmpeg）本来是公共 API 的一部分，会随 release
+// 二进制一起编译。它既被 `cargo test` 的外部集成测试用（`tests/*.rs` 是独立
+// crate，拿不到 `#[cfg(test)]`），所以门控取 `debug_assertions`：
+// 调试/测试构建里有它，`--release` 构建里没有，也不必为它加一个 feature
+// 开关去改 CI 的命令行。
+//
+// **release 构建不含本模块**：引用它的集成测试（`tests/pipeline_behaviour.rs`）
+// 自带 `#![cfg(debug_assertions)]` 与之对齐。所以别在 release profile 下跑
+// tests —— `cargo test --release` 会把那个文件整个 cfg 掉，管线行为只有调试
+// profile 验得到。要让它在 release 也能编译，就得把本模块挪出这个门控。
+#[cfg(any(test, debug_assertions))]
 pub mod testing;
 
 /// Failure raised by an engine adapter.

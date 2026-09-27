@@ -94,7 +94,8 @@ impl std::fmt::Display for FfmpegSource {
 pub fn resolve_app_root() -> Option<PathBuf> {
     let mut starts = Vec::new();
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent() {
+        && let Some(dir) = exe.parent()
+    {
         starts.push(dir.to_path_buf());
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -131,13 +132,13 @@ fn locate_ffmpeg() -> Result<FfmpegSource, MediaError> {
     let bundled = resolve_bin_dir().map(|dir| dir.join(FFMPEG_NAME));
     let mut not_executable = None;
 
-    if let Some(path) = &bundled {
-        if path.is_file() {
-            if ensure_executable(path) {
-                return Ok(FfmpegSource::Bundled(path.clone()));
-            }
-            not_executable = Some(path.clone());
+    if let Some(path) = &bundled
+        && path.is_file()
+    {
+        if ensure_executable(path) {
+            return Ok(FfmpegSource::Bundled(path.clone()));
         }
+        not_executable = Some(path.clone());
     }
 
     if let Some(system) = std::env::var_os("PATH").and_then(|var| find_ffmpeg_in_path(&var)) {

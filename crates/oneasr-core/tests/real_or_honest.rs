@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 
-use oneasr_core::{
-    check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir, Settings,
-};
+use oneasr_core::{Settings, check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir};
 
 #[test]
 fn default_settings_have_distinct_asr_and_aligner_dirs() {
