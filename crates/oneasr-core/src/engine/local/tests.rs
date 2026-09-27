@@ -1,7 +1,7 @@
 //! Adapter and backend-policy tests.
 
-use super::backend::{is_forced_gpu, ComputeBackend};
-use super::demucs::{separator_backend, DemucsSeparatorAdapter};
+use super::backend::{ComputeBackend, is_forced_gpu};
+use super::demucs::{DemucsSeparatorAdapter, separator_backend};
 use super::provider::LocalEngineProvider;
 use crate::settings::Settings;
 
@@ -20,12 +20,14 @@ fn missing_weights_is_a_clear_error() {
     let dir = std::env::temp_dir().join(format!("oneasr_sep_missing_{}", std::process::id()));
     // 断言中文文案：错误消息按进程语言构造，而单测并行共享全局语言，
     // 必须固定语言窗口（其他测试可能正在 with_ui_lang 里切来切去）。
-    let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || {
-        match DemucsSeparatorAdapter::load(&dir, ComputeBackend::Cpu, false, |_| {}) {
-            Ok(_) => panic!("missing weights must fail to load"),
-            Err(e) => e.to_string(),
-        }
-    });
+    let err =
+        crate::i18n::with_ui_lang(
+            crate::i18n::UiLang::Zh,
+            || match DemucsSeparatorAdapter::load(&dir, ComputeBackend::Cpu, false, |_| {}) {
+                Ok(_) => panic!("missing weights must fail to load"),
+                Err(e) => e.to_string(),
+            },
+        );
     assert!(err.contains("人声分离模型不存在"), "{err}");
 }
 

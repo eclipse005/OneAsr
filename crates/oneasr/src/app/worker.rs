@@ -57,9 +57,15 @@ impl OneAsrApp {
                 Ok(WorkerMsg::DemucsDirPicked(dir)) => self.handle_demucs_dir_picked(dir, cx),
                 Ok(WorkerMsg::OutputDirPicked(dir)) => self.handle_output_dir_picked(dir, cx),
                 Ok(WorkerMsg::ModelDownload(progress)) => self.handle_model_download(progress, cx),
-                Ok(WorkerMsg::Probed { id, duration_sec }) => self.handle_probed(id, duration_sec, cx),
-                Ok(WorkerMsg::Progress { id, stage, warning }) => self.handle_progress(id, stage, warning, cx),
-                Ok(WorkerMsg::Finished { id, result, timing }) => self.handle_finished(id, result, timing, cx),
+                Ok(WorkerMsg::Probed { id, duration_sec }) => {
+                    self.handle_probed(id, duration_sec, cx)
+                }
+                Ok(WorkerMsg::Progress { id, stage, warning }) => {
+                    self.handle_progress(id, stage, warning, cx)
+                }
+                Ok(WorkerMsg::Finished { id, result, timing }) => {
+                    self.handle_finished(id, result, timing, cx)
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     // Worker died without reporting: do not leave rows stuck in
@@ -75,8 +81,7 @@ impl OneAsrApp {
                             if matches!(t.status, TaskStatus::Processing | TaskStatus::Queued) {
                                 t.status = TaskStatus::Error;
                                 t.queue_seq = None;
-                                t.error =
-                                    Some(oneasr_core::i18n::t(L::WORKER_EXITED).into());
+                                t.error = Some(oneasr_core::i18n::t(L::WORKER_EXITED).into());
                                 affected += 1;
                             }
                         }
@@ -104,16 +109,16 @@ impl OneAsrApp {
 impl OneAsrApp {
     /// Short status-bar hints fade out on a timer.
     fn tick_status_hint(&mut self, cx: &mut Context<Self>) {
-    if let Some(until) = self.status_hint_until {
-        if Instant::now() >= until {
-            self.status_hint = None;
-            self.status_hint_until = None;
-            self.status_hint_good = false;
-            cx.notify();
-        } else {
-            cx.notify(); // keep bar live while hint is visible
+        if let Some(until) = self.status_hint_until {
+            if Instant::now() >= until {
+                self.status_hint = None;
+                self.status_hint_until = None;
+                self.status_hint_good = false;
+                cx.notify();
+            } else {
+                cx.notify(); // keep bar live while hint is visible
+            }
         }
-    }
     }
 
     /// Files picked in the OS dialog: add them to the list.
@@ -173,9 +178,7 @@ impl OneAsrApp {
         let id = progress.model_id;
         let terminal = matches!(
             progress.state,
-            DownloadState::Completed
-                | DownloadState::Failed
-                | DownloadState::Cancelled
+            DownloadState::Completed | DownloadState::Failed | DownloadState::Cancelled
         );
         self.set_download_progress(progress.clone());
         if terminal {
@@ -192,7 +195,7 @@ impl OneAsrApp {
             match id.kind() {
                 ModelKind::Demucs => {
                     self.refresh_model_probe();
-                    self.flash_hint(crate::i18n::model_ready(&id.label(ui_lang())), cx);
+                    self.flash_hint(crate::i18n::model_ready(id.label(ui_lang())), cx);
                 }
                 ModelKind::Asr | ModelKind::Align => {
                     let bound = self
@@ -204,19 +207,19 @@ impl OneAsrApp {
                         // already point at (the download lands in the current
                         // directory for that component).
                         self.reset_model_config(cx);
-                        self.flash_hint(crate::i18n::model_download_done(&id.label(ui_lang())), cx);
+                        self.flash_hint(crate::i18n::model_download_done(id.label(ui_lang())), cx);
                     } else {
                         // Non-selected ASR size finished installing on disk.
                         self.asr_download = None;
                         self.flash_hint(
-                            crate::i18n::model_ready_switchable(&id.label(ui_lang())),
+                            crate::i18n::model_ready_switchable(id.label(ui_lang())),
                             cx,
                         );
                     }
                 }
             }
         } else if progress.state == DownloadState::Failed {
-            let fail = crate::i18n::model_download_failed(&id.label(ui_lang()), &progress.message);
+            let fail = crate::i18n::model_download_failed(id.label(ui_lang()), &progress.message);
             // Byte counters separate dir-create failures (0 bytes)
             // from mid-file / rename failures for bare OS errors.
             crashlog::log_error(format!(
@@ -233,7 +236,7 @@ impl OneAsrApp {
                 progress.downloaded_bytes,
                 progress.total_bytes
             ));
-            self.flash_hint(crate::i18n::model_cancelled(&id.label(ui_lang())), cx);
+            self.flash_hint(crate::i18n::model_cancelled(id.label(ui_lang())), cx);
         }
         // Hide another size's terminal snapshot when viewing this size.
         self.clear_stale_asr_progress();
@@ -249,7 +252,13 @@ impl OneAsrApp {
     }
 
     /// Live stage from the ASR worker (UI only, never blocks).
-    fn handle_progress(&mut self, id: String, stage: SharedString, warning: Option<SharedString>, cx: &mut Context<Self>) {
+    fn handle_progress(
+        &mut self,
+        id: String,
+        stage: SharedString,
+        warning: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.active_stage = Some((id, stage));
         // Non-fatal pipeline warnings (e.g. separation fell back to
         // CPU) must be visible: this window has no console.
@@ -260,7 +269,13 @@ impl OneAsrApp {
     }
 
     /// A run finished: record the outcome, the ledger row and the timing.
-    fn handle_finished(&mut self, id: String, result: Result<PathBuf, String>, timing: TaskTiming, cx: &mut Context<Self>) {
+    fn handle_finished(
+        &mut self,
+        id: String,
+        result: Result<PathBuf, String>,
+        timing: TaskTiming,
+        cx: &mut Context<Self>,
+    ) {
         self.busy = false;
         if self
             .active_stage
@@ -326,10 +341,11 @@ impl OneAsrApp {
             // First success ever: the saved number is news exactly
             // once, and the run-complete line is what the user is
             // already looking at.
-            if rec.ok && self.stats.tasks_ok == 1
-                && let Some(s) = self.stats.saved_sec() {
-                self.nudge_saved =
-                    Some(oneasr_core::stats::format_span_secs(ui_lang(), s).into());
+            if rec.ok
+                && self.stats.tasks_ok == 1
+                && let Some(s) = self.stats.saved_sec()
+            {
+                self.nudge_saved = Some(oneasr_core::stats::format_span_secs(ui_lang(), s).into());
             }
         }
         if self.batch_mode {

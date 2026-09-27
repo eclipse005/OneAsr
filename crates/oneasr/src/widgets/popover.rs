@@ -1,7 +1,8 @@
 //! Deferred popovers: dismiss layer, language menu, timing breakdown.
 
 use gpui::{
-    deferred, div, hsla, point, prelude::*, px, App, BoxShadow, Context, MouseButton, SharedString, Window,
+    App, BoxShadow, Context, MouseButton, SharedString, Window, deferred, div, hsla, point,
+    prelude::*, px,
 };
 use oneasr_core::TaskTiming;
 
@@ -63,7 +64,13 @@ pub fn lang_menu_option(
         } else {
             crate::theme::PANEL
         })
-        .hover(|s| s.bg(if active { crate::theme::ACCENT_SOFT } else { crate::theme::BG }))
+        .hover(|s| {
+            s.bg(if active {
+                crate::theme::ACCENT_SOFT
+            } else {
+                crate::theme::BG
+            })
+        })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.pick_source_language(target.clone(), lang_id, cx);
         }))
@@ -85,12 +92,7 @@ pub fn lang_menu_option(
                         .child(label.to_string()),
                 )
                 .when(active, |el| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(crate::theme::ACCENT)
-                            .child("✓"),
-                    )
+                    el.child(div().text_xs().text_color(crate::theme::ACCENT).child("✓"))
                 }),
         )
 }
@@ -112,7 +114,12 @@ pub fn timing_breakdown_popover(
     // Rise from slightly below (dialog-ish, not full modal).
     let y_offset = px(6.0 * (1.0 - p));
     let total = timing.total_label();
-    let max_stage = timing.stages.iter().map(|s| s.elapsed_ms).max().unwrap_or(1);
+    let max_stage = timing
+        .stages
+        .iter()
+        .map(|s| s.elapsed_ms)
+        .max()
+        .unwrap_or(1);
 
     let rows: Vec<gpui::AnyElement> = timing
         .stages
@@ -128,20 +135,26 @@ pub fn timing_breakdown_popover(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(if is_hot { crate::theme::TEXT } else { crate::theme::MUTED })
+                        .text_color(if is_hot {
+                            crate::theme::TEXT
+                        } else {
+                            crate::theme::MUTED
+                        })
                         .font_weight(if is_hot {
                             gpui::FontWeight::MEDIUM
                         } else {
                             gpui::FontWeight::NORMAL
                         })
-                        .child(
-                            s.stage.label(oneasr_core::i18n::ui_lang()).to_string(),
-                        ),
+                        .child(s.stage.label(oneasr_core::i18n::ui_lang()).to_string()),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(if is_hot { crate::theme::ACCENT } else { crate::theme::MUTED })
+                        .text_color(if is_hot {
+                            crate::theme::ACCENT
+                        } else {
+                            crate::theme::MUTED
+                        })
                         .whitespace_nowrap()
                         .child(oneasr_core::format_process_ms(s.elapsed_ms)),
                 )
@@ -252,7 +265,9 @@ pub fn floating_lang_menu(
         .collect();
 
     let (top, chip_width) = match layout {
-        crate::app::LangMenuLayout::Chip => (px(30.), Some(px(crate::app::ui::metrics::LANG_MENU_W))),
+        crate::app::LangMenuLayout::Chip => {
+            (px(30.), Some(px(crate::app::ui::metrics::LANG_MENU_W)))
+        }
         crate::app::LangMenuLayout::FullWidth => (px(38.), None),
     };
 
@@ -263,9 +278,10 @@ pub fn floating_lang_menu(
             .top(top)
             .right_0()
             .when_some(chip_width, |el, w| el.w(w))
-            .when(matches!(layout, crate::app::LangMenuLayout::FullWidth), |el| {
-                el.left_0()
-            })
+            .when(
+                matches!(layout, crate::app::LangMenuLayout::FullWidth),
+                |el| el.left_0(),
+            )
             .max_h(px(crate::app::ui::metrics::LANG_MENU_MAX_H))
             .overflow_y_scroll()
             .rounded_lg()

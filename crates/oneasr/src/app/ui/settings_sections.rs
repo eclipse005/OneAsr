@@ -26,97 +26,272 @@ pub(super) fn settings_section(body: AnyElement) -> impl IntoElement + use<> {
 }
 
 impl OneAsrApp {
-/// 默认语言 + 字幕长度
-pub(super) fn render_settings_language(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body = {
+    /// 默认语言 + 字幕长度
+    pub(super) fn render_settings_language(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = {
+            let open = self.settings_lang_open;
+            // 语言 id 非法（settings.json 被手改坏）时没有对应的 SourceLanguage，
+            // 兜底标签必须走双语表——写成固定中文会把中文塞进英文界面。
+            let cur_label = source_language_by_id(&form.language)
+                .map(|l| l.label)
+                .unwrap_or_else(|| t(L::LANGUAGE_FALLBACK));
 
-        let open = self.settings_lang_open;
-        let cur_label = source_language_by_id(&form.language)
-            .map(|l| l.label)
-            .unwrap_or("中文普通话");
+            // 语言 | 字幕长度 并排平分
+            div()
+                .flex()
+                .items_start()
+                .gap_2p5()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(TEXT)
+                                .child(t(L::DEFAULT_LANGUAGE)),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .w_full()
+                                .child(
+                                    div()
+                                        .id("settings-lang-trigger")
+                                        .w_full()
+                                        .px_2p5()
+                                        .py_1p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(if open { ACCENT } else { LINE })
+                                        .bg(if open { ACCENT_SOFT } else { BG })
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(ACCENT_SOFT).border_color(ACCENT))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_settings_lang(cx);
+                                        }))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(TEXT)
+                                                        .whitespace_nowrap()
+                                                        .child(cur_label.to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(MUTED)
+                                                        .child(if open { "▴" } else { "▾" }),
+                                                ),
+                                        ),
+                                )
+                                .when(open, |el| {
+                                    el.child(floating_lang_menu(
+                                        "settings-lang-menu".into(),
+                                        &form.language,
+                                        "settings-lang-opt",
+                                        LangSelectTarget::Settings,
+                                        LangMenuLayout::FullWidth,
+                                        cx,
+                                    ))
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(TEXT)
+                                .child(t(L::SUBTITLE_LENGTH)),
+                        )
+                        .child(
+                            div().flex().gap_1p5().children(
+                                [
+                                    ("short", t(L::LEN_SHORT)),
+                                    ("standard", t(L::LEN_STANDARD)),
+                                    ("loose", t(L::LEN_LOOSE)),
+                                ]
+                                .into_iter()
+                                .map(|(id, label)| {
+                                    let active = form.length_preset == id;
+                                    btn(
+                                        label,
+                                        if active {
+                                            BtnKind::Primary
+                                        } else {
+                                            BtnKind::Secondary
+                                        },
+                                        true,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if this.settings.subtitle_length_preset == id {
+                                                return;
+                                            }
+                                            this.settings.subtitle_length_preset = id.into();
+                                            this.mark_settings_dirty(cx);
+                                        }),
+                                    )
+                                }),
+                            ),
+                        ),
+                )
+                .into_any_element()
+        };
+        settings_section(body)
+    }
 
-        // 语言 | 字幕长度 并排平分
-        div()
+    /// 分段时长
+    pub(super) fn render_settings_chunk_duration(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body =
+            {
+                // 分段时长：30–180s 预设（默认 60）；短尾 <15s 运行时合并
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(TEXT)
+                                    .child(t(L::CHUNK_DURATION)),
+                            )
+                            .child(div().text_xs().text_color(MUTED).child(
+                                crate::i18n::chunk_target_label(
+                                    form.chunk_target,
+                                    CHUNK_TARGET_MIN_SEC,
+                                    CHUNK_TARGET_MAX_SEC,
+                                ),
+                            )),
+                    )
+                    .child(div().flex().gap_1p5().children(
+                        CHUNK_TARGET_PRESETS.iter().copied().map(|(sec, label)| {
+                            let active = form.chunk_target == sec;
+                            btn(
+                                label,
+                                if active {
+                                    BtnKind::Primary
+                                } else {
+                                    BtnKind::Secondary
+                                },
+                                true,
+                                cx.listener(move |this, _, _, cx| {
+                                    if this.settings.chunk_target_seconds == sec {
+                                        return;
+                                    }
+                                    this.settings.chunk_target_seconds = sec;
+                                    this.mark_settings_dirty(cx);
+                                }),
+                            )
+                        }),
+                    ))
+                    .child(
+                        div().flex().flex_col().gap_0p5().child(
+                            div()
+                                .text_xs()
+                                .text_color(MUTED)
+                                .child(t(L::CHUNK_4GB_HINT)),
+                        ),
+                    )
+                    .into_any_element()
+            };
+        settings_section(body)
+    }
+
+    /// 输出格式 + 中文输出
+    pub(super) fn render_settings_output(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
             .flex()
             .items_start()
             .gap_2p5()
             .child(
                 div()
+                    // 两列平分宽度（同「默认语言 | 字幕长度」。
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(TEXT)
-                            .child(t(L::DEFAULT_LANGUAGE)),
+                        div().flex().items_center().child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(TEXT)
+                                .whitespace_nowrap()
+                                .child(t(L::OUTPUT_FORMAT)),
+                        ),
                     )
                     .child(
                         div()
-                            .relative()
-                            .w_full()
-                            .child(
-                                div()
-                                    .id("settings-lang-trigger")
-                                    .w_full()
-                                    .px_2p5()
-                                    .py_1p5()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(if open {
-                                        ACCENT
-                                    } else {
-                                        LINE
-                                    })
-                                    .bg(if open { ACCENT_SOFT } else { BG })
-                                    .cursor_pointer()
-                                    .hover(|s| {
-                                        s.bg(ACCENT_SOFT).border_color(ACCENT)
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_settings_lang(cx);
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(TEXT)
-                                                    .whitespace_nowrap()
-                                                    .child(cur_label.to_string()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(MUTED)
-                                                    .child(if open {
-                                                        "▴"
-                                                    } else {
-                                                        "▾"
-                                                    }),
-                                            ),
-                                    ),
-                            )
-                            .when(open, |el| {
-                                el.child(floating_lang_menu(
-                                    "settings-lang-menu".into(),
-                                    &form.language,
-                                    "settings-lang-opt",
-                                    LangSelectTarget::Settings,
-                                    LangMenuLayout::FullWidth,
-                                    cx,
-                                ))
-                            }),
+                            .flex()
+                            .gap_1p5()
+                            .child(btn(
+                                "SRT",
+                                if form.output_srt {
+                                    BtnKind::Primary
+                                } else {
+                                    BtnKind::Secondary
+                                },
+                                true,
+                                cx.listener(|this, _, _, cx| {
+                                    if !this.settings.output_txt {
+                                        this.flash_hint(t(L::KEEP_ONE_FORMAT), cx);
+                                        return;
+                                    }
+                                    this.settings.output_srt = !this.settings.output_srt;
+                                    this.mark_settings_dirty(cx);
+                                }),
+                            ))
+                            .child(btn(
+                                "TXT",
+                                if form.output_txt {
+                                    BtnKind::Primary
+                                } else {
+                                    BtnKind::Secondary
+                                },
+                                true,
+                                cx.listener(|this, _, _, cx| {
+                                    if !this.settings.output_srt {
+                                        this.flash_hint(t(L::KEEP_ONE_FORMAT), cx);
+                                        return;
+                                    }
+                                    this.settings.output_txt = !this.settings.output_txt;
+                                    this.mark_settings_dirty(cx);
+                                }),
+                            )),
                     ),
             )
             .child(
@@ -128,63 +303,158 @@ pub(super) fn render_settings_language(
                     .gap_1()
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(TEXT)
-                            .child(t(L::SUBTITLE_LENGTH)),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(TEXT)
+                                    .whitespace_nowrap()
+                                    .child(t(L::CHINESE_OUTPUT)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(MUTED)
+                                    .whitespace_nowrap()
+                                    .child(t(L::ZH_YUE_ONLY)),
+                            ),
                     )
-                    .child(
-                        div().flex().gap_1p5().children(
-                            [
-                                ("short", t(L::LEN_SHORT)),
-                                ("standard", t(L::LEN_STANDARD)),
-                                ("loose", t(L::LEN_LOOSE)),
-                            ]
-                            .into_iter()
-                            .map(|(id, label)| {
-                                let active = form.length_preset == id;
-                                btn(
-                                    label,
-                                    if active {
-                                        BtnKind::Primary
-                                    } else {
-                                        BtnKind::Secondary
-                                    },
-                                    true,
-                                    cx.listener(move |this, _, _, cx| {
-                                        if this.settings.subtitle_length_preset
-                                            == id
-                                        {
-                                            return;
-                                        }
-                                        this.settings.subtitle_length_preset =
-                                            id.into();
-                                        this.mark_settings_dirty(cx);
-                                    }),
-                                )
+                    .child(div().flex().gap_1().children(TextScript::ALL.map(|script| {
+                        let active = form.text_script == script;
+                        btn(
+                            script.label(ui_lang()),
+                            if active {
+                                BtnKind::Primary
+                            } else {
+                                BtnKind::Secondary
+                            },
+                            true,
+                            cx.listener(move |this, _, _, cx| {
+                                if this.settings.text_script == script.id() {
+                                    return;
+                                }
+                                this.settings.text_script = script.id().into();
+                                this.mark_settings_dirty(cx);
                             }),
-                        ),
-                    ),
+                        )
+                    }))),
             )
-            .into_any_element()
+            .into_any_element();
+        settings_section(body)
+    }
 
-    };
-    settings_section(body)
-}
-
-/// 分段时长
-pub(super) fn render_settings_chunk_duration(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body = {
-
-        // 分段时长：30–180s 预设（默认 60）；短尾 <15s 运行时合并
-        div()
+    /// 字幕输出位置
+    pub(super) fn render_settings_output_location(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap_1p5()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(TEXT)
+                    .child(t(L::OUTPUT_LOCATION)),
+            )
+            .child(
+                div().flex().gap_1p5().children(
+                    [(true, t(L::NEXT_TO_VIDEO)), (false, t(L::CUSTOM_DIR))]
+                        .into_iter()
+                        .map(|(next, label)| {
+                            let active = form.save_next == next;
+                            btn(
+                                label,
+                                if active {
+                                    BtnKind::Primary
+                                } else {
+                                    BtnKind::Secondary
+                                },
+                                true,
+                                cx.listener(move |this, _, _, cx| {
+                                    if this.settings.save_next_to_source == next {
+                                        return;
+                                    }
+                                    this.settings.save_next_to_source = next;
+                                    this.mark_settings_dirty(cx);
+                                }),
+                            )
+                        }),
+                ),
+            )
+            .child(
+                div()
+                    .id("output-dir")
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(LINE)
+                    .bg(PANEL)
+                    .overflow_hidden()
+                    .opacity(if form.save_next { 0.45 } else { 1.0 })
+                    .hover(|s| s.border_color(ACCENT))
+                    .child(
+                        div()
+                            .id("output-dir-path")
+                            .flex_1()
+                            .min_w_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .text_xs()
+                            .text_color(TEXT)
+                            .whitespace_normal()
+                            .line_clamp(2)
+                            .child(form.output_dir.clone())
+                            .tooltip({
+                                let tip = form.output_dir_tip.clone();
+                                move |_, cx| {
+                                    cx.new(|_| NameTooltip {
+                                        text: tip.clone().into(),
+                                    })
+                                    .into()
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("output-dir-browse")
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .border_l_1()
+                            .border_color(LINE_SOFT)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ACCENT_SOFT))
+                            .child(
+                                svg()
+                                    .size(px(15.))
+                                    .path("icons/folder.svg")
+                                    .text_color(MUTED),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_output_dir(cx))),
+                    ),
+            )
+            .into_any_element();
+        settings_section(body)
+    }
+
+    /// 语音识别模型
+    pub(super) fn render_settings_asr_model(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
             .child(
                 div()
                     .flex()
@@ -195,762 +465,424 @@ pub(super) fn render_settings_chunk_duration(
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(TEXT)
-                            .child(t(L::CHUNK_DURATION)),
+                            .child(t(L::ASR_MODEL)),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(MUTED)
-                            .child(crate::i18n::chunk_target_label(
-                                form.chunk_target,
-                                CHUNK_TARGET_MIN_SEC,
-                                CHUNK_TARGET_MAX_SEC,
-                            )),
-                    ),
+                    .child(div().size(px(8.)).rounded_full().bg(if form.asr_ready {
+                        ACCENT
+                    } else {
+                        DANGER
+                    })),
             )
-            .child(
-                div().flex().gap_1p5().children(
-                    CHUNK_TARGET_PRESETS.iter().copied().map(|(sec, label)| {
-                        let active = form.chunk_target == sec;
+            .child({
+                // 尺寸 chip 选"档位家族"：量化开着时切尺寸
+                // 仍落在该尺寸的 int8 档；「量化」是同一行里
+                // 可独立点亮/取消的按钮（与 SRT/TXT 同款）。
+                let mut chips: Vec<AnyElement> = ModelId::ASR_CHOICES
+                    .into_iter()
+                    .map(|id| {
+                        let active = form.asr_base_id == id;
+                        let can_switch = !form.asr_size_locked || active;
                         btn(
-                            label,
+                            id.short_label(),
                             if active {
                                 BtnKind::Primary
                             } else {
                                 BtnKind::Secondary
                             },
-                            true,
+                            can_switch,
                             cx.listener(move |this, _, _, cx| {
-                                if this.settings.chunk_target_seconds == sec {
+                                let target = id.with_quant(this.settings.asr_quantized());
+                                if this.settings.selected_asr_id() == target {
                                     return;
                                 }
-                                this.settings.chunk_target_seconds = sec;
+                                if this.download_kind_busy(ModelKind::Asr) {
+                                    this.flash_hint(t(L::ASR_DL_BUSY_RESIZE), cx);
+                                    return;
+                                }
+                                this.settings.select_asr_model(target);
+                                this.clear_stale_asr_progress();
+                                this.refresh_model_probe();
                                 this.mark_settings_dirty(cx);
                             }),
                         )
-                    }),
-                ),
-            )
+                        .into_any_element()
+                    })
+                    .collect();
+                chips.push(
+                    pill(
+                        "asr-quant",
+                        t(L::QUANT),
+                        form.asr_quant,
+                        cx.listener(|this, _, _, cx| {
+                            if this.download_kind_busy(ModelKind::Asr) {
+                                this.flash_hint(t(L::ASR_DL_BUSY), cx);
+                                return;
+                            }
+                            this.settings
+                                .set_asr_quantized(!this.settings.asr_quantized());
+                            this.clear_stale_asr_progress();
+                            this.refresh_model_probe();
+                            this.mark_settings_dirty(cx);
+                        }),
+                    )
+                    .into_any_element(),
+                );
+                div().flex().gap_1p5().children(chips)
+            })
+            .child(model_download_row(
+                ComponentRow {
+                    id: "asr-dl-btn",
+                    ready: form.asr_ready,
+                    busy: form.asr_dl_busy,
+                    progress: form.asr_dl.as_ref(),
+                },
+                div()
+                    .id("model-dir")
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(LINE)
+                    .bg(PANEL)
+                    .overflow_hidden()
+                    .hover(|s| s.border_color(ACCENT))
+                    .child(
+                        div()
+                            .id("model-dir-path")
+                            .flex_1()
+                            .min_w_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .text_xs()
+                            .text_color(TEXT)
+                            .whitespace_normal()
+                            .line_clamp(1)
+                            .child(form.model.clone())
+                            .tooltip({
+                                let tip = form.model_tip.clone();
+                                move |_, cx| {
+                                    cx.new(|_| NameTooltip {
+                                        text: tip.clone().into(),
+                                    })
+                                    .into()
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("model-dir-browse")
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .border_l_1()
+                            .border_color(LINE_SOFT)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ACCENT_SOFT))
+                            .child(
+                                svg()
+                                    .size(px(15.))
+                                    .path("icons/folder.svg")
+                                    .text_color(MUTED),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_model_dir(cx))),
+                    ),
+                cx.listener(move |this, _, _, cx| {
+                    let id = this.settings.selected_asr_id();
+                    this.start_model_download(id, cx);
+                }),
+                cx.listener(move |this, _, _, cx| {
+                    let id = this.settings.selected_asr_id();
+                    this.cancel_model_download(id, cx);
+                }),
+            ))
+            .into_any_element();
+        settings_section(body)
+    }
+
+    /// 对齐模型
+    pub(super) fn render_settings_aligner(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap_0p5()
+                    .items_center()
+                    .justify_between()
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(MUTED)
-                            .child(t(L::CHUNK_4GB_HINT)),
-                    ),
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(TEXT)
+                            .child(t(L::ALIGNER_MODEL)),
+                    )
+                    .child(div().size(px(8.)).rounded_full().bg(if form.align_ready {
+                        ACCENT
+                    } else {
+                        DANGER
+                    })),
             )
-            .into_any_element()
-
-    };
-    settings_section(body)
-}
-
-/// 输出格式 + 中文输出
-pub(super) fn render_settings_output(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2p5()
-                                    .child(
-                                        div()
-                                            // 两列平分宽度（同「默认语言 | 字幕长度」。
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                                            .text_color(TEXT)
-                                                            .whitespace_nowrap()
-                                                            .child(t(L::OUTPUT_FORMAT)),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .gap_1p5()
-                                                    .child(btn(
-                                                        "SRT",
-                                                        if form.output_srt {
-                                                            BtnKind::Primary
-                                                        } else {
-                                                            BtnKind::Secondary
-                                                        },
-                                                        true,
-                                                        cx.listener(|this, _, _, cx| {
-                                                            if !this.settings.output_txt {
-                                                                this.flash_hint(
-                                                                    t(L::KEEP_ONE_FORMAT),
-                                                                    cx,
-                                                                );
-                                                                return;
-                                                            }
-                                                            this.settings.output_srt =
-                                                                !this.settings.output_srt;
-                                                            this.mark_settings_dirty(cx);
-                                                        }),
-                                                    ))
-                                                    .child(btn(
-                                                        "TXT",
-                                                        if form.output_txt {
-                                                            BtnKind::Primary
-                                                        } else {
-                                                            BtnKind::Secondary
-                                                        },
-                                                        true,
-                                                        cx.listener(|this, _, _, cx| {
-                                                            if !this.settings.output_srt {
-                                                                this.flash_hint(
-                                                                    t(L::KEEP_ONE_FORMAT),
-                                                                    cx,
-                                                                );
-                                                                return;
-                                                            }
-                                                            this.settings.output_txt =
-                                                                !this.settings.output_txt;
-                                                            this.mark_settings_dirty(cx);
-                                                        }),
-                                                    )),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                                            .text_color(TEXT)
-                                                            .whitespace_nowrap()
-                                                            .child(t(L::CHINESE_OUTPUT)),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(MUTED)
-                                                            .whitespace_nowrap()
-                                                            .child(t(L::ZH_YUE_ONLY)),
-                                                    ),
-                                            )
-                                            .child(
-                                                div().flex().gap_1().children(TextScript::ALL.map(
-                                                    |script| {
-                                                        let active = form.text_script == script;
-                                                        btn(
-                                                            script.label(ui_lang()),
-                                                            if active {
-                                                                BtnKind::Primary
-                                                            } else {
-                                                                BtnKind::Secondary
-                                                            },
-                                                            true,
-                                                            cx.listener(move |this, _, _, cx| {
-                                                                if this.settings.text_script == script.id() {
-                                                                    return;
-                                                                }
-                                                                this.settings.text_script =
-                                                                    script.id().into();
-                                                                this.mark_settings_dirty(cx);
-                                                            }),
-                                                        )
-                                                    },
-                                                )),
-                                            ),
-                                    )
-                                    .into_any_element();
-    settings_section(body)
-}
-
-/// 字幕输出位置
-pub(super) fn render_settings_output_location(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(TEXT)
-                                            .child(t(L::OUTPUT_LOCATION)),
-                                    )
-                                    .child(
-                                        div().flex().gap_1p5().children(
-                                            [(true, t(L::NEXT_TO_VIDEO)), (false, t(L::CUSTOM_DIR))]
-                                                .into_iter()
-                                                .map(|(next, label)| {
-                                                    let active = form.save_next == next;
-                                                    btn(
-                                                        label,
-                                                        if active {
-                                                            BtnKind::Primary
-                                                        } else {
-                                                            BtnKind::Secondary
-                                                        },
-                                                        true,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            if this.settings.save_next_to_source == next {
-                                                                return;
-                                                            }
-                                                            this.settings.save_next_to_source = next;
-                                                            this.mark_settings_dirty(cx);
-                                                        }),
-                                                    )
-                                                }),
-                                        ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("output-dir")
-                                            .flex()
-                                            .items_center()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(LINE)
-                                            .bg(PANEL)
-                                            .overflow_hidden()
-                                            .opacity(if form.save_next { 0.45 } else { 1.0 })
-                                            .hover(|s| s.border_color(ACCENT))
-                                            .child(
-                                                div()
-                                                    .id("output-dir-path")
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .text_xs()
-                                                    .text_color(TEXT)
-                                                    .whitespace_normal()
-                                                    .line_clamp(2)
-                                                    .child(form.output_dir.clone())
-                                                    .tooltip({
-                                                        let tip = form.output_dir_tip.clone();
-                                                        move |_, cx| {
-                                                        cx.new(|_| NameTooltip {
-                                                            text: tip.clone().into(),
-                                                        })
-                                                        .into()
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("output-dir-browse")
-                                                    .flex_shrink_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .border_l_1()
-                                                    .border_color(LINE_SOFT)
-                                                    .cursor_pointer()
-                                                    .hover(|s| s.bg(ACCENT_SOFT))
-                                                    .child(
-                                                        svg()
-                                                            .size(px(15.))
-                                                            .path("icons/folder.svg")
-                                                            .text_color(MUTED),
-                                                    )
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.pick_output_dir(cx)
-                                                    })),
-                                            ),
-                                    )
-                                    .into_any_element();
-    settings_section(body)
-}
-
-/// 语音识别模型
-pub(super) fn render_settings_asr_model(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(TEXT)
-                                                    .child(t(L::ASR_MODEL)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .size(px(8.))
-                                                    .rounded_full()
-                                                    .bg(if form.asr_ready { ACCENT } else { DANGER }),
-                                            ),
-                                    )
-                                    .child({
-                                        // 尺寸 chip 选"档位家族"：量化开着时切尺寸
-                                        // 仍落在该尺寸的 int8 档；「量化」是同一行里
-                                        // 可独立点亮/取消的按钮（与 SRT/TXT 同款）。
-                                        let mut chips: Vec<AnyElement> = ModelId::ASR_CHOICES
-                                            .into_iter()
-                                            .map(|id| {
-                                                let active = form.asr_base_id == id;
-                                                let can_switch =
-                                                    !form.asr_size_locked || active;
-                                                btn(
-                                                    id.short_label(),
-                                                    if active {
-                                                        BtnKind::Primary
-                                                    } else {
-                                                        BtnKind::Secondary
-                                                    },
-                                                    can_switch,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        let target =
-                                                            id.with_quant(this.settings.asr_quantized());
-                                                        if this.settings.selected_asr_id() == target {
-                                                            return;
-                                                        }
-                                                        if this.download_kind_busy(ModelKind::Asr) {
-                                                            this.flash_hint(
-                                                                t(L::ASR_DL_BUSY_RESIZE),
-                                                                cx,
-                                                            );
-                                                            return;
-                                                        }
-                                                        this.settings.select_asr_model(target);
-                                                        this.clear_stale_asr_progress();
-                                                        this.refresh_model_probe();
-                                                        this.mark_settings_dirty(cx);
-                                                    }),
-                                                )
-                                                .into_any_element()
-                                            })
-                                            .collect();
-                                        chips.push(
-                                            pill(
-                                                "asr-quant",
-                                                t(L::QUANT),
-                                                form.asr_quant,
-                                                cx.listener(|this, _, _, cx| {
-                                                    if this.download_kind_busy(ModelKind::Asr) {
-                                                        this.flash_hint(
-                                                            t(L::ASR_DL_BUSY),
-                                                            cx,
-                                                        );
-                                                        return;
-                                                    }
-                                                    this.settings
-                                                        .set_asr_quantized(!this.settings.asr_quantized());
-                                                    this.clear_stale_asr_progress();
-                                                    this.refresh_model_probe();
-                                                    this.mark_settings_dirty(cx);
-                                                }),
-                                            )
-                                            .into_any_element(),
-                                        );
-                                        div().flex().gap_1p5().children(chips)
+            .child(model_download_row(
+                ComponentRow {
+                    id: "align-dl-btn",
+                    ready: form.align_ready,
+                    busy: form.align_dl_busy,
+                    progress: form.align_dl.as_ref(),
+                },
+                div()
+                    .id("aligner-dir")
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(LINE)
+                    .bg(PANEL)
+                    .overflow_hidden()
+                    .hover(|s| s.border_color(ACCENT))
+                    .child(
+                        div()
+                            .id("aligner-dir-path")
+                            .flex_1()
+                            .min_w_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .text_xs()
+                            .text_color(TEXT)
+                            .whitespace_normal()
+                            .line_clamp(1)
+                            .child(form.aligner.clone())
+                            .tooltip({
+                                let tip = form.aligner_tip.clone();
+                                move |_, cx| {
+                                    cx.new(|_| NameTooltip {
+                                        text: tip.clone().into(),
                                     })
-                                    .child(model_download_row(
-                                        ComponentRow {
-                                            id: "asr-dl-btn",
-                                            ready: form.asr_ready,
-                                            busy: form.asr_dl_busy,
-                                            progress: form.asr_dl.as_ref(),
-                                        },
-                                        div()
-                                            .id("model-dir")
-                                            .flex()
-                                            .items_center()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(LINE)
-                                            .bg(PANEL)
-                                            .overflow_hidden()
-                                            .hover(|s| s.border_color(ACCENT))
-                                            .child(
-                                                div()
-                                                    .id("model-dir-path")
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .text_xs()
-                                                    .text_color(TEXT)
-                                                    .whitespace_normal()
-                                                    .line_clamp(1)
-                                                    .child(form.model.clone())
-                                                    .tooltip({
-                                                        let tip = form.model_tip.clone();
-                                                        move |_, cx| {
-                                                        cx.new(|_| NameTooltip {
-                                                            text: tip.clone().into(),
-                                                        })
-                                                        .into()
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("model-dir-browse")
-                                                    .flex_shrink_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .border_l_1()
-                                                    .border_color(LINE_SOFT)
-                                                    .cursor_pointer()
-                                                    .hover(|s| s.bg(ACCENT_SOFT))
-                                                    .child(
-                                                        svg()
-                                                            .size(px(15.))
-                                                            .path("icons/folder.svg")
-                                                            .text_color(MUTED),
-                                                    )
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.pick_model_dir(cx)
-                                                    })),
-                                            ),
-                                        cx.listener(move |this, _, _, cx| {
-                                            let id = this.settings.selected_asr_id();
-                                            this.start_model_download(id, cx);
-                                        }),
-                                        cx.listener(move |this, _, _, cx| {
-                                            let id = this.settings.selected_asr_id();
-                                            this.cancel_model_download(id, cx);
-                                        }),
-                                    ))
-                                    .into_any_element();
-    settings_section(body)
-}
+                                    .into()
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("aligner-dir-browse")
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .border_l_1()
+                            .border_color(LINE_SOFT)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ACCENT_SOFT))
+                            .child(
+                                svg()
+                                    .size(px(15.))
+                                    .path("icons/folder.svg")
+                                    .text_color(MUTED),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_aligner_dir(cx))),
+                    ),
+                cx.listener(|this, _, _, cx| {
+                    this.start_model_download(ModelId::QwenAlign06B, cx);
+                }),
+                cx.listener(|this, _, _, cx| {
+                    this.cancel_model_download(ModelId::QwenAlign06B, cx);
+                }),
+            ))
+            .into_any_element();
+        settings_section(body)
+    }
 
-/// 对齐模型
-pub(super) fn render_settings_aligner(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(TEXT)
-                                                    .child(t(L::ALIGNER_MODEL)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .size(px(8.))
-                                                    .rounded_full()
-                                                    .bg(if form.align_ready { ACCENT } else { DANGER }),
-                                            ),
-                                    )
-                                    .child(model_download_row(
-                                        ComponentRow {
-                                            id: "align-dl-btn",
-                                            ready: form.align_ready,
-                                            busy: form.align_dl_busy,
-                                            progress: form.align_dl.as_ref(),
-                                        },
-                                        div()
-                                            .id("aligner-dir")
-                                            .flex()
-                                            .items_center()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(LINE)
-                                            .bg(PANEL)
-                                            .overflow_hidden()
-                                            .hover(|s| s.border_color(ACCENT))
-                                            .child(
-                                                div()
-                                                    .id("aligner-dir-path")
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .text_xs()
-                                                    .text_color(TEXT)
-                                                    .whitespace_normal()
-                                                    .line_clamp(1)
-                                                    .child(form.aligner.clone())
-                                                    .tooltip({
-                                                        let tip = form.aligner_tip.clone();
-                                                        move |_, cx| {
-                                                        cx.new(|_| NameTooltip {
-                                                            text: tip.clone().into(),
-                                                        })
-                                                        .into()
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("aligner-dir-browse")
-                                                    .flex_shrink_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .border_l_1()
-                                                    .border_color(LINE_SOFT)
-                                                    .cursor_pointer()
-                                                    .hover(|s| s.bg(ACCENT_SOFT))
-                                                    .child(
-                                                        svg()
-                                                            .size(px(15.))
-                                                            .path("icons/folder.svg")
-                                                            .text_color(MUTED),
-                                                    )
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.pick_aligner_dir(cx)
-                                                    })),
-                                            ),
-                                        cx.listener(|this, _, _, cx| {
-                                            this.start_model_download(ModelId::QwenAlign06B, cx);
-                                        }),
-                                        cx.listener(|this, _, _, cx| {
-                                            this.cancel_model_download(ModelId::QwenAlign06B, cx);
-                                        }),
-                                    ))
-                                    .into_any_element();
-    settings_section(body)
-}
+    /// 人声分离（HTDemucs）
+    pub(super) fn render_settings_demucs(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(TEXT)
+                            .child(t(L::VOCAL_SEPARATION)),
+                    )
+                    .child(div().size(px(8.)).rounded_full().bg(if form.demucs_ready {
+                        ACCENT
+                    } else {
+                        DANGER
+                    })),
+            )
+            // 「默认启用」= 新任务默认值（任务行里可单独覆盖）；
+            // 与「量化」同款：点亮即选中，再点取消。
+            .child(div().flex().gap_1p5().child(pill(
+                "vocal-sep-default",
+                t(L::SEP_DEFAULT_ON),
+                form.vocal_sep,
+                cx.listener(|this, _, _, cx| {
+                    let enabling = !this.settings.vocal_separation;
+                    if enabling && !this.demucs_ready {
+                        this.flash_hint(t(L::SEP_NEEDS_MODEL), cx);
+                        return;
+                    }
+                    this.settings.vocal_separation = enabling;
+                    this.mark_settings_dirty(cx);
+                }),
+            )))
+            .child(model_download_row(
+                ComponentRow {
+                    id: "demucs-dl-btn",
+                    ready: form.demucs_ready,
+                    busy: form.demucs_dl_busy,
+                    progress: form.demucs_dl.as_ref(),
+                },
+                div()
+                    .id("demucs-dir")
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(LINE)
+                    .bg(PANEL)
+                    .overflow_hidden()
+                    .hover(|s| s.border_color(ACCENT))
+                    .child(
+                        div()
+                            .id("demucs-dir-path")
+                            .flex_1()
+                            .min_w_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .text_xs()
+                            .text_color(TEXT)
+                            .whitespace_normal()
+                            .line_clamp(1)
+                            .child(form.demucs_dir.clone())
+                            .tooltip({
+                                let tip = form.demucs_dir_tip.clone();
+                                move |_, cx| {
+                                    cx.new(|_| NameTooltip {
+                                        text: tip.clone().into(),
+                                    })
+                                    .into()
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("demucs-dir-browse")
+                            .flex_shrink_0()
+                            .px_2p5()
+                            .py_1p5()
+                            .border_l_1()
+                            .border_color(LINE_SOFT)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ACCENT_SOFT))
+                            .child(
+                                svg()
+                                    .size(px(15.))
+                                    .path("icons/folder.svg")
+                                    .text_color(MUTED),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_demucs_dir(cx))),
+                    ),
+                cx.listener(|this, _, _, cx| {
+                    this.start_model_download(ModelId::HtdemucsFt, cx);
+                }),
+                cx.listener(|this, _, _, cx| {
+                    this.cancel_model_download(ModelId::HtdemucsFt, cx);
+                }),
+            ))
+            .into_any_element();
+        settings_section(body)
+    }
 
-/// 人声分离（HTDemucs）
-pub(super) fn render_settings_demucs(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(TEXT)
-                                                    .child(t(L::VOCAL_SEPARATION)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .size(px(8.))
-                                                    .rounded_full()
-                                                    .bg(if form.demucs_ready { ACCENT } else { DANGER }),
-                                            ),
-                                    )
-                                    // 「默认启用」= 新任务默认值（任务行里可单独覆盖）；
-                                    // 与「量化」同款：点亮即选中，再点取消。
-                                    .child(div().flex().gap_1p5().child(pill(
-                                        "vocal-sep-default",
-                                        t(L::SEP_DEFAULT_ON),
-                                        form.vocal_sep,
-                                        cx.listener(|this, _, _, cx| {
-                                            let enabling = !this.settings.vocal_separation;
-                                            if enabling && !this.demucs_ready {
-                                                this.flash_hint(t(L::SEP_NEEDS_MODEL), cx);
-                                                return;
-                                            }
-                                            this.settings.vocal_separation = enabling;
-                                            this.mark_settings_dirty(cx);
-                                        }),
-                                    )))
-                                    .child(model_download_row(
-                                        ComponentRow {
-                                            id: "demucs-dl-btn",
-                                            ready: form.demucs_ready,
-                                            busy: form.demucs_dl_busy,
-                                            progress: form.demucs_dl.as_ref(),
-                                        },
-                                        div()
-                                            .id("demucs-dir")
-                                            .flex()
-                                            .items_center()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(LINE)
-                                            .bg(PANEL)
-                                            .overflow_hidden()
-                                            .hover(|s| s.border_color(ACCENT))
-                                            .child(
-                                                div()
-                                                    .id("demucs-dir-path")
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .text_xs()
-                                                    .text_color(TEXT)
-                                                    .whitespace_normal()
-                                                    .line_clamp(1)
-                                                    .child(form.demucs_dir.clone())
-                                                    .tooltip({
-                                                        let tip = form.demucs_dir_tip.clone();
-                                                        move |_, cx| {
-                                                        cx.new(|_| NameTooltip {
-                                                            text: tip.clone().into(),
-                                                        })
-                                                        .into()
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("demucs-dir-browse")
-                                                    .flex_shrink_0()
-                                                    .px_2p5()
-                                                    .py_1p5()
-                                                    .border_l_1()
-                                                    .border_color(LINE_SOFT)
-                                                    .cursor_pointer()
-                                                    .hover(|s| s.bg(ACCENT_SOFT))
-                                                    .child(
-                                                        svg()
-                                                            .size(px(15.))
-                                                            .path("icons/folder.svg")
-                                                            .text_color(MUTED),
-                                                    )
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.pick_demucs_dir(cx)
-                                                    })),
-                                            ),
-                                        cx.listener(|this, _, _, cx| {
-                                            this.start_model_download(ModelId::HtdemucsFt, cx);
-                                        }),
-                                        cx.listener(|this, _, _, cx| {
-                                            this.cancel_model_download(ModelId::HtdemucsFt, cx);
-                                        }),
-                                    ))
-                                    .into_any_element();
-    settings_section(body)
-}
+    /// 推理后端（auto / gpu / cpu）
+    pub(super) fn render_settings_backend(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(t(L::BACKEND)),
+            )
+            .child(
+                div().flex().gap_1p5().children(
+                    [("auto", t(L::BACKEND_AUTO)), ("gpu", "GPU"), ("cpu", "CPU")]
+                        .into_iter()
+                        .map(|(id, label)| {
+                            let active = form.backend == id;
+                            btn(
+                                label,
+                                if active {
+                                    BtnKind::Primary
+                                } else {
+                                    BtnKind::Secondary
+                                },
+                                true,
+                                cx.listener(move |this, _, _, cx| {
+                                    if this.settings.backend == id {
+                                        return;
+                                    }
+                                    this.settings.backend = id.into();
+                                    this.refresh_model_probe();
+                                    this.mark_settings_dirty(cx);
+                                }),
+                            )
+                        }),
+                ),
+            )
+            .into_any_element();
+        settings_section(body)
+    }
 
-/// 推理后端（auto / gpu / cpu）
-pub(super) fn render_settings_backend(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body =
-        div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(t(L::BACKEND)),
-                                    )
-                                    .child(
-                                        div().flex().gap_1p5().children(
-                                            [
-                                                ("auto", t(L::BACKEND_AUTO)),
-                                                ("gpu", "GPU"),
-                                                ("cpu", "CPU"),
-                                            ]
-                                            .into_iter()
-                                            .map(|(id, label)| {
-                                                let active = form.backend == id;
-                                                btn(
-                                                    label,
-                                                    if active {
-                                                        BtnKind::Primary
-                                                    } else {
-                                                        BtnKind::Secondary
-                                                    },
-                                                    true,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        if this.settings.backend == id {
-                                                            return;
-                                                        }
-                                                        this.settings.backend = id.into();
-                                                        this.refresh_model_probe();
-                                                        this.mark_settings_dirty(cx);
-                                                    }),
-                                                )
-                                            }),
-                                        ),
-                                    )
-                                    .into_any_element();
-    settings_section(body)
-}
-
-/// 提示音：一行一个开关，点亮即开启。
-pub(super) fn render_settings_sound(
-    &mut self,
-    form: &SettingsFormState,
-    cx: &mut Context<Self>,
-) -> impl IntoElement + use<> {
-    let body = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(TEXT)
-                .child(t(L::SOUND)),
-        )
-        .child(switch(
-            "switch-sound",
-            form.sound,
-            cx.listener(|this, _, _, cx| {
-                let enabling = !this.settings.sound;
-                this.settings.sound = enabling;
-                // Audible the moment it comes back on.
-                if enabling {
-                    this.play_ui(sfx::Sfx::Click);
-                }
-                this.mark_settings_dirty(cx);
-            }),
-        ));
-    settings_section(body.into_any_element())
-}
+    /// 提示音：一行一个开关，点亮即开启。
+    pub(super) fn render_settings_sound(
+        &mut self,
+        form: &SettingsFormState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(TEXT)
+                    .child(t(L::SOUND)),
+            )
+            .child(switch(
+                "switch-sound",
+                form.sound,
+                cx.listener(|this, _, _, cx| {
+                    let enabling = !this.settings.sound;
+                    this.settings.sound = enabling;
+                    // Audible the moment it comes back on.
+                    if enabling {
+                        this.play_ui(sfx::Sfx::Click);
+                    }
+                    this.mark_settings_dirty(cx);
+                }),
+            ));
+        settings_section(body.into_any_element())
+    }
 }

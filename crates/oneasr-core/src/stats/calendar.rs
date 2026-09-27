@@ -78,11 +78,7 @@ pub fn days_in_month(year: i64, month: u32) -> u32 {
         4 | 6 | 9 | 11 => 30,
         2 => {
             let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-            if leap {
-                29
-            } else {
-                28
-            }
+            if leap { 29 } else { 28 }
         }
         _ => 0,
     }
@@ -202,7 +198,11 @@ mod tests {
         let week = monday_of("2026-09-13").unwrap();
         assert_eq!(week, "2026-09-07");
         let off = days_between(&week, "2026-09-13").unwrap();
-        assert_eq!((off / 7, off % 7), (0, 6), "Sunday is row 6 of its own week");
+        assert_eq!(
+            (off / 7, off % 7),
+            (0, 6),
+            "Sunday is row 6 of its own week"
+        );
         let off2 = days_between(&week, "2026-09-21").unwrap();
         assert_eq!((off2 / 7, off2 % 7), (2, 0));
     }
@@ -244,7 +244,10 @@ mod tests {
         assert_eq!(format_span_secs(UiLang::Zh, 600.0), "10 分");
         assert_eq!(format_span_secs(UiLang::Zh, 3600.0), "1 小时");
         assert_eq!(format_span_secs(UiLang::Zh, 1200.0), "20 分");
-        assert_eq!(format_span_secs(UiLang::Zh, 7200.0 + 1500.0), "2 小时 25 分");
+        assert_eq!(
+            format_span_secs(UiLang::Zh, 7200.0 + 1500.0),
+            "2 小时 25 分"
+        );
         assert_eq!(format_span_secs(UiLang::Zh, 0.0), "0 分");
         assert_eq!(format_span_secs(UiLang::Zh, f64::NAN), "0 分");
         assert_eq!(format_span_secs(UiLang::En, 45.0), "45 s");

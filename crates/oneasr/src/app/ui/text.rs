@@ -93,12 +93,8 @@ pub fn empty_state_subtitle(lang: UiLang, model_not_ready: bool) -> &'static str
     match (lang, model_not_ready) {
         (UiLang::Zh, true) => "请先在设置中选择完整模型目录，再添加文件",
         (UiLang::Zh, false) => "拖入音视频到此处，或点击下方按钮添加",
-        (UiLang::En, true) => {
-            "Pick complete model folders in Settings first, then add files"
-        }
-        (UiLang::En, false) => {
-            "Drop audio / video files here, or add them with the buttons below"
-        }
+        (UiLang::En, true) => "Pick complete model folders in Settings first, then add files",
+        (UiLang::En, false) => "Drop audio / video files here, or add them with the buttons below",
     }
 }
 
@@ -113,7 +109,10 @@ mod tests {
         assert!(s.contains("排队 1"));
         assert!(s.contains("处理中 1"));
         assert!(!s.contains('%'));
-        assert_eq!(format_queue_status(UiLang::Zh, 0, 0, 0, 0, 0, 0), "暂无任务");
+        assert_eq!(
+            format_queue_status(UiLang::Zh, 0, 0, 0, 0, 0, 0),
+            "暂无任务"
+        );
         assert_eq!(
             format_queue_status(UiLang::Zh, 1, 1, 0, 0, 0, 0),
             "1 个任务 · 待处理 1"
@@ -127,7 +126,10 @@ mod tests {
         assert!(s.contains("1 queued"));
         assert!(s.contains("1 processing"));
         assert!(!s.contains('%'));
-        assert_eq!(format_queue_status(UiLang::En, 0, 0, 0, 0, 0, 0), "No tasks");
+        assert_eq!(
+            format_queue_status(UiLang::En, 0, 0, 0, 0, 0, 0),
+            "No tasks"
+        );
         assert_eq!(
             format_queue_status(UiLang::En, 1, 1, 0, 0, 0, 0),
             "1 task · 1 pending"

@@ -43,15 +43,19 @@ pub mod L {
     // ---- 设置已保存提示 ----
     pub const SETTINGS_SAVED_READY: Str =
         Str::new("设置已保存 · 模型就绪", "Settings saved · models ready");
-    pub const SETTINGS_SAVED_NOT_READY: Str =
-        Str::new("设置已保存 · 模型未就绪", "Settings saved · models incomplete");
+    pub const SETTINGS_SAVED_NOT_READY: Str = Str::new(
+        "设置已保存 · 模型未就绪",
+        "Settings saved · models incomplete",
+    );
 
     // ---- 文件对话框标题 ----
     pub const DLG_ADD_MEDIA: Str = Str::new("添加音视频", "Add audio / video");
     pub const DLG_ASR_DIR: Str = Str::new("选择语音识别模型目录", "Choose ASR model folder");
     pub const DLG_ALIGNER_DIR: Str = Str::new("选择对齐模型目录", "Choose aligner model folder");
-    pub const DLG_DEMUCS_DIR: Str =
-        Str::new("选择人声分离模型目录", "Choose vocal-separation model folder");
+    pub const DLG_DEMUCS_DIR: Str = Str::new(
+        "选择人声分离模型目录",
+        "Choose vocal-separation model folder",
+    );
     pub const DLG_OUTPUT_DIR: Str = Str::new("选择字幕输出目录", "Choose subtitle output folder");
 
     // ---- 顶部工具栏 ----
@@ -74,8 +78,10 @@ pub mod L {
     pub const OPEN_SETTINGS: Str = Str::new("打开设置", "Open settings");
 
     // ---- 下载 ----
-    pub const DOWNLOAD_KIND_BUSY: Str =
-        Str::new("已有同类下载任务进行中", "A download of this kind is already running");
+    pub const DOWNLOAD_KIND_BUSY: Str = Str::new(
+        "已有同类下载任务进行中",
+        "A download of this kind is already running",
+    );
     pub const MODEL_FILES_COMPLETE: Str = Str::new(
         "模型文件完整，无需重新下载",
         "Model files are complete — no need to re-download",
@@ -96,8 +102,10 @@ pub mod L {
         "人声分离：开启（转录前分离人声，点击关闭）",
         "Vocal separation: on (isolates vocals before transcribing — click to turn off)",
     );
-    pub const TIP_SEP_OFF: Str =
-        Str::new("人声分离：关闭（点击开启）", "Vocal separation: off (click to turn on)");
+    pub const TIP_SEP_OFF: Str = Str::new(
+        "人声分离：关闭（点击开启）",
+        "Vocal separation: off (click to turn on)",
+    );
 
     // ---- 任务状态锁提示 ----
     pub const LOCKED_LANG: Str = Str::new(
@@ -108,15 +116,22 @@ pub mod L {
         "处理中的任务不能修改人声分离",
         "Can't change vocal separation while the task is processing",
     );
-    pub const LOCKED_DELETE: Str =
-        Str::new("处理中的任务不能删除", "Can't delete a task while it's processing");
+    pub const LOCKED_DELETE: Str = Str::new(
+        "处理中的任务不能删除",
+        "Can't delete a task while it's processing",
+    );
     pub const SEPARATION_NEEDS_MODEL: Str = Str::new(
         "请先在设置中下载人声分离模型",
         "Download the vocal-separation model in Settings first",
     );
-    pub const SEPARATION_ON: Str = Str::new("本任务已开启人声分离", "Vocal separation is on for this task");
-    pub const SEPARATION_OFF: Str =
-        Str::new("本任务已关闭人声分离", "Vocal separation is off for this task");
+    pub const SEPARATION_ON: Str = Str::new(
+        "本任务已开启人声分离",
+        "Vocal separation is on for this task",
+    );
+    pub const SEPARATION_OFF: Str = Str::new(
+        "本任务已关闭人声分离",
+        "Vocal separation is off for this task",
+    );
 
     // ---- 开始 / 清空 ----
     pub const LIST_EMPTY: Str = Str::new("列表已空", "List is already empty");
@@ -124,10 +139,15 @@ pub mod L {
         "已清空队列，当前任务继续处理",
         "Queue cleared — the current task keeps running",
     );
-    pub const WORKER_EXITED: Str = Str::new("识别工作线程已退出", "The transcription worker exited");
+    pub const WORKER_EXITED: Str =
+        Str::new("识别工作线程已退出", "The transcription worker exited");
 
     // ---- 设置：默认语言 / 字幕长度 ----
     pub const DEFAULT_LANGUAGE: Str = Str::new("默认语言", "Default language");
+    /// 语言 id 非法（settings.json 被手改坏）时下拉框显示的兜底标签——
+    /// 未知语言没有对应的 [`oneasr_core::lang::SourceLanguage`]，不能退回某项的
+    /// 固定 endonym（那会把中文标签塞进英文界面）。
+    pub const LANGUAGE_FALLBACK: Str = Str::new("中文普通话", "Mandarin Chinese");
     pub const SUBTITLE_LENGTH: Str = Str::new("字幕长度", "Subtitle length");
     pub const LEN_SHORT: Str = Str::new("短", "Short");
     pub const LEN_STANDARD: Str = Str::new("标准", "Standard");
@@ -142,7 +162,8 @@ pub mod L {
 
     // ---- 设置：输出 ----
     pub const OUTPUT_FORMAT: Str = Str::new("输出格式", "Output format");
-    pub const KEEP_ONE_FORMAT: Str = Str::new("至少保留一种输出格式", "Keep at least one output format");
+    pub const KEEP_ONE_FORMAT: Str =
+        Str::new("至少保留一种输出格式", "Keep at least one output format");
     pub const CHINESE_OUTPUT: Str = Str::new("中文输出", "Chinese script");
     pub const ZH_YUE_ONLY: Str = Str::new("仅中文/粤语", "Chinese & Cantonese only");
     pub const OUTPUT_LOCATION: Str = Str::new("字幕输出位置", "Subtitle output location");
@@ -155,21 +176,28 @@ pub mod L {
         "ASR 下载进行中，请稍后再切换尺寸",
         "ASR download in progress — try switching size later",
     );
-    pub const ASR_DL_BUSY: Str =
-        Str::new("ASR 下载进行中，请稍后再切换", "ASR download in progress — try again later");
-    pub const QUANT: Str = Str::new("量化", "int8");
+    pub const ASR_DL_BUSY: Str = Str::new(
+        "ASR 下载进行中，请稍后再切换",
+        "ASR download in progress — try again later",
+    );
+    /// 英文侧跟术语表（`量化 quantization(int8)`）对齐，不再只写 `int8`。
+    pub const QUANT: Str = Str::new("量化", "Quantization");
     pub const ALIGNER_MODEL: Str = Str::new("对齐模型", "Aligner model");
     pub const VOCAL_SEPARATION: Str = Str::new("人声分离", "Vocal separation");
     pub const SEP_DEFAULT_ON: Str = Str::new("默认启用", "On by default");
-    pub const SEP_NEEDS_MODEL: Str =
-        Str::new("请先下载人声分离模型", "Download the vocal-separation model first");
+    pub const SEP_NEEDS_MODEL: Str = Str::new(
+        "请先下载人声分离模型",
+        "Download the vocal-separation model first",
+    );
     pub const BACKEND: Str = Str::new("推理后端", "Inference backend");
     pub const BACKEND_AUTO: Str = Str::new("自动", "Auto");
     pub const SOUND: Str = Str::new("提示音", "Sounds");
 
     // ---- 统计面板 ----
-    pub const STATS_EMPTY: Str =
-        Str::new("完成第一个任务后，这里开始记账。", "Stats start once the first task is done.");
+    pub const STATS_EMPTY: Str = Str::new(
+        "完成第一个任务后，这里开始记账。",
+        "Stats start once the first task is done.",
+    );
     pub const STATS_SAVED_TOTAL: Str = Str::new("累计省下", "Time saved");
     pub const STATS_MEDIA_TOTAL: Str = Str::new("素材总时长", "Total media");
     pub const STATS_PROCESS_TOTAL: Str = Str::new("机器耗时", "Processing time");

@@ -6,6 +6,10 @@
 //! WASAPI on Windows, CoreAudio on macOS, and ALSA on Linux (PipeWire desktop
 //! systems expose it through their ALSA compatibility layer). No temporary files
 //! or external player processes are needed.
+//!
+//! 日志语言：本文件只写英文。崩溃日志是用户贴进 issue 的素材（受众是国际社区），
+//! 而且同一条日志里已经带着英文前缀（`app/mod.rs` 的 `settings repaired:`），
+//! 中英混排更难读。面向界面的文案才走双语表（`crate::i18n`）。
 
 use std::io::Cursor;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -113,7 +117,7 @@ fn sfx_inbox() -> Option<Inbox> {
             {
                 Ok(_) => Some(inbox),
                 Err(error) => {
-                    crashlog::log_warn(format!("提示音线程启动失败：{error}"));
+                    crashlog::log_warn(format!("sfx thread failed to start: {error}"));
                     None
                 }
             }
@@ -205,7 +209,7 @@ impl AudioOutput {
     fn open(inbox: &Inbox) -> Result<Self, String> {
         let device = rodio::cpal::default_host()
             .default_output_device()
-            .ok_or_else(|| "没有默认音频输出设备".to_string())?;
+            .ok_or_else(|| "no default audio output device".to_string())?;
         let device_id = device.id().map_err(|error| error.to_string())?;
         let callback_inbox = inbox.clone();
         let mut sink = DeviceSinkBuilder::from_device(device)
@@ -299,7 +303,7 @@ impl AudioWorker {
         };
         if let Err(error) = output.replace(bytes) {
             if !self.decode_error_reported {
-                crashlog::log_warn(format!("内置提示音解码失败：{error}"));
+                crashlog::log_warn(format!("embedded sfx failed to decode: {error}"));
                 self.decode_error_reported = true;
             }
             return;
@@ -320,14 +324,14 @@ impl AudioWorker {
                 self.output = Some(output);
                 self.retry_after = None;
                 if self.outage_reported {
-                    crashlog::log_info("提示音音频输出已恢复");
+                    crashlog::log_info("sfx audio output recovered");
                     self.outage_reported = false;
                 }
             }
             Err(error) => {
                 self.retry_after = Some(Instant::now() + OUTPUT_RETRY_DELAY);
                 if !self.outage_reported {
-                    crashlog::log_warn(format!("提示音输出设备不可用：{error}"));
+                    crashlog::log_warn(format!("sfx output device unavailable: {error}"));
                     self.outage_reported = true;
                 }
                 // A reminder is important enough to retry immediately after a
@@ -345,7 +349,7 @@ impl AudioWorker {
             self.retry_pending = Some(Sfx::Reminder);
         }
         if !self.outage_reported {
-            crashlog::log_warn(format!("提示音音频流中断：{error}"));
+            crashlog::log_warn(format!("sfx audio stream interrupted: {error}"));
             self.outage_reported = true;
         }
     }
@@ -366,7 +370,10 @@ impl AudioWorker {
     }
 
     fn retry_due(&mut self) -> Option<Sfx> {
-        if self.retry_after.is_some_and(|retry_at| Instant::now() >= retry_at) {
+        if self
+            .retry_after
+            .is_some_and(|retry_at| Instant::now() >= retry_at)
+        {
             self.retry_after = None;
             self.retry_pending.take()
         } else {

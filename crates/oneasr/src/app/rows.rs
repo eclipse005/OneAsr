@@ -22,11 +22,9 @@ impl OneAsrApp {
                 self.hover_row = None;
             }
         }
-        self.entering
-            .retain(|id, t0| {
-                !self.exiting.contains_key(id)
-                    && now.duration_since(*t0).as_secs_f32() < ROW_ENTER_SECS
-            });
+        self.entering.retain(|id, t0| {
+            !self.exiting.contains_key(id) && now.duration_since(*t0).as_secs_f32() < ROW_ENTER_SECS
+        });
     }
 
     pub(crate) fn snapshot_task_rows(&self, now: Instant) -> Vec<TaskRowView> {
@@ -57,12 +55,9 @@ impl OneAsrApp {
                     name: t.name.clone(),
                     size_label: t.size_label(),
                     duration_label: t.duration.label(),
-                    rtfx_label: t
-                        .timing
-                        .as_ref()
-                        .and_then(|timing| {
-                            realtime_factor_label(media_sec, timing.total_ms, ui_lang())
-                        }),
+                    rtfx_label: t.timing.as_ref().and_then(|timing| {
+                        realtime_factor_label(media_sec, timing.total_ms, ui_lang())
+                    }),
                     is_video: is_video_format(&t.format),
                     timing: t.timing.clone(),
                     opacity,
@@ -287,7 +282,10 @@ mod tests {
     fn realtime_factor_needs_a_usable_length_and_clock() {
         assert_eq!(realtime_factor_label(None, 37_000, UiLang::Zh), None);
         assert_eq!(realtime_factor_label(Some(0.0), 37_000, UiLang::Zh), None);
-        assert_eq!(realtime_factor_label(Some(f64::NAN), 37_000, UiLang::Zh), None);
+        assert_eq!(
+            realtime_factor_label(Some(f64::NAN), 37_000, UiLang::Zh),
+            None
+        );
         assert_eq!(realtime_factor_label(Some(239.0), 0, UiLang::Zh), None);
     }
 

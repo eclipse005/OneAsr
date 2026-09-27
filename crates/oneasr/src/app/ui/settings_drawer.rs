@@ -45,12 +45,7 @@ impl OneAsrApp {
                             .items_center()
                             .gap_2p5()
                             .when(form.dirty, |el| {
-                                el.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(WARN)
-                                        .child(t(L::UNSAVED)),
-                                )
+                                el.child(div().text_xs().text_color(WARN).child(t(L::UNSAVED)))
                             })
                             .child(ui_language_btn(
                                 &form.ui_language,
@@ -97,30 +92,26 @@ impl OneAsrApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div().flex_shrink_0().child(btn(
-                            t(L::RESET),
-                            BtnKind::Quiet,
-                            true,
-                            cx.listener(|this, _, _, cx| this.reset_settings(cx)),
-                        )),
-                    )
-                    .child(
-                        div().flex_shrink_0().child(btn(
-                            if form.dirty {
-                                t(L::SAVE_SETTINGS)
-                            } else {
-                                t(L::SAVED)
-                            },
-                            if form.dirty {
-                                BtnKind::Primary
-                            } else {
-                                BtnKind::Secondary
-                            },
-                            form.dirty,
-                            cx.listener(|this, _, _, cx| this.save_settings(cx)),
-                        )),
-                    ),
+                    .child(div().flex_shrink_0().child(btn(
+                        t(L::RESET),
+                        BtnKind::Quiet,
+                        true,
+                        cx.listener(|this, _, _, cx| this.reset_settings(cx)),
+                    )))
+                    .child(div().flex_shrink_0().child(btn(
+                        if form.dirty {
+                            t(L::SAVE_SETTINGS)
+                        } else {
+                            t(L::SAVED)
+                        },
+                        if form.dirty {
+                            BtnKind::Primary
+                        } else {
+                            BtnKind::Secondary
+                        },
+                        form.dirty,
+                        cx.listener(|this, _, _, cx| this.save_settings(cx)),
+                    ))),
             )
     }
 }

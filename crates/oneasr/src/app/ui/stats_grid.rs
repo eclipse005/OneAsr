@@ -68,7 +68,10 @@ pub(super) fn stats_hover_text(summary: &StatsSummary, day: &str, lang: UiLang) 
     }
     let mut line = oneasr_core::stats::format_day(lang, day);
     if media > 0.0 {
-        line.push_str(&format!(" · {}", oneasr_core::stats::format_span_secs(lang, media)));
+        line.push_str(&format!(
+            " · {}",
+            oneasr_core::stats::format_span_secs(lang, media)
+        ));
     }
     if tasks > 0 {
         let ok = match lang {
@@ -258,13 +261,7 @@ mod tests {
 
     #[test]
     fn cells_keep_their_place_outside_the_recorded_span() {
-        let grid = build_stats_year_grid(
-            2026,
-            "2026-03-10",
-            "2026-03-20",
-            &BTreeMap::new(),
-            None,
-        );
+        let grid = build_stats_year_grid(2026, "2026-03-10", "2026-03-20", &BTreeMap::new(), None);
         // The frame still paints 365 cells; only the span is hoverable.
         assert_eq!(grid.cells.len(), 365);
         assert_eq!(grid.cells.iter().filter(|c| c.in_range).count(), 11);
@@ -278,11 +275,23 @@ mod tests {
     fn day_within_a_month_walks_columns_then_rows() {
         let grid = build_stats_year_grid(2026, "2026-01-01", "2026-12-31", &BTreeMap::new(), None);
         // 1–7 fill column 0 top to bottom; 8 starts column 1.
-        assert_eq!((cell(&grid, "2026-01-01").col, cell(&grid, "2026-01-01").row), (0, 0));
-        assert_eq!((cell(&grid, "2026-01-07").col, cell(&grid, "2026-01-07").row), (0, 6));
-        assert_eq!((cell(&grid, "2026-01-08").col, cell(&grid, "2026-01-08").row), (1, 0));
+        assert_eq!(
+            (cell(&grid, "2026-01-01").col, cell(&grid, "2026-01-01").row),
+            (0, 0)
+        );
+        assert_eq!(
+            (cell(&grid, "2026-01-07").col, cell(&grid, "2026-01-07").row),
+            (0, 6)
+        );
+        assert_eq!(
+            (cell(&grid, "2026-01-08").col, cell(&grid, "2026-01-08").row),
+            (1, 0)
+        );
         // February starts where January left off (5 columns in).
-        assert_eq!((cell(&grid, "2026-02-01").col, cell(&grid, "2026-02-01").row), (5, 0));
+        assert_eq!(
+            (cell(&grid, "2026-02-01").col, cell(&grid, "2026-02-01").row),
+            (5, 0)
+        );
     }
 
     #[test]

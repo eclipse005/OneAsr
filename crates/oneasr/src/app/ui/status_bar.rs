@@ -25,7 +25,12 @@ impl OneAsrApp {
         } else {
             format_queue_status(
                 ui_lang(),
-                tally.total, tally.pending, tally.queued, tally.proc, tally.done, tally.err,
+                tally.total,
+                tally.pending,
+                tally.queued,
+                tally.proc,
+                tally.done,
+                tally.err,
             )
             .into()
         };
@@ -33,11 +38,10 @@ impl OneAsrApp {
         let hint_good = self.status_hint_good;
         let stats = &self.stats;
         let stats_label: SharedString = match stats.saved_sec() {
-            Some(secs) => crate::i18n::saved_prefix(&oneasr_core::stats::format_span_secs(
-                ui_lang(),
-                secs,
-            ))
-            .into(),
+            Some(secs) => {
+                crate::i18n::saved_prefix(&oneasr_core::stats::format_span_secs(ui_lang(), secs))
+                    .into()
+            }
             None => t(L::STATS).into(),
         };
         let stats_has_data = !stats.is_empty();
@@ -138,8 +142,7 @@ fn status_bar_left(
                 .cursor_pointer()
                 .text_color(if stats_has_data { ACCENT } else { MUTED })
                 .when(stats_has_data, |el| {
-                    el.bg(ACCENT_SOFT)
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                    el.bg(ACCENT_SOFT).font_weight(gpui::FontWeight::SEMIBOLD)
                 })
                 .hover(|s| s.bg(ACCENT_MIST))
                 .child(stats_label)

@@ -1,13 +1,10 @@
 //! HTDemucs vocal separation adapter + its PCM I/O.
 
-use std::path::{Path, PathBuf};
 use std::cell::Cell;
+use std::path::{Path, PathBuf};
 
 use super::backend::ComputeBackend;
-use crate::engine::{
-    EngineError, SeparateRequest,
-    SeparationEvent, Separator,
-};
+use crate::engine::{EngineError, SeparateRequest, SeparationEvent, Separator};
 
 /// Weights file expected inside the configured Demucs model directory.
 /// Vocals-only shard of `htdemucs_ft`, loaded as a single FourStem network.
@@ -16,9 +13,7 @@ pub const DEMUCS_WEIGHTS_FILE: &str = "htdemucs_ft_vocals.safetensors";
 pub(super) fn separator_backend(backend: ComputeBackend) -> demucs_core::Backend {
     match backend {
         ComputeBackend::Cpu => demucs_core::Backend::Cpu,
-        ComputeBackend::Gpu => {
-            demucs_core::Backend::Gpu(demucs_core::gpu::DeviceSelector::Auto)
-        }
+        ComputeBackend::Gpu => demucs_core::Backend::Gpu(demucs_core::gpu::DeviceSelector::Auto),
     }
 }
 
@@ -39,7 +34,9 @@ impl DemucsSeparatorAdapter {
 
         let weights = model_dir.join(DEMUCS_WEIGHTS_FILE);
         if !weights.is_file() {
-            return Err(EngineError::new(crate::i18n::demucs_model_missing(&weights)));
+            return Err(EngineError::new(crate::i18n::demucs_model_missing(
+                &weights,
+            )));
         }
 
         let opts = LoadOptions {
@@ -54,11 +51,10 @@ impl DemucsSeparatorAdapter {
             Ok(inner) => (inner, false),
             Err(e) if backend == ComputeBackend::Gpu && !forced_gpu => {
                 log(crate::i18n::sep_gpu_load_failed_cpu(&e.to_string()));
-                let inner = Demucs::load(&weights, opts, demucs_core::Backend::Cpu).map_err(
-                    |cpu_e| {
+                let inner =
+                    Demucs::load(&weights, opts, demucs_core::Backend::Cpu).map_err(|cpu_e| {
                         EngineError::new(crate::i18n::sep_load_failed("cpu", &cpu_e.to_string()))
-                    },
-                )?;
+                    })?;
                 (inner, true)
             }
             Err(e) => {

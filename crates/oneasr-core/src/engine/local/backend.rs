@@ -26,21 +26,26 @@ pub(crate) struct GpuProbe {
 
 /// Probe adapters once per process. A driver is enough; there is no extra
 /// runtime pack to download.
-pub(super) fn probe_gpu_device() -> &'static Result<GpuProbe, String> {
-    static PROBE: std::sync::OnceLock<Result<GpuProbe, String>> = std::sync::OnceLock::new();
-    PROBE.get_or_init(|| {
-        let devices = qwen3_asr_wgpu::AsrInference::devices();
-        let gpu = devices.iter().find(|d| {
-            // `DeviceInfo::device_type` is `wgpu::DeviceType`; Debug of Cpu is "Cpu".
-            format!("{:?}", d.device_type) != "Cpu"
-        });
-        match gpu {
-            Some(d) => Ok(GpuProbe {
-                description: d.describe(),
-            }),
-            None => Err(crate::i18n::no_gpu_detected()),
-        }
-    })
+///
+/// **只缓存成功**：适配器枚举失败可能只是瞬时的（驱动正在重装、远程会话里
+/// 第一次枚举超时、另一个进程正占着显存），把它缓存下来等于让整个进程终身
+/// 回落 CPU —— 调用方下一次会重新探测，成功后才写进缓存。
+pub(super) fn probe_gpu_device() -> Result<&'static GpuProbe, String> {
+    static PROBE: std::sync::OnceLock<GpuProbe> = std::sync::OnceLock::new();
+    if let Some(probe) = PROBE.get() {
+        return Ok(probe);
+    }
+    let devices = qwen3_asr_wgpu::AsrInference::devices();
+    let gpu = devices.iter().find(|d| {
+        // `DeviceInfo::device_type` is `wgpu::DeviceType`; Debug of Cpu is "Cpu".
+        format!("{:?}", d.device_type) != "Cpu"
+    });
+    match gpu {
+        Some(d) => Ok(PROBE.get_or_init(|| GpuProbe {
+            description: d.describe(),
+        })),
+        None => Err(crate::i18n::no_gpu_detected()),
+    }
 }
 
 /// Resolve the inference backend from settings.
@@ -54,7 +59,9 @@ pub(super) fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, E
         "cpu" => Ok(ComputeBackend::Cpu),
         "gpu" => match probe_gpu_device() {
             Ok(_) => Ok(ComputeBackend::Gpu),
-            Err(e) => Err(EngineError::new(crate::i18n::gpu_forced_but_unavailable(&e))),
+            Err(e) => Err(EngineError::new(crate::i18n::gpu_forced_but_unavailable(
+                &e,
+            ))),
         },
         // auto
         _ => match probe_gpu_device() {

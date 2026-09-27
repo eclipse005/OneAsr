@@ -136,8 +136,14 @@ mod tests {
         assert_eq!(TextScript::from_id(""), TextScript::Original);
         assert_eq!(TextScript::from_id("nope"), TextScript::Original);
         assert_eq!(TextScript::Original.label(crate::i18n::UiLang::Zh), "原文");
-        assert_eq!(TextScript::Traditional.label(crate::i18n::UiLang::Zh), "繁体");
-        assert_eq!(TextScript::Original.label(crate::i18n::UiLang::En), "Original");
+        assert_eq!(
+            TextScript::Traditional.label(crate::i18n::UiLang::Zh),
+            "繁体"
+        );
+        assert_eq!(
+            TextScript::Original.label(crate::i18n::UiLang::En),
+            "Original"
+        );
         assert_eq!(
             TextScript::ALL.map(|s| s.id()),
             ["original", "simplified", "traditional"]
