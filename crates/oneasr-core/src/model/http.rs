@@ -165,9 +165,20 @@ mod tests {
             ua.contains(concat!("OneAsr/", env!("CARGO_PKG_VERSION"))),
             "user agent must track Cargo.toml: {ua}"
         );
+        // 原来写 ua.contains(consts::OS)：consts::OS 是小写 "linux"，而 UA 里的
+        // 平台串是 "X11; Linux x86_64"（大写 L），contains 大小写敏感 -> Linux 必挂。
+        // Windows 恰好因为 UA 里有 "Windows NT" 而通过，属于运气。
+        // 这里改成小写比较，并给 macOS 一个别名：UA 写的是 "Mac OS X"，
+        // 与 consts::OS 的 "macos" 不是子串。
+        let ua_lower = ua.to_ascii_lowercase();
+        let os_hint = match std::env::consts::OS {
+            "windows" => "windows",
+            "macos" => "mac os",
+            other => other,
+        };
         assert!(
-            ua.contains(std::env::consts::OS) || ua.contains("Windows NT"),
-            "user agent must describe this OS: {ua}"
+            ua_lower.contains(os_hint),
+            "user agent must describe this OS ({os_hint}): {ua}"
         );
         assert!(
             !ua.contains("OneAsr/0.1"),

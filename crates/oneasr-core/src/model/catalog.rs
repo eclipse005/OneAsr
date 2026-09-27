@@ -504,11 +504,11 @@ mod tests {
             ModelId::Qwen3Asr06B
         );
         assert_eq!(
-            ModelId::try_from_asr_dir(std::path::Path::new(r"C:\m\Qwen3-ASR-1.7B-hf")),
+            ModelId::try_from_asr_dir(&std::path::Path::new("m").join("Qwen3-ASR-1.7B-hf")),
             Some(ModelId::Qwen3Asr17B)
         );
         assert_eq!(
-            ModelId::try_from_asr_dir(std::path::Path::new(r"C:\m\Qwen3-ASR-0.6B-int8")),
+            ModelId::try_from_asr_dir(&std::path::Path::new("m").join("Qwen3-ASR-0.6B-int8")),
             Some(ModelId::Qwen3Asr06BInt8)
         );
         assert_eq!(

@@ -92,25 +92,37 @@ impl std::fmt::Display for FfmpegSource {
 /// 1. `current_exe().parent()` and ancestors (covers install + `target/debug`)
 /// 2. `current_dir()` and ancestors (covers tests / odd cwd)
 pub fn resolve_app_root() -> Option<PathBuf> {
-    let mut starts = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && let Some(root) = app_root_from(dir)
     {
-        starts.push(dir.to_path_buf());
+        return Some(root);
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        starts.push(cwd);
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(root) = app_root_from(&cwd)
+    {
+        return Some(root);
     }
+    None
+}
 
-    for start in starts {
-        let mut dir = start;
-        for _ in 0..8 {
-            if dir.join("bin").join(FFMPEG_NAME).is_file() {
-                return Some(dir);
-            }
-            if !dir.pop() {
-                break;
-            }
+/// Walk up from `start`, at most 8 levels, for the directory that holds
+/// `bin/ffmpeg[.exe]`.
+///
+/// Split out of [`resolve_app_root`] on purpose: that one reads
+/// process-global state (`current_exe` / `current_dir`), so it cannot be
+/// exercised from a parallel test run — which is exactly how the walk
+/// went untested and only its Windows-only environment side effect got
+/// asserted. Taking the start directory as an argument makes the walk
+/// itself testable on every platform.
+fn app_root_from(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    for _ in 0..8 {
+        if dir.join("bin").join(FFMPEG_NAME).is_file() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            break;
         }
     }
     None
@@ -561,17 +573,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_project_bin_ffmpeg() {
-        // When tests run from workspace, cwd walk should hit D:\OneAsr\bin\ffmpeg.exe
-        let ff = resolve_ffmpeg().expect("project bin/ffmpeg.exe should exist for local dev");
-        assert!(ff.ends_with(FFMPEG_NAME));
-        assert!(ff.is_file());
-    }
+    fn app_root_walks_up_to_the_dir_holding_bin_ffmpeg() {
+        // 自建临时安装树，不依赖仓库里那个被 .gitignore 的
+        // bin/ffmpeg（CI 的 checkout 里根本没有，只有 Windows 本地有）。
+        let root = std::env::temp_dir().join(format!("oneasr_app_root_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // 应用被埋在几层目录里（安装目录 / target/debug 那种形状）
+        let deep = root.join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
 
-    #[test]
-    fn app_root_has_bin_child() {
-        let root = resolve_app_root().expect("app root");
-        assert!(root.join("bin").join(FFMPEG_NAME).is_file());
+        // 树里还没有 bin/ffmpeg：temp 树里的任何目录都不该被当成 app root。
+        // 只断言这一点 —— 再往上（/tmp、/）是否恰好装着 ffmpeg
+        // 取决于机器，断言那个又变回环境检查。
+        let found = app_root_from(&deep);
+        assert!(
+            !found.as_deref().is_some_and(|p| p.starts_with(&root)),
+            "没有 bin/ffmpeg 的目录不该被当成 app root: {found:?}"
+        );
+
+        // 装上 ffmpeg 之后：从根命中、从三层深的目录向上命中，
+        // 结果是同一个根。
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin").join(FFMPEG_NAME), b"stub").unwrap();
+        assert_eq!(app_root_from(&root), Some(root.clone()));
+        assert_eq!(app_root_from(&deep), Some(root.clone()));
+        // 目录名中间了一个不存在的中间层也不影响结果
+        assert_eq!(app_root_from(&root.join("a").join("b")), Some(root.clone()));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

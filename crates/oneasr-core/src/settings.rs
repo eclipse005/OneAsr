@@ -780,7 +780,9 @@ mod tests {
     fn normalize_syncs_asr_model_from_catalog_path() {
         let mut s = Settings {
             asr_model: QWEN3_ASR_06B.into(),
-            asr_model_dir: PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B-hf"),
+            // 目录名匹配靠 file_name()，而 Linux 上 r"C:\App\models\X" 没有
+            // 分隔符、整体被当成文件名，解析必然失败。用 join 构造。
+            asr_model_dir: Path::new("App").join("models").join("Qwen3-ASR-1.7B-hf"),
             ..Settings::default()
         };
         s.normalize();
@@ -1068,40 +1070,40 @@ mod tests {
 
     #[test]
     fn srt_target_dir_uses_media_parent() {
+        // 路径用 join 构造：写死 r"D:\Movies\lecture.mp4" 的话，Linux 上它没有
+        // 分隔符、`parent()` 返回空，这条测试根本走不到「用父目录」那个分支，
+        // 变成在验「Windows 路径在 Linux 上没有父目录」。
+        let movies = std::env::temp_dir().join("Movies");
         let s = Settings {
-            output_dir: PathBuf::from(r"D:\App\output"),
+            output_dir: std::env::temp_dir().join("App").join("output"),
             ..Settings::default()
         };
-        assert_eq!(
-            s.srt_target_dir(Path::new(r"D:\Movies\lecture.mp4")),
-            PathBuf::from(r"D:\Movies")
-        );
+        assert_eq!(s.srt_target_dir(&movies.join("lecture.mp4")), movies);
     }
 
     #[test]
     fn srt_target_dir_falls_back_without_parent() {
+        // 输出目录用绝对路径（temp_dir 下），否则 resolved_output_dir() 会把它
+        // 相对当前目录补全，期望值就随 cwd 漂移。
+        let out = std::env::temp_dir().join("App").join("output");
         let s = Settings {
-            output_dir: PathBuf::from(r"D:\App\output"),
+            output_dir: out.clone(),
             ..Settings::default()
         };
         // Bare file name has no usable parent dir → configured output dir.
-        assert_eq!(
-            s.srt_target_dir(Path::new("lecture.mp4")),
-            PathBuf::from(r"D:\App\output")
-        );
+        assert_eq!(s.srt_target_dir(Path::new("lecture.mp4")), out);
     }
 
     #[test]
     fn srt_target_dir_respects_output_dir_mode() {
+        let out = std::env::temp_dir().join("App").join("output");
         let s = Settings {
             save_next_to_source: false,
-            output_dir: PathBuf::from(r"D:\App\output"),
+            output_dir: out.clone(),
             ..Settings::default()
         };
-        assert_eq!(
-            s.srt_target_dir(Path::new(r"D:\Movies\lecture.mp4")),
-            PathBuf::from(r"D:\App\output")
-        );
+        let media = std::env::temp_dir().join("Movies").join("lecture.mp4");
+        assert_eq!(s.srt_target_dir(&media), out);
     }
 
     #[test]
@@ -1305,6 +1307,7 @@ mod tests {
 
     #[test]
     fn demucs_dir_defaults_under_models_and_repairs_empty() {
+        let default = crate::model::default_demucs_model_dir();
         let mut s = Settings::default();
         assert!(
             s.resolved_demucs_model_dir().ends_with("htdemucs_ft"),
@@ -1314,8 +1317,28 @@ mod tests {
 
         s.demucs_model_dir = PathBuf::new();
         s.normalize();
-        assert!(!s.demucs_model_dir.as_os_str().is_empty());
-        assert!(s.resolved_demucs_model_dir().is_absolute());
+        // 修复只在「默认目录确实存在」时发生 —— 这是刻意的：默认目录
+        // 不存在时保留空值，好过替用户编一个不存在的路径。因此按默认
+        // 目录是否存在分别断言 —— 不能假设它一定在：CI 的 checkout 里
+        // models/ 被 .gitignore 了，没有 htdemucs_ft，写死会在 Linux 上失败。
+        if default.is_dir() {
+            assert_eq!(
+                s.demucs_model_dir, default,
+                "默认目录存在时，空值应被修复成它"
+            );
+        } else {
+            assert!(
+                s.demucs_model_dir.as_os_str().is_empty(),
+                "默认目录不存在时不应凭空造路径: {:?}",
+                s.demucs_model_dir
+            );
+        }
+        // 无论走哪条分支，读出来的都必须落在 htdemucs_ft 上（空值回落到默认）。
+        assert!(
+            s.resolved_demucs_model_dir().ends_with("htdemucs_ft"),
+            "resolved dir should fall back to the install-layout folder: {}",
+            s.resolved_demucs_model_dir().display()
+        );
     }
 
     #[test]

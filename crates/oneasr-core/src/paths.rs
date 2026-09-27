@@ -451,12 +451,18 @@ mod tests {
         );
         assert_eq!(
             user_data_base(Platform::Windows, &win).unwrap(),
-            PathBuf::from(r"C:\Users\u\AppData\Local\OneAsr")
+            // 用 join 构造期望值：分隔符必须跟平台走。写死字面量的话，
+            // Linux 上生产代码 join 出的是 `C:\Users\u\AppData\Local/OneAsr`，
+            // 断言就变成在验分隔符而不是验规则。
+            PathBuf::from(r"C:\Users\u\AppData\Local").join("OneAsr")
         );
         let mac = env_of(None, None, Some("/Users/u"));
         assert_eq!(
             user_data_base(Platform::MacOs, &mac).unwrap(),
-            PathBuf::from("/Users/u/Library/Application Support/OneAsr")
+            PathBuf::from("/Users/u")
+                .join("Library")
+                .join("Application Support")
+                .join("OneAsr")
         );
         // XDG_DATA_HOME 存在时优先。
         let xdg = env_of(None, Some("/xdg/data"), Some("/home/u"));
@@ -544,18 +550,21 @@ mod tests {
 
     #[test]
     fn media_stem_from_video_name() {
-        assert_eq!(media_stem(Path::new(r"D:\clips\my_video.mp4")), "my_video");
+        assert_eq!(
+            media_stem(&Path::new("clips").join("my_video.mp4")),
+            "my_video"
+        );
         assert_eq!(media_stem(Path::new("demo.wav")), "demo");
     }
 
     #[test]
     fn output_srt_under_chosen_dir() {
-        let dir = PathBuf::from(r"D:\OneAsr\output");
+        let dir = Path::new("OneAsr").join("output");
         let p = output_srt_path(&dir, "my_video");
-        assert_eq!(p, PathBuf::from(r"D:\OneAsr\output\my_video.srt"));
+        assert_eq!(p, dir.join("my_video.srt"));
         assert_eq!(
             output_path(&dir, "my_video", "txt"),
-            PathBuf::from(r"D:\OneAsr\output\my_video.txt")
+            dir.join("my_video.txt")
         );
     }
 
@@ -570,7 +579,7 @@ mod tests {
 
     #[test]
     fn output_dir_is_root_output() {
-        let root = PathBuf::from(r"D:\OneAsr");
-        assert_eq!(output_dir_under(&root), PathBuf::from(r"D:\OneAsr\output"));
+        let root = Path::new("OneAsr");
+        assert_eq!(output_dir_under(root), root.join("output"));
     }
 }

@@ -981,11 +981,11 @@ mod tests {
 
     #[test]
     fn output_path_uses_stem() {
-        let out = PathBuf::from(r"C:\Install\OneAsr\output");
-        let input = PathBuf::from(r"D:\clips\lecture_01.mp4");
+        let out = Path::new("Install").join("OneAsr").join("output");
+        let input = Path::new("clips").join("lecture_01.mp4");
         assert_eq!(
             output_srt_path(&out, &media_stem(&input)),
-            PathBuf::from(r"C:\Install\OneAsr\output\lecture_01.srt")
+            out.join("lecture_01.srt")
         );
     }
 
