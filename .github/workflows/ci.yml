@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # 工具链版本只认 rust-toolchain.toml，workflow 里不再写第二个版本号。
       - id: toolchain
         name: Read pinned toolchain
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # 与 release.yml 的 Linux 构建同一套原生依赖，避免 CI 绿而发布红。
       - name: Native deps
         run: |
@@ -89,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # 只跑 Python 标准库，不需要 Rust 工具链，所以这个 job 秒完。
       - name: Version consistency
         run: python3 scripts/verify-version.py
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # ffmpeg 来自上游 Tyrrrz/FFmpegBin 的版本化 tag，归档仍可被重新上传，
       # 所以用哈希清单锁内容：资产被换掉时在这里就红，而不是等打包或用户下载后才发现。
       # 来源（base-url）与哈希都由 scripts/ffmpeg-checksums.txt 声明，本步骤不含硬编码 URL。
