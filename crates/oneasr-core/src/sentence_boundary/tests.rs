@@ -165,6 +165,9 @@ fn terminal_punctuation_still_splits_long_runs() {
 
 #[test]
 fn broad_terminal_punctuation_splits_step2_sentences() {
+    // Both marks are honoured: the fullwidth period through the period
+    // fallback, the top-level interrobang because `Again` opens a new
+    // sentence and nothing proves the `⁉` sits inside a quotation.
     let words = vec![w(0, "你好．"), w(1, "Next⁉"), w(2, "Again")];
 
     let spans = build_deterministic_sentence_spans(&words);
@@ -1509,6 +1512,122 @@ fn overlong_split_survives_fragment_absorption() {
             s.text
         );
     }
+}
+
+#[test]
+fn ja_sentence_final_particle_na_stays_with_its_clause() {
+    // 真实 ASR dump（LAST CALL #002）：句末助词 な / なあ 是 (だな / よな) 的
+    // 感叹尾巴，ASR 常把它切成独立的零时长 token（「な。」）。它必须留在前
+    // 一个从句里，既不能自成一行，也不能粘到下一句句首。
+    let raw = [
+        ("人気", 365.545, 365.945),
+        ("な", 365.945, 366.105),
+        ("ん", 366.105, 366.185),
+        ("だ", 366.185, 366.345),
+        ("な。", 366.345, 366.345),
+        ("すごい", 366.345, 366.665),
+        ("な。", 367.305, 367.465),
+    ];
+    let words: Vec<WordTokenDto> = raw
+        .iter()
+        .map(|(t, s, e)| WordTokenDto {
+            start: *s,
+            end: *e,
+            word: (*t).to_string(),
+        })
+        .collect();
+
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "standard"))
+            .expect("pipeline should succeed");
+
+    let texts: Vec<&str> = response
+        .translation_sentences
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(texts, ["人気なんだな。", "すごいな。"], "texts: {texts:?}");
+    assert!(
+        !response
+            .translation_sentences
+            .iter()
+            .any(|s| s.text.trim() == "な。"),
+        "bare particle cue must not exist"
+    );
+}
+
+#[test]
+fn quoted_question_title_does_not_split_from_following_head_noun() {
+    // `I post a "What Do You See?" post.` — the ? closes the title, not the
+    // outer sentence. Both tokenizations (closer attached or separate) must
+    // keep `post.` on the same span.
+    let attached = vec![
+        w(0, "I"),
+        w(1, "post"),
+        w(2, "a"),
+        w(3, "\"What"),
+        w(4, "Do"),
+        w(5, "You"),
+        w(6, "See?\""),
+        w(7, "post."),
+    ];
+    assert_eq!(build_deterministic_sentence_spans(&attached), vec![(0, 7)]);
+
+    let separate_closer = vec![
+        w(0, "I"),
+        w(1, "post"),
+        w(2, "a"),
+        w(3, "\""),
+        w(4, "What"),
+        w(5, "Do"),
+        w(6, "You"),
+        w(7, "See?"),
+        w(8, "\""),
+        w(9, "post."),
+    ];
+    assert_eq!(
+        build_deterministic_sentence_spans(&separate_closer),
+        vec![(0, 9)]
+    );
+
+    let curly = vec![
+        w(0, "I"),
+        w(1, "post"),
+        w(2, "a"),
+        w(3, "\u{201c}What"),
+        w(4, "Do"),
+        w(5, "You"),
+        w(6, "See?\u{201d}"),
+        w(7, "post."),
+    ];
+    assert_eq!(build_deterministic_sentence_spans(&curly), vec![(0, 7)]);
+}
+
+#[test]
+fn quoted_question_still_splits_when_next_word_is_sentence_start() {
+    let words = vec![
+        w(0, "He"),
+        w(1, "asked,"),
+        w(2, "\"What"),
+        w(3, "do"),
+        w(4, "you"),
+        w(5, "see?\""),
+        w(6, "Then"),
+        w(7, "he"),
+        w(8, "left."),
+    ];
+    assert_eq!(
+        build_deterministic_sentence_spans(&words),
+        vec![(0, 5), (6, 8)]
+    );
+}
+
+#[test]
+fn lowercase_continuation_after_question_is_not_a_sentence_end() {
+    // `Really? she asked.` — the lowercase continuation proves the `?` is not
+    // a sentence end, so the two must stay in one span.
+    let words = vec![w(0, "Really?"), w(1, "she"), w(2, "asked.")];
+    assert_eq!(build_deterministic_sentence_spans(&words), vec![(0, 2)]);
 }
 
 // 手动回放工具，不是门禁：需要一份真实的 asr dump 才能跑。

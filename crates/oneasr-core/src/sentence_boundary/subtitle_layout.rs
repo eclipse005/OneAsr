@@ -80,8 +80,14 @@ fn boundary_base_cost(
     }
 
     // Terminal punctuation — best cut (rare inside a span; semantic.rs
-    // pre-split most of them).
-    if has_break_terminal_punctuation(&left.word) {
+    // pre-split most of them). A quoted `?`/`!` that continues the outer
+    // sentence is not a terminal here — otherwise Short-preset DP recuts
+    // `a "What Do You See?" post` even after the hard-split layer kept it
+    // together.
+    if has_break_terminal_punctuation(&left.word)
+        && !(profile.uses_punkt_sentence_boundary()
+            && super::semantic::should_suppress_question_bang_split(words, i))
+    {
         return TERMINAL_COST;
     }
     // Spoken Japanese clause end (です/ます/ました). Same role as a period
@@ -193,7 +199,10 @@ fn is_quality_cut_boundary(
         return false;
     }
     let next2 = peek_word(words, i + 2);
-    if has_break_terminal_punctuation(&left.word) {
+    if has_break_terminal_punctuation(&left.word)
+        && !(profile.uses_punkt_sentence_boundary()
+            && super::semantic::should_suppress_question_bang_split(words, i))
+    {
         return true;
     }
     if spoken_end_at(words, i) {

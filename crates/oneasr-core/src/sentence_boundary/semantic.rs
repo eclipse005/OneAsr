@@ -7,7 +7,9 @@
 use crate::sentence_boundary::WordTokenDto;
 use crate::subtitle::text_rules::{ends_with_terminal_punctuation, strip_trailing_closers};
 
-use super::boundary_rules::{is_ja_turn_start_after, is_japanese_spoken_end};
+use super::boundary_rules::{
+    is_ja_turn_start_after, is_japanese_spoken_end, is_opening_punctuation,
+};
 use super::profile::LanguageProfile;
 use super::punkt_map::map_sentence_boundaries_to_word_indices;
 use super::types::SplitReason;
@@ -38,12 +40,15 @@ pub(super) fn build_split_points_from_hard_boundaries(
     }
 }
 
-/// 英文路径：Punkt 统计学习断句 + 规则兜底 + 单字母缩写链特判。
+/// 英文路径：Punkt 统计学习断句 + 句号兜底 + 单字母缩写链特判。
 ///
 /// Punkt 在短文本或训练数据覆盖不足时可能漏切（如 "Hello world. Again."
-/// 被识别为单句）。为了不退化到比规则更差，对 Punkt 没识别的句末标点
-/// 位置，再用规则补切：只要 token 以 `. ! ?` 结尾且不是单字母缩写链，
-/// 就强制切分。Punkt 识别出的边界优先，规则补 Punkt 漏掉的。
+/// 被识别为单句）。为了不退化到比规则更差，对 Punkt 没识别的**句号**
+/// 位置再用规则补切。`?`/`!` 不走兜底：引号标题（`a "What Do You See?" post`）
+/// 里 Punkt 正确地不切，强制补切会把中心语甩到下一句。
+///
+/// Punkt 已经切了的 `?`/`!` 也要再看一眼：闭引号后若不是句首（小写延续），
+/// 仍然不切。
 fn build_split_points_with_punkt(
     words: &[WordTokenDto],
     _profile: &dyn LanguageProfile,
@@ -93,11 +98,19 @@ fn build_split_points_with_punkt(
                     continue;
                 }
             }
+            // Punkt 切了，但 `?`/`!` 未必真的是句末：引号标题（`a "What Do
+            // You See?" post`）里 Punkt 正确切了，可紧接着的中心语说明它是
+            // 引用内部，仍要并回来。`Really? she asked` 同理（下一词非句首）。
+            if should_suppress_question_bang_split(words, index) {
+                continue;
+            }
             push_split_point(&mut out, index, SplitReason::TerminalPunctuation);
             continue;
         }
 
-        // 规则兜底：Punkt 漏切的句末标点
+        // 规则兜底：Punkt 漏切的句末标点（`. ! ?` 都补）。`?`/`!` 必须补——
+        // 漏掉一个句子边界会把两句并成一行。真正需要防的不是"补切"，而是
+        // "在引号内部补切"，那由下面的 suppress 负责。
         // 只对最后一个 word 跳过（它是真正的文本末尾，不需要切）
         if index == words.len() - 1 {
             continue;
@@ -113,10 +126,74 @@ fn build_split_points_with_punkt(
                     continue;
                 }
             }
+            if should_suppress_question_bang_split(words, index) {
+                continue;
+            }
             push_split_point(&mut out, index, SplitReason::TerminalPunctuation);
         }
     }
     out
+}
+
+/// English `?`/`!` that is NOT a real sentence end: a quoted title/question
+/// whose next content word continues the outer sentence
+/// (`I post a "What Do You See?" post.`), or any `?`/`!` followed by a
+/// non-sentence-start (`Really? she asked`).
+///
+/// The discriminator is the word AFTER the mark, not the mark itself — both
+/// shapes are `X?"` and neither carries any other signal:
+///
+/// - `… do you see?" Then he left.`  → `Then` opens a sentence → split
+/// - `… see?" ` + `do` (lowercase)   → continues the sentence → suppress
+/// - `… See?" post.`                 → `post.` continues it → suppress
+///
+/// Closing-quote tokens are skipped when looking for the next word, so
+/// `See?` + `"` + `post.` and `See?"` + `post.` behave the same.
+///
+/// English-only by construction — it keys off capitalisation, so callers must
+/// gate it on [`LanguageProfile::uses_punkt_sentence_boundary`].
+pub(super) fn should_suppress_question_bang_split(words: &[WordTokenDto], index: usize) -> bool {
+    let Some(token) = words.get(index) else {
+        return false;
+    };
+    if !is_question_bang_terminal(&token.word) {
+        return false;
+    }
+    let Some(next) = next_content_word(words, index) else {
+        return false;
+    };
+    !looks_like_english_sentence_start(next)
+}
+
+/// Does `token` end with a question/exclamation mark (any script)?
+fn is_question_bang_terminal(token: &str) -> bool {
+    matches!(
+        strip_trailing_closers(token.trim()).chars().last(),
+        Some('!' | '?' | '！' | '？' | '‼' | '⁇' | '⁈' | '⁉')
+    )
+}
+
+fn is_closer_only_token(token: &str) -> bool {
+    let trimmed = token.trim();
+    !trimmed.is_empty() && strip_trailing_closers(trimmed).is_empty()
+}
+
+fn next_content_word(words: &[WordTokenDto], index: usize) -> Option<&str> {
+    words[(index + 1)..]
+        .iter()
+        .map(|word| word.word.as_str())
+        .find(|token| !is_closer_only_token(token))
+}
+
+fn looks_like_english_sentence_start(token: &str) -> bool {
+    let trimmed = token.trim().trim_start_matches(|c: char| {
+        is_opening_punctuation(c) || matches!(c, '"' | '\'' | '«' | '‹')
+    });
+    let alpha: Vec<char> = trimmed.chars().filter(|c| c.is_alphabetic()).collect();
+    match alpha.first() {
+        Some(c) => c.is_uppercase(),
+        None => false,
+    }
 }
 
 /// 规则兜底：token 是否以句末标点结尾（`. ! ?`，含 CJK 等价符）。

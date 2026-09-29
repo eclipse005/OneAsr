@@ -360,6 +360,11 @@ const JA_LINE_START_PARTICLES: &[&str] = &[
     "だ",
     "た",
     "し",
+    // Sentence-final particles: な / なあ are exclamatory tails (だな / よな)
+    // that ASR often emits as their own zero-duration token (な。). Without
+    // them here the だ-copula rule exiles the tail into a cue of its own.
+    "な",
+    "なあ",
     "よ",
     "ね",
     "さ",
