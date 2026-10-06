@@ -97,7 +97,6 @@ impl OneAsrApp {
             return;
         };
         st.text = oneasr_core::sentence_boundary::break_long_lines(&st.text, &lang, &preset);
-        st.revision += 1;
         let lines = st.line_count();
         self.transcript_card_note =
             Some(expand(t(L::TRANSCRIPT_BROKE), &[("n", &lines.to_string())]));
@@ -122,10 +121,8 @@ impl OneAsrApp {
         };
         match oneasr_core::transcript::read_transcript(&path) {
             Ok(parsed) => {
-                let mut fresh = StagedTranscript::from_core(&parsed, Some(path.clone()));
+                let fresh = StagedTranscript::from_core(&parsed, Some(path.clone()));
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    // 换文稿 = 换输入，之前那份产物不再对应当前输入。
-                    fresh.revision = task.transcript.as_ref().map_or(0, |st| st.revision) + 1;
                     task.transcript = Some(fresh);
                 }
                 self.transcript_card_note = Some(t(L::TRANSCRIPT_REREAD).to_string());

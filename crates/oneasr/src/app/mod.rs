@@ -127,8 +127,8 @@ pub(crate) struct OneAsrApp {
     /// Saved time of the first task ever finished, handed to the run-complete
     /// notice so the one moment the number is news does not pass unread.
     nudge_saved: Option<SharedString>,
-    /// Live stage label + chunk progress for the row currently Processing.
-    active_stage: Option<ActiveStage>,
+    /// Live stage label for the row currently Processing (from worker Progress).
+    active_stage: Option<(String, SharedString)>,
     /// Latest download progress (settings panel).
     asr_download: Option<DownloadProgress>,
     align_download: Option<DownloadProgress>,
@@ -292,7 +292,6 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                                 let _ = ptx.send(WorkerMsg::Progress {
                                     id: id_for_progress.clone(),
                                     stage: SharedString::from(update.label(ui_lang())),
-                                    chunk: update.chunk,
                                     warning,
                                 });
                             })
@@ -437,8 +436,6 @@ pub(crate) fn run_task(
 pub(crate) struct TaskRowView {
     /// 文稿芯片上的量级（`None` = 还没挂文稿）。
     pub(crate) transcript: Option<String>,
-    /// 字幕比文稿旧。
-    pub(crate) transcript_stale: bool,
     /// 卡片正为这行开着。
     pub(crate) transcript_card_open: bool,
     /// 卡片淡入淡出进度。
