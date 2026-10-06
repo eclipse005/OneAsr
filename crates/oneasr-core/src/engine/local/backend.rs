@@ -30,19 +30,28 @@ pub(crate) struct GpuProbe {
 /// **只缓存成功**：适配器枚举失败可能只是瞬时的（驱动正在重装、远程会话里
 /// 第一次枚举超时、另一个进程正占着显存），把它缓存下来等于让整个进程终身
 /// 回落 CPU —— 调用方下一次会重新探测，成功后才写进缓存。
+///
+/// 报的是 `device_targets()` 里 `is_default` 的那一个，也就是 `DeviceSelector::Auto`
+/// **真的会选中**的那张卡。不要用 `devices()`（`list_devices()`）自己 `find`：那是
+/// wgpu 的**原始枚举序**，没有「独显优先」，在这台双显卡机器上它把 Intel 核显排在
+/// NVIDIA 前面，于是日志报核显、引擎却跑独显——看着像核显在扛 22 秒的活。选卡策略
+/// 只该有一个出处，就是引擎 crate 自己那份排序。
 pub(super) fn probe_gpu_device() -> Result<&'static GpuProbe, String> {
     static PROBE: std::sync::OnceLock<GpuProbe> = std::sync::OnceLock::new();
     if let Some(probe) = PROBE.get() {
         return Ok(probe);
     }
-    let devices = qwen3_asr_wgpu::AsrInference::devices();
-    let gpu = devices.iter().find(|d| {
-        // `DeviceInfo::device_type` is `wgpu::DeviceType`; Debug of Cpu is "Cpu".
-        format!("{:?}", d.device_type) != "Cpu"
+    let targets = qwen3_asr_wgpu::AsrInference::device_targets();
+    // `is_default` 就是 Auto 会选的那个；找不到（非 CPU 但没标默认）再退一档，
+    // 只要**不是 CPU**就算有 GPU —— 这一段的职责是判断「有没有卡」，不是选卡。
+    let gpu = targets.iter().find(|t| t.is_default).or_else(|| {
+        targets
+            .iter()
+            .find(|t| format!("{:?}", t.info.device_type) != "Cpu")
     });
     match gpu {
-        Some(d) => Ok(PROBE.get_or_init(|| GpuProbe {
-            description: d.describe(),
+        Some(t) => Ok(PROBE.get_or_init(|| GpuProbe {
+            description: t.describe(),
         })),
         None => Err(crate::i18n::no_gpu_detected()),
     }
