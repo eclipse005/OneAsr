@@ -66,7 +66,7 @@ impl OneAsrApp {
                     queue_rank: ranks.get(t.id.as_str()).copied(),
                     // 芯片上不再写字数（「3.4k」对这一行没有可操作的意义），只留一个「挂没挂」。
                     has_transcript: t.transcript.is_some(),
-                    transcript_card_open: self.transcript_card.as_deref() == Some(t.id.as_str()),
+                    transcript_card_visible: self.transcript_card_visible(),
                     transcript_card_progress: self.transcript_card_progress(),
                     transcript_card: t.transcript.as_ref().map(|st| {
                         let audio = match t.duration {
@@ -89,7 +89,7 @@ impl OneAsrApp {
                             lines: st.line_count(),
                             chars: st.char_count(),
                             dropped_timecodes: st.dropped_timecodes,
-                            density: (audio > 0.0).then(|| st.chars_per_second(audio)),
+                            rate: st.speech_rate(audio),
                             audio_label: t.duration.label(),
                             from_file: st.path.is_some(),
                             note: self.transcript_card_note.clone(),

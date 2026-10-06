@@ -66,14 +66,79 @@ impl Transcript {
         self.kind == TranscriptKind::SubRip
     }
 
-    /// 密度：每秒多少字。文稿与音频对不上时，强制对齐不会报错，它给出一个看起来
-    /// 正常但慢慢漂移的时间轴——所以这个数要在**点开始之前**给用户看。
-    pub fn chars_per_second(&self, audio_seconds: f64) -> f64 {
-        if audio_seconds <= 0.0 {
-            return 0.0;
-        }
-        self.char_count() as f64 / audio_seconds
+    /// 语速：每秒多少「单位」，单位由文稿自己的书写系统决定（见 [`speech_rate`]）。
+    ///
+    /// 留着这个数是因为它守的是一种**不会报错**的错：文稿挂错文件时，强制对齐照样
+    /// 给出一条看着正常、实则慢慢漂移的时间轴。
+    pub fn speech_rate(&self, audio_seconds: f64) -> Option<SpeechRate> {
+        speech_rate(&self.text, audio_seconds)
     }
+}
+
+/// 一份文稿的语速，按**它自己的书写系统**计数。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpeechRate {
+    /// 每秒多少个单位。
+    pub per_second: f64,
+    /// `true` = 拉丁等**分词书写**，单位是词；`false` = 中日韩，单位是字。
+    pub spaced: bool,
+}
+
+impl SpeechRate {
+    /// 这个语速像不像人话。
+    ///
+    /// 两条带子不是一个尺子：中文 4–6 **字**/秒，英语 2–3.5 **词**/秒。拿同一
+    /// 条上限去卡两种文字，正常语速会被判成「文稿与音频不匹配」——一段正常的英
+    /// 语字幕换算成字母是 14–20 个/秒，在中文那 9 的上限之下就是全错。
+    pub fn plausible(&self) -> bool {
+        if self.spaced {
+            (0.8..=5.0).contains(&self.per_second)
+        } else {
+            (1.5..=9.0).contains(&self.per_second)
+        }
+    }
+}
+
+/// 这份文稿按字算还是按词算。
+///
+/// 看的是**中日韩字符 vs 拉丁字母**的量，不是「有没有空格」：中文文稿里混着英文
+/// 术语、日文文稿里混着片假名latin，都属于「按字算」。阈值给到 4:1，因为一段中文
+/// 里嵌一两个英文单词是常态，不该因此翻到词那一侧。
+fn is_cjk_dominant(text: &str) -> bool {
+    let mut cjk = 0usize;
+    let mut latin = 0usize;
+    for c in text.chars() {
+        let cp = c as u32;
+        if matches!(cp, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF)
+        {
+            cjk += 1;
+        } else if c.is_ascii_alphabetic() {
+            latin += 1;
+        }
+    }
+    cjk * 4 >= latin
+}
+
+/// 文稿语速。`audio_seconds` 未知、或文稿里数不出任何单位时是 `None`——没有分母
+/// 就不画条，而不是显示一个 0。
+pub fn speech_rate(text: &str, audio_seconds: f64) -> Option<SpeechRate> {
+    if audio_seconds <= 0.0 {
+        return None;
+    }
+    let spaced = !is_cjk_dominant(text);
+    let units: usize = if spaced {
+        text.split_whitespace()
+            .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
+            .count()
+    } else {
+        // 标点不发音：「，」「。」计进语速会把一段正常的中文文稿算快两成。
+        // `is_alphanumeric` 覆盖汉字、假名、谚文（它们带 Alphabetic 属性）。
+        text.chars().filter(|c| c.is_alphanumeric()).count()
+    };
+    (units > 0).then(|| SpeechRate {
+        per_second: units as f64 / audio_seconds,
+        spaced,
+    })
 }
 
 /// 读一份文稿。扩展名不认识就报错，不猜。
@@ -157,6 +222,66 @@ fn srt_to_lines(raw: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// 英文文稿按**词**数，不是按字母数。这条钉住的就是那次误报：一段正常的英语
+    /// 字幕按字母算是 14–20 个/秒，落在中文那 9 的上限之外，被判成「文稿与音频
+    /// 不匹配」——而它其实是完全正常的素材。
+    #[test]
+    fn an_english_transcript_is_counted_in_words() {
+        let text = "the quick brown fox jumps over the lazy dog again and again";
+        let r = speech_rate(text, 10.0).expect("a countable transcript");
+        assert!(r.spaced, "latin text must be counted per word");
+        assert_eq!(r.per_second, 1.2, "12 words over 10 s");
+        assert!(r.plausible(), "{r:?} should read as normal speech");
+    }
+
+    #[test]
+    fn a_chinese_transcript_is_counted_in_characters() {
+        // 20 个字（，和。不发音，不计），5 秒 → 4.0 字/秒，正是中文正常语速。
+        let text = "今天我们聊一聊字幕这件事，以及它为什么重要。";
+        let r = speech_rate(text, 5.0).expect("a countable transcript");
+        assert!(!r.spaced, "cjk text must be counted per character");
+        assert!((r.per_second - 4.0).abs() < 1e-9, "{r:?}");
+        assert!(r.plausible(), "4.0 字/秒 is a normal speaking rate");
+    }
+
+    /// 同一段文字：音频短一半太快、长五倍太慢——带子要真的能分辨得出。
+    #[test]
+    fn a_mismatch_shows_up_as_an_impossible_rate() {
+        let text = "今天我们聊一聊字幕这件事，以及它为什么重要。";
+        assert!(!speech_rate(text, 2.0).unwrap().plausible(), "10 字/秒");
+        assert!(!speech_rate(text, 30.0).unwrap().plausible(), "0.67 字/秒");
+    }
+
+    /// 中文里嵌一两个英文单词是常态，不该因此翻到「按词算」那一侧。
+    #[test]
+    fn a_chinese_transcript_with_english_terms_still_counts_characters() {
+        let text = "我们来聊聊 Whisper 这个模型，还有 OneAsr 这个软件。";
+        let r = speech_rate(text, 5.0).expect("a countable transcript");
+        assert!(!r.spaced, "still cjk-dominant: {r:?}");
+    }
+
+    /// 没数出任何东西（空文稿、纯标点）就没有分母，不显示 0。
+    #[test]
+    fn nothing_countable_means_no_rate_at_all() {
+        assert_eq!(speech_rate("", 10.0), None);
+        assert_eq!(speech_rate("   \n  \n", 10.0), None);
+        assert_eq!(speech_rate("。。。？！", 10.0), None);
+        // 时长未知同样没有分母。
+        assert_eq!(speech_rate("hello world", 0.0), None);
+    }
+
+    /// 两条带子确实不是同一把尺子。
+    #[test]
+    fn the_two_scripts_get_their_own_bands() {
+        let rate = |per_second, spaced| SpeechRate { per_second, spaced };
+        // 2.9 在两种写法下都是人话。
+        assert!(rate(2.9, true).plausible() && rate(2.9, false).plausible());
+        // 14.2 词/秒是疯了；14.2 字/秒对英语是正常语速（≈2.5 词/秒），对中文太快。
+        // 「按字还是按词」这个判断本身就决定了结论——所以它必须先判对。
+        assert!(!rate(14.2, true).plausible());
+        assert!(!rate(14.2, false).plausible());
+    }
+
     const SRT: &str = "1\r\n00:00:04,240 --> 00:00:07,440\r\n原版 Whisper，\r\n表现并不像可靠。\r\n\r\n2\r\n00:00:07,440 --> 00:00:09,680\r\n接下来是第二句。\r\n";
 
     #[test]
@@ -202,12 +327,15 @@ mod tests {
     }
 
     #[test]
-    fn counts_and_density_are_reported_for_the_guard() {
+    fn counts_and_rate_are_reported_for_the_guard() {
         let t = parse_transcript(TranscriptKind::Plain, "这是第一句。\n这是第二句。").unwrap();
         assert_eq!(t.char_count(), 12);
         assert_eq!(t.line_count(), 2);
-        assert!((t.chars_per_second(6.0) - 2.0).abs() < 1e-9);
-        assert_eq!(t.chars_per_second(0.0), 0.0, "音频时长未知时不编造密度");
+        let r = t.speech_rate(6.0).expect("10 chars over 6 s");
+        assert!(!r.spaced, "中文按字算");
+        assert!((r.per_second - 10.0 / 6.0).abs() < 1e-9, "{r:?}");
+        assert!(r.plausible(), "1.67 字/秒 is a slow but real speaking rate");
+        assert_eq!(t.speech_rate(0.0), None, "音频时长未知时不编造语速");
     }
 
     #[test]

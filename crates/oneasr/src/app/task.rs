@@ -116,14 +116,12 @@ impl StagedTranscript {
         self.text.lines().filter(|l| !l.trim().is_empty()).count()
     }
 
-    /// 密度：每秒多少字。文稿与音频对不上时，强制对齐**不会报错**，它给出一个
-    /// 看起来正常但慢慢漂移的时间轴——比报错糟糕得多。所以这个数必须在**点开始
-    /// 之前**给用户看。
-    pub fn chars_per_second(&self, audio_seconds: f64) -> f64 {
-        if audio_seconds <= 0.0 {
-            return 0.0;
-        }
-        self.char_count() as f64 / audio_seconds
+    /// 语速：按文稿自己的书写系统计数（字/秒 或 词/秒）。
+    ///
+    /// 留着这个数是因为它守的是一种**不会报错**的错：文稿挂错文件时，强制对齐
+    /// 照样给出一条看着正常、实则慢慢漂移的时间轴。判断在 core 里（那里能单测）。
+    pub fn speech_rate(&self, audio_seconds: f64) -> Option<oneasr_core::transcript::SpeechRate> {
+        oneasr_core::transcript::speech_rate(&self.text, audio_seconds)
     }
 }
 
@@ -317,9 +315,24 @@ mod transcript_tests {
     }
 
     #[test]
-    fn density_is_zero_rather_than_infinite_when_the_length_is_unknown() {
-        // 0.0 字/秒 会被读成「文稿是空的」；这里必须给「未知」。
-        assert_eq!(staged("第一行。").chars_per_second(0.0), 0.0);
-        assert_eq!(staged("字字字字").chars_per_second(2.0), 2.0);
+    fn an_unknown_length_gives_no_rate_rather_than_a_zero_one() {
+        // 0.0 字/秒 会被读成「文稿是空的」；没有时长就是**没有分母**，不显示。
+        assert_eq!(staged("第一行。").speech_rate(0.0), None);
+        let r = staged("字字字字")
+            .speech_rate(2.0)
+            .expect("4 chars over 2 s");
+        assert!((r.per_second - 2.0).abs() < 1e-9, "{r:?}");
+        assert!(!r.spaced, "中文按字算");
+    }
+
+    /// 英文文稿按词数——这就是那次误报的根：按字母数算，正常语速会掉进中文的
+    /// 上限之外，卡片于是红着脸说「可能与音频不匹配」。
+    #[test]
+    fn an_english_transcript_reports_words_not_letters() {
+        let st = staged("hello there my friend how are you doing tonight");
+        let r = st.speech_rate(4.0).expect("9 words over 4 s");
+        assert!(r.spaced, "latin must be counted per word");
+        assert!((r.per_second - 9.0 / 4.0).abs() < 1e-9, "{r:?}");
+        assert!(r.plausible(), "2.25 words/s is normal English");
     }
 }

@@ -11,14 +11,16 @@ use crate::app::prelude::*;
 use crate::app::transcript_ui::expand;
 
 /// Row data the card needs, so the closure below doesn't capture `self`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct TranscriptCardView {
     pub file: String,
     pub lines: usize,
     pub chars: usize,
     pub dropped_timecodes: bool,
-    /// `chars / audio seconds`; `None` when the media length isn't known yet.
-    pub density: Option<f64>,
+    /// `units / audio seconds`, in the transcript's own unit (see
+    /// [`oneasr_core::transcript::SpeechRate`]); `None` when the media length
+    /// isn't known yet.
+    pub rate: Option<oneasr_core::transcript::SpeechRate>,
     /// Media length label for the density line (`26:31`).
     pub audio_label: String,
     pub from_file: bool,
@@ -88,20 +90,24 @@ pub(crate) fn transcript_card(
             // The guard against silent degradation: when the transcript and the
             // audio are not the same thing, forced alignment does not error — it
             // hands back a timeline that looks fine and drifts. This number has
-            // to be here, before start.
-            .when_some(view.density, |el, cps| {
-                let ok = (0.2..=12.0).contains(&cps);
-                let text = if ok {
-                    expand(
-                        t(L::TRANSCRIPT_DENSITY_OK),
-                        &[("cps", &format!("{cps:.1}")), ("len", &view.audio_label)],
-                    )
-                } else {
-                    expand(
-                        t(L::TRANSCRIPT_DENSITY_WARN),
-                        &[("cps", &format!("{cps:.1}")), ("len", &view.audio_label)],
-                    )
+            // to be here, before start. The unit is the transcript's own script
+            // (字/秒 for CJK, 词/秒 for spaced writing) — one ruler for both
+            // would call every English transcript a mismatch.
+            .when_some(view.rate, |el, rate| {
+                let ok = rate.plausible();
+                let template = match (rate.spaced, ok) {
+                    (true, true) => t(L::TRANSCRIPT_RATE_WORDS_OK),
+                    (true, false) => t(L::TRANSCRIPT_RATE_WORDS_WARN),
+                    (false, true) => t(L::TRANSCRIPT_RATE_CHARS_OK),
+                    (false, false) => t(L::TRANSCRIPT_RATE_CHARS_WARN),
                 };
+                let text = expand(
+                    template,
+                    &[
+                        ("rate", &format!("{:.1}", rate.per_second)),
+                        ("len", &view.audio_label),
+                    ],
+                );
                 el.child(
                     div()
                         .mt_1()
@@ -186,4 +192,7 @@ pub(crate) fn transcript_card(
                     ),
             ),
     )
+    // 和「用时」卡片同一个层级（`MENU_Z`）：浮层之间要有一处说了算的地方，
+    // 否则谁后画谁在上面，全看行在列表里的顺序。
+    .with_priority(MENU_Z)
 }
