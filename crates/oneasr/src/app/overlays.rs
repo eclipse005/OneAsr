@@ -116,29 +116,36 @@ impl OneAsrApp {
     //
     // 没有「点击粘住」：那个是当初自己加的，理由是「纯悬停的卡片上按按钮难受」。
     // 实际上宽限期已经让指针有足够时间移过去，用时卡片也是这么用的。
-    pub(crate) fn transcript_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.transcript_card_hovered = false;
+    /// 把这一行标成「悬停中」，并开始计时。芯片与卡片**共用**这一个动作——
+    /// 分开写就会出现「卡片进来顺手把芯片的标记清了」这种反效果。
+    fn arm_transcript_hover(&mut self, id: &str) {
         self.transcript_leave_since = None;
-        if self
+        let armed_for_this_row = self
             .transcript_hover_since
             .as_ref()
-            .is_some_and(|(hid, _)| hid == id)
-        {
-            return;
+            .is_some_and(|(hid, _)| hid == id);
+        if !armed_for_this_row {
+            self.transcript_hover_since = Some((id.to_string(), Instant::now()));
         }
-        self.transcript_hover_since = Some((id.to_string(), Instant::now()));
+    }
+
+    /// 指针进了**芯片**。芯片在卡片上面，所以指针此刻不在卡片上。
+    pub(crate) fn transcript_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.transcript_card_hovered = false;
+        self.arm_transcript_hover(id);
         cx.notify();
     }
 
-    /// 指针**真的**落在卡片上。
+    /// 指针真的落在**卡片**上。
     ///
-    /// 卡片刚被画出来时指针通常在**芯片**上，不在它身上——而 gpui 会给刚进入
-    /// 渲染树的元素派发一次 `hover(false)`。不把这两种「离开」分开，芯片的悬停
-    /// 就会被这一次假的离开取消：卡片出现 → 卡片关掉 → 再出现，鼠标一动一轮。
-    /// 芯片上 `hover(false)` 是真的离开，卡片上要先确认指针确实来过。
+    /// 卡片刚被画出来时指针通常在芯片上，不在它身上——而 gpui 会给刚进渲染树的
+    /// 元素派发一次 `hover(false)`。不把这两种「离开」分开，芯片的悬停就会被这一次
+    /// 假的离开取消：卡片出现 → 卡片关掉 → 再出现，鼠标一动一轮。所以 `hover(false)`
+    /// 必须先确认指针确实来过。
     pub(crate) fn transcript_card_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
         self.transcript_card_hovered = true;
-        self.transcript_hover_enter(id, cx);
+        self.arm_transcript_hover(id);
+        cx.notify();
     }
 
     pub(crate) fn transcript_card_hover_leave(&mut self, id: &str, cx: &mut Context<Self>) {

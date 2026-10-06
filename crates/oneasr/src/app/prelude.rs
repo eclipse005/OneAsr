@@ -18,7 +18,7 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use gpui::{
     AnyElement, Bounds, BoxShadow, Context, ExternalPaths, FocusHandle, IntoElement,
     MouseMoveEvent, Pixels, Rgba, SharedString, Timer, Window, WindowControlArea, canvas, deferred,
-    div, hsla, point, prelude::*, px, svg,
+    div, hsla, point, prelude::*, px, relative, svg,
 };
 
 pub(crate) use oneasr_core::{
