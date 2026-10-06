@@ -14,7 +14,7 @@ use crate::app::{LangMenuLayout, LangSelectTarget, OneAsrApp, TaskRowView};
 pub(super) struct RowCtx {
     pub(super) hover_id: Option<String>,
     pub(super) lang_menu: Option<String>,
-    pub(super) active_stage: Option<(String, SharedString)>,
+    pub(super) active_stage: Option<ActiveStage>,
     pub(super) timing_popover: Option<String>,
     pub(super) timing_visible: bool,
     pub(super) timing_progress: f32,
@@ -71,13 +71,11 @@ pub(super) fn task_row_view(
 
     // Meta: size · duration · status text (no free-floating status circle).
     let dur = row.duration_label.clone();
-    let stage_for_row = ctx
-        .active_stage
-        .as_ref()
-        .filter(|(sid, _)| sid == &row.id)
-        .map(|(_, s)| s.as_ref());
+    let stage_for_row = ctx.active_stage.as_ref().and_then(|s| s.for_row(&row.id));
     let (status_label, status_color, status_bg) =
-        status_pill_style(status, qn, stage_for_row, ui_lang());
+        status_pill_style(status, qn, stage_for_row.map(|(l, _)| l), ui_lang());
+    // 阶段本身按块计数时才有分母；转码 / 加载模型 / 导出只有一句话，照旧。
+    let row_progress = stage_fraction(stage_for_row.and_then(|(_, chunk)| chunk));
     let timing_total = row
         .timing
         .as_ref()
@@ -175,6 +173,8 @@ pub(super) fn task_row_view(
                                 .flex()
                                 .flex_col()
                                 .gap_0p5()
+                                // 进度条的定位基准：贴在文本列底边，行高恒定。
+                                .relative()
                                 // Keep overflow when timing card is closed so long names clip.
                                 .when(!timing_open, |el| el.overflow_hidden())
                                 .pr_2()
@@ -324,6 +324,34 @@ pub(super) fn task_row_view(
                                                 )
                                             },
                                         )
+                                })
+                                // 进度条 —— 只在阶段自带分母时出现。
+                                //
+                                // 绝对定位贴在文本列底边，而不是自己占一行：队列里每
+                                // 个任务开始处理时长高一次、结束时长回去，批量跑起来
+                                // 整个列表就会跟着抖两下。占一行换来的是稳定的行高。
+                                // 2px 是这个字号下还能看清填充边界的高度。
+                                // 精确的 `12/42` 在状态胶囊里，这条只负责「它在动」。
+                                .when_some(row_progress, |el, frac| {
+                                    el.child(
+                                        div()
+                                            .absolute()
+                                            .bottom_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(px(2.))
+                                            .overflow_hidden()
+                                            .rounded_full()
+                                            .bg(LINE_SOFT)
+                                            // 填充块自带圆角，边缘不会露出直角。
+                                            .child(
+                                                div()
+                                                    .h_full()
+                                                    .rounded_full()
+                                                    .bg(ACCENT)
+                                                    .w(relative(frac)),
+                                            ),
+                                    )
                                 }),
                         )
                         // Status — informational, left of the control
