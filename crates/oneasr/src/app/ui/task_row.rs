@@ -529,17 +529,17 @@ pub(super) fn task_row_view(
                             let id_tr = row.id.clone();
                             let id_hover = id_tr.clone();
                             let id_click = id_tr.clone();
-                            let has = row.transcript.is_some();
+                            let has = row.has_transcript;
                             let open = row.transcript_card_open;
-                            let tip = if has {
-                                t(L::TRANSCRIPT_TIP_HAS)
+                            // 有文稿 → 悬停出**卡片**（和「用时」同款），不再叠一个
+                            // 提示框：卡片就是解释，两个叠在一起只会互相挡。
+                            // 没有文稿时卡片没内容可写，留一句提示说明这个按钮能干什么。
+                            let label = if has {
+                                t(L::TRANSCRIPT_CHIP).to_string()
                             } else {
-                                t(L::TRANSCRIPT_TIP_NONE)
+                                t(L::TRANSCRIPT_ADD).to_string()
                             };
-                            let label = match row.transcript.as_deref() {
-                                Some(n) => format!("{} {n}", t(L::TRANSCRIPT_CHIP)),
-                                None => t(L::TRANSCRIPT_ADD).to_string(),
-                            };
+                            let tip = t(L::TRANSCRIPT_TIP_NONE).to_string();
                             div()
                                 .w(px(TRANSCRIPT_COL_PX))
                                 .flex_shrink_0()
@@ -591,11 +591,15 @@ pub(super) fn task_row_view(
                                                 .text_color(if has { ACCENT } else { MUTED })
                                                 .child(label),
                                         )
-                                        .tooltip(move |_, cx| {
-                                            cx.new(|_| NameTooltip {
-                                                text: tip.to_string().into(),
+                                        // 只有「还没挂文稿」时才有提示框：那时没有
+                                        // 卡片可看，一句话说明这个按钮能干什么就够。
+                                        .when(!has, |el| {
+                                            el.tooltip(move |_, cx| {
+                                                cx.new(|_| NameTooltip {
+                                                    text: tip.clone().into(),
+                                                })
+                                                .into()
                                             })
-                                            .into()
                                         }),
                                 )
                                 // Card is a sibling of the chip inside this
