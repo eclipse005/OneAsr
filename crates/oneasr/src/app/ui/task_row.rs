@@ -618,7 +618,6 @@ pub(super) fn task_row_view(
                                     primary_kind,
                                     primary_tip,
                                     primary_enabled,
-                                    is_hovered,
                                     cx.listener(move |this, _, _, cx| {
                                         this.close_floating_overlays();
                                         if this
@@ -641,7 +640,6 @@ pub(super) fn task_row_view(
                                     IconKind::Trash,
                                     t(L::TIP_DELETE),
                                     can_delete,
-                                    is_hovered,
                                     cx.listener(move |this, _, _, cx| {
                                         this.close_floating_overlays();
                                         this.delete_task(&id_del, cx);

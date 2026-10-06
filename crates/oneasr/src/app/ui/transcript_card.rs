@@ -43,7 +43,13 @@ pub(crate) fn transcript_card(
         div()
             .id(SharedString::from(format!("tr-card-{id}")))
             .absolute()
-            .top(px(26.0))
+            // `top: 100%` —— 锚在芯片列**底边之下**，而不是一个写死的像素。
+            //
+            // 写死像素（像「用时」卡片那样的 26px）就赌芯片比它矮：赌输了卡片会
+            // 盖住芯片，光标在两者之间来回，命中判定每一帧翻一次，卡片就一闪一闪。
+            // 百分比跟着实际高度走，永远不重叠。下面再留 4px 让指针横穿得过。
+            .top(relative(1.0))
+            .mt(px(4.0))
             .right_0()
             .w(px(TRANSCRIPT_CARD_W))
             .opacity(p)

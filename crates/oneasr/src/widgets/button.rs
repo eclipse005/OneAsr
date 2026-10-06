@@ -387,16 +387,19 @@ pub enum IconKind {
 
 /// Compact icon action — SVG only (no emoji). Always visible; disabled = gray.
 ///
+/// 高亮只跟**这个按钮自己**的悬停走。早先跟着**行**的悬停走，于是光标扫过
+/// 「文稿」芯片时，「开始」按钮也会亮成可点的样子——指针明明不在它身上，
+/// 那一下亮起来是在骗人。行的悬停该体现在行上（整行的底色），不是别家按钮上。
+///
 /// Note: GPUI SVG needs an explicit `.text_color()` (currentColor); parent
 /// cascade alone often leaves stroke/fill invisible.
 pub fn icon_btn(
     kind: IconKind,
     tip: &'static str,
     enabled: bool,
-    row_hovered: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let id = SharedString::from(format!("ico-{tip}-{enabled}-{}-{row_hovered}", kind as u8));
+    let id = SharedString::from(format!("ico-{tip}-{enabled}-{}", kind as u8));
     let tip_s: SharedString = tip.into();
     let (fg, bg, border) = if !enabled {
         (
@@ -404,29 +407,18 @@ pub fn icon_btn(
             crate::theme::BG,
             crate::theme::LINE_SOFT,
         )
-    } else if row_hovered {
-        match kind {
-            IconKind::Play => (
-                crate::theme::ACCENT,
-                crate::theme::ACCENT_SOFT,
-                crate::theme::ACCENT_SOFT,
-            ),
-            IconKind::Trash => (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE),
-            IconKind::Folder => (
-                crate::theme::ACCENT,
-                crate::theme::ACCENT_SOFT,
-                crate::theme::ACCENT_SOFT,
-            ),
-        }
     } else {
         match kind {
+            // 「打开字幕」始终是强调色：它不是一个要等你发现的动作，而是这一行
+            // 已经完成的事实。
             IconKind::Folder => (
                 crate::theme::ACCENT,
                 crate::theme::ACCENT_SOFT,
                 crate::theme::ACCENT_SOFT,
             ),
-            IconKind::Play => (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE),
-            IconKind::Trash => (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE),
+            IconKind::Play | IconKind::Trash => {
+                (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE)
+            }
         }
     };
     let mut el = div()
