@@ -55,6 +55,8 @@ pub enum AsrError {
     Media(MediaError),
     EmptyTranscribe(usize),
     EmptyAlignment,
+    /// The transcript attached to the task is empty — nothing to align against.
+    EmptyTranscript,
     EmptySentenceBoundary,
     LoadAsr(String),
     LoadAligner(String),
@@ -89,6 +91,7 @@ impl fmt::Display for AsrError {
             Self::Media(e) => write!(f, "{}: {e}", t(i18n::ERR_MEDIA)),
             Self::EmptyTranscribe(n) => write!(f, "{}", i18n::empty_transcribe(*n)),
             Self::EmptyAlignment => write!(f, "{}", t(i18n::ERR_EMPTY_ALIGNMENT)),
+            Self::EmptyTranscript => write!(f, "{}", t(i18n::ERR_EMPTY_TRANSCRIPT)),
             Self::EmptySentenceBoundary => {
                 write!(f, "{}", t(i18n::ERR_EMPTY_SENTENCE_BOUNDARY))
             }
@@ -426,6 +429,61 @@ pub fn process_media_file_with_provider<'a>(
     Pipeline::new(settings, provider, on_stage).run(input, media_name, data_root, export)
 }
 
+/// 文稿匹配任务的输入：文字 + 它的来源文件。
+///
+/// 两者捆在一起而不是分成两个参数：来源路径只被**输出撞名保护**用到，而两个
+/// 平行参数里总有一个是 `None` 而另一个不是——那正是最容易把用户自己的原字幕
+/// 盖掉的时候。
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptInput {
+    /// **一行 = 一条字幕**的文稿（见 [`crate::transcript`]）。
+    pub text: String,
+    /// 原始文件路径。有它才知道输出会不会写到它头上。
+    pub path: Option<PathBuf>,
+}
+
+/// 文稿匹配：音频 + 文稿 → 字幕，**整个 ASR 阶段被跳过**。
+///
+/// 与 [`process_media_file_with_export`] 的差别只有一句：文字从哪来。管线其余
+/// 部件（转码、人声分离、模型加载、归一化、呈现、产物落盘）全部共用，所以这个
+/// 功能没有第二条管线，只是少了一段。
+///
+/// `RenderOptions.script` 在这条路径上被忽略——用户的字一个都不改。
+pub fn process_media_file_with_transcript_export<'a>(
+    input: &Path,
+    media_name: &str,
+    transcript: &TranscriptInput,
+    settings: &Settings,
+    data_root: &Path,
+    on_stage: impl FnMut(StageUpdate) + 'a,
+    export: ProcessExportOptions,
+) -> Result<PathBuf, AsrError> {
+    let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
+        .map_err(|e| AsrError::Other(e.message().to_string()))?;
+    process_media_file_with_transcript(
+        input, media_name, transcript, settings, data_root, &provider, on_stage, export,
+    )
+}
+
+/// [`process_media_file_with_transcript_export`] with an explicit
+/// `EngineProvider` — the shape tests use. The extra argument is the whole point
+/// of the seam: the two entries stay drop-in comparable, differing only in where
+/// the text comes from.
+#[allow(clippy::too_many_arguments)]
+pub fn process_media_file_with_transcript<'a>(
+    input: &Path,
+    media_name: &str,
+    transcript: &TranscriptInput,
+    settings: &Settings,
+    data_root: &Path,
+    provider: &dyn crate::engine::EngineProvider,
+    on_stage: impl FnMut(StageUpdate) + 'a,
+    export: ProcessExportOptions,
+) -> Result<PathBuf, AsrError> {
+    Pipeline::new(settings, provider, on_stage)
+        .run_with_transcript(input, media_name, data_root, transcript, export)
+}
+
 /// Converted 16 kHz mono PCM WAV + the scratch dir that owns it.
 ///
 /// The scratch dir is removed on drop (success, failure, or panic). Set
@@ -457,7 +515,57 @@ fn keep_scratch() -> bool {
     std::env::var_os("ONEASR_KEEP_SCRATCH").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// VAD segmentation result + chunk plan.
+/// 两个路径是不是同一个文件。
+///
+/// 必须先归一：输出目录来自设置（绝对），而文稿路径是用户或 CLI 给的（可能是
+/// 相对），`/out/a.srt` 与 `out/a.srt` 文本不相等但就是同一个文件——不做这一步，
+/// 撞名保护永远不触发，而它一失效就是**覆盖用户自己的字幕**。
+///
+/// 大小写按平台语义走：Windows 不区分，Linux 区分。macOS 的 APFS 默认不区分、
+/// 但可以格式化成区分，**这里按区分处理**——判断偏保守只会漏掉一次改名（用户
+/// 得到覆盖后的文件、还能从回收站拿回来），反过来误判则会白白把输出改名。
+/// 方向不对的那一边更贵。
+fn same_file(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| -> PathBuf {
+        std::fs::canonicalize(p).unwrap_or_else(|_| {
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(p)
+            }
+        })
+    };
+    // 按**分量**比，不比字符串：分隔符、斜杠方向、盘符大小写都会让字符串不等，
+    // 而它们都是同一个文件。
+    let parts = |p: &Path| -> Vec<String> {
+        norm(p)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect()
+    };
+    let (pa, pb) = (parts(a), parts(b));
+    if cfg!(windows) {
+        pa.len() == pb.len() && pa.iter().zip(&pb).all(|(a, b)| a.eq_ignore_ascii_case(b))
+    } else {
+        pa == pb
+    }
+}
+
+/// 文稿的原始文件路径会不会被这一轮的输出覆盖。
+///
+/// 纯函数，好测：只在「文稿就在输出目录里、且文件名正好是 `{stem}.{ext}`」时
+/// 为真——也就是用户把旧字幕放在源视频旁边、而输出默认也写在那里的那种情形。
+fn transcript_would_be_overwritten(
+    transcript: &Path,
+    dirs: &[&Path],
+    stem: &str,
+    exts: &[&str],
+) -> bool {
+    dirs.iter().any(|dir| {
+        exts.iter()
+            .any(|ext| same_file(&dir.join(format!("{stem}.{ext}")), transcript))
+    })
+}
 struct VadPlan {
     chunks: Vec<vad::Chunk>,
     speech_segments: Vec<(f64, f64)>,
@@ -509,7 +617,40 @@ impl<'a> Pipeline<'a> {
         let vad = self.stage_vad_plan(&conv)?;
         let asr = self.stage_transcribe_all(&conv, &vad)?;
         let align = self.stage_align_all(&conv, &vad, &asr)?;
-        self.stage_export(input, media_name, vad.speech_segments, align, export)
+        self.stage_export(input, media_name, vad.speech_segments, None, align, export)
+    }
+    /// 文稿匹配：转码 → [人声分离] → **打轴整段文稿** → 呈现。
+    ///
+    /// 跳过 VAD 与 ASR，两条理由都不是为了快：VAD 的产物是「静音处硬切」和排版
+    /// DP 的间隔代价，而文稿已经给了边界，两个消费者都不需要；ASR 整个不需要
+    /// ——文字是用户给的。
+    ///
+    /// 所以这条路径是现有管线**唯一一处会让对齐器见到整段长音频**的地方：识别
+    /// 路径的对齐是逐 ASR 段调用、段长受分段时长约束在 30–180 s，从来没有超过三
+    /// 分钟。文稿没有 ASR 来定义段，段就只能是「整段」。
+    fn run_with_transcript(
+        &self,
+        input: &Path,
+        media_name: &str,
+        data_root: &Path,
+        transcript: &TranscriptInput,
+        export: ProcessExportOptions,
+    ) -> Result<PathBuf, AsrError> {
+        if transcript.text.trim().is_empty() {
+            return Err(AsrError::EmptyTranscript);
+        }
+        let conv = self.stage_prepare(input, data_root)?;
+        let align = self.stage_align_transcript(&conv, &transcript.text)?;
+        // 文稿模式没有 VAD：speech segments 只喂给排版 DP 算间隔，而文稿分行
+        // 根本不跑那个 DP。
+        self.stage_export(
+            input,
+            media_name,
+            Vec::new(),
+            Some(transcript),
+            align,
+            export,
+        )
     }
 
     // ── Stage 1: optional vocal separation → 16 kHz mono master ─────────
@@ -864,6 +1005,55 @@ impl<'a> Pipeline<'a> {
         Ok(AlignOutput { words: all_words })
     }
 
+    /// 文稿路径的对齐阶段：一次调用，整段文稿对整段音频。
+    ///
+    /// 没有块偏移可言——对齐器拿到的就是文件本身，所以 `chunk_start` 是 0。
+    /// 阶段标签只发「加载对齐模型 / 对齐中」两个：**没有「转写」**，
+    /// 这就是用户在处理中判断「这次是文稿匹配」的全部依据。
+    fn stage_align_transcript(
+        &self,
+        conv: &ConvertedAudio,
+        transcript: &str,
+    ) -> Result<AlignOutput, AsrError> {
+        self.emit(StageUpdate::new(AsrStage::LoadingAligner));
+        check_aligner_model_dir(&self.settings.aligner_model_dir)?;
+        let aligner = self
+            .provider
+            .load_aligner()
+            .map_err(|e| AsrError::LoadAligner(e.message().to_string()))?;
+
+        self.emit(StageUpdate::new(AsrStage::Aligning));
+        let result = aligner
+            .align(AlignRequest {
+                wav: conv.wav_path.as_path(),
+                text: transcript,
+                language: &self.settings.language,
+            })
+            .map_err(|e| {
+                AsrError::AlignChunk(1, format!("{:.1}s", conv.duration), e.message().to_string())
+            })?;
+        trace_log(format!("align#transcript ok words={}", result.len()));
+
+        let words: Vec<WordToken> = result
+            .into_iter()
+            .filter_map(
+                |AlignedToken {
+                     text,
+                     start_sec,
+                     end_sec,
+                 }| {
+                    let word = text.trim();
+                    (!word.is_empty())
+                        .then(|| timeline::place_aligned(word, 0.0, start_sec, end_sec))
+                },
+            )
+            .collect();
+        if words.is_empty() {
+            return Err(AsrError::EmptyAlignment);
+        }
+        Ok(AlignOutput { words })
+    }
+
     // ── Stage 5: sentence boundary + SRT write + side exports ────────────
 
     /// Normalize tokens, hand the measured timeline to the presentation phase,
@@ -879,6 +1069,7 @@ impl<'a> Pipeline<'a> {
         input: &Path,
         media_name: &str,
         speech_segments: Vec<(f64, f64)>,
+        transcript: Option<&TranscriptInput>,
         align: AlignOutput,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
@@ -903,8 +1094,10 @@ impl<'a> Pipeline<'a> {
             &RenderOptions {
                 preset: None,
                 // A transcription run has no transcript: the models produced the
-                // text, so the layout DP owns the line breaks.
-                transcript: None,
+                // text, so the layout DP owns the line breaks. With one, its
+                // lines are the cues and `script` is ignored — the transcript
+                // is the user's, and we do not rewrite it.
+                transcript: transcript.map(|t| t.text.clone()),
                 // Chinese output script (zh / yue only). Timing fields are
                 // untouched: conversion rewrites cue text only, after alignment
                 // and segmentation.
@@ -932,6 +1125,26 @@ impl<'a> Pipeline<'a> {
         // the configured output dir when that write fails (permissions, …).
         let fallback_dir = self.settings.resolved_output_dir();
         let target_dir = self.settings.srt_target_dir(input);
+
+        // 撞名保护：文稿常常就放在源文件旁边，而输出默认也写在那里——
+        // `杂谈.mp4` + `杂谈.srt` 会让输出**覆盖用户自己的字幕**。撞上了就整体
+        // 换名，三种格式一起挪，免得 SRT 避开了而 ASS 撞上。
+        let mut stem = stem;
+        if let Some(path) = transcript.and_then(|t| t.path.as_deref())
+            && transcript_would_be_overwritten(
+                path,
+                &[target_dir.as_path(), fallback_dir.as_path()],
+                &stem,
+                &["srt", "txt", "ass"],
+            )
+        {
+            stem = format!("{stem}.aligned");
+            eprintln!("{}", i18n::transcript_renamed(&stem));
+            trace_log(format!(
+                "transcript at {:?} would be overwritten; outputs renamed to {stem}",
+                path
+            ));
+        }
 
         // SRT first: it stays the primary output (task row “打开” target).
         let mut primary: Option<PathBuf> = None;
@@ -1002,6 +1215,64 @@ mod tests {
     use super::*;
     use crate::paths::output_srt_path;
 
+    /// 文稿就放在源视频旁边时，输出**不能**覆盖它——那是用户自己的字幕。撞上了
+    /// 就整体换成 `{stem}.aligned`，三种格式一起挪，免得 SRT 避开了而 ASS 撞上。
+    ///
+    /// 跨平台：用 `join` 拼路径，不写死 `D:\`——写死的话这条断言在 Linux 上
+    /// 比的是分隔符，不是被测的规则。相对 vs 绝对那一格是真实踩到的坑：输出
+    /// 目录来自设置（绝对），文稿路径是用户给的（可能是相对），文本不相等但
+    /// 就是同一个文件，不归一的话这道保护永远不触发。
+    #[test]
+    fn a_transcript_sitting_on_an_output_path_is_renamed_not_overwritten() {
+        let dir = std::path::PathBuf::from("/videos");
+        let exts = ["srt", "txt", "ass"];
+
+        // 用户把自己的旧字幕放在源视频旁边 —— 最容易踩的那一种。
+        assert!(super::transcript_would_be_overwritten(
+            &dir.join("clip.srt"),
+            &[dir.as_path()],
+            "clip",
+            &exts
+        ));
+        // 输出目录里那份也撞。
+        assert!(super::transcript_would_be_overwritten(
+            &dir.join("clip.ass"),
+            &[dir.as_path()],
+            "clip",
+            &exts
+        ));
+        // 相对 vs 绝对：输出目录来自设置（绝对），文稿路径是用户/CLI 给的
+        // （可能是相对），文本不相等但就是同一个文件。真实踩到的就是这一格。
+        let dir = std::env::current_dir().unwrap().join("output");
+        assert!(super::transcript_would_be_overwritten(
+            &Path::new("output").join("clip.srt"),
+            &[dir.as_path()],
+            "clip",
+            &exts
+        ));
+
+        // 文稿在别处：不改名，输出照常用 `{stem}`。
+        assert!(!super::transcript_would_be_overwritten(
+            Path::new("/scripts/clip.txt"),
+            &[dir.as_path()],
+            "clip",
+            &exts
+        ));
+        // 没开 ASS 就不会因为 ASS 撞名而改名。
+        assert!(!super::transcript_would_be_overwritten(
+            &dir.join("clip.ass"),
+            &[dir.as_path()],
+            "clip",
+            &["srt", "txt"]
+        ));
+        // 同名不同扩展名不算撞。
+        assert!(!super::transcript_would_be_overwritten(
+            &dir.join("clip.vtt"),
+            &[dir.as_path()],
+            "clip",
+            &exts
+        ));
+    }
     #[test]
     fn output_path_uses_stem() {
         let out = Path::new("Install").join("OneAsr").join("output");

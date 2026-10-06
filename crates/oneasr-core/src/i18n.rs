@@ -124,6 +124,19 @@ pub const ERR_IO: Str = Str::new("I/O 错误", "I/O error");
 pub const ERR_MEDIA: Str = Str::new("音频处理错误", "Audio processing error");
 pub const ERR_EMPTY_ALIGNMENT: Str =
     Str::new("对齐后词列表为空", "Word list is empty after alignment");
+/// `原字幕文件会被覆盖，输出已改名为 {stem}` / `the original subtitle would be
+/// overwritten; outputs are now named {stem}`。
+pub fn transcript_renamed(stem: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("原字幕文件会被覆盖，输出已改名为 {stem}"),
+        UiLang::En => {
+            format!("the original subtitle would be overwritten; outputs are now named {stem}")
+        }
+    }
+}
+
+/// 见 [`ERR_EMPTY_ALIGNMENT`]。
+pub const ERR_EMPTY_TRANSCRIPT: Str = Str::new("文稿是空的", "Transcript is empty");
 pub const ERR_EMPTY_SENTENCE_BOUNDARY: Str = Str::new(
     "断句后字幕为空",
     "Subtitle is empty after sentence segmentation",
@@ -550,10 +563,16 @@ Usage:
   oneasr-cli transcribe --input <media> [options]
   oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
   oneasr-cli render     --timeline <{stem}.timeline.json> [options]
+  oneasr-cli align      --audio <media> --text <transcript> [options]
 
 Commands:
   transcribe   Full pipeline → {data-root}/output/{stem}.srt by default  (alias: run, pipeline)
   asr-chunk    ASR only for one time range (hallucination / length debug)
+  render       Re-present a measured timeline. No models, no ffmpeg, no audio
+  align        Audio + YOUR transcript → subtitles. Skips recognition entirely;
+               the transcript's own line breaks become the subtitle lines
+               (one line = one cue). Forced to the CTC aligner, which takes the
+               whole file in one pass
   render       Re-present a measured timeline. No models, no ffmpeg, no audio:
                reads {stem}.timeline.json and writes a subtitle again
 
@@ -588,6 +607,20 @@ asr-chunk options:
   --out <path>             Write ASR text to file
   --backend <gpu|cpu|auto>
 
+align options:
+  --audio <path>           Media file (required)
+  --text <path>            Transcript .txt / .md / .srt (required). One line = one
+                           subtitle line; an .srt's own timings are ignored
+  --app-root <dir>         App root with bin/ffmpeg
+  --data-root <dir>        Where models/, output/ and runs/ live
+  --language <code>        zh|en|yue|ja|ko|...  (default: zh)
+  --backend <gpu|cpu|auto> Inference backend (default: auto)
+  --chunk-seconds <30-180> Kept for parity with transcribe; the aligner windows
+                           the audio itself
+  --txt                    Also write {stem}.txt (your transcript)
+  --ass                    Also write {stem}.ass (karaoke)
+  --no-srt                 Suppress the .srt file (requires --txt or --ass)
+
 render options:
   --timeline <path>        Measured timeline written by transcribe (required)
   --output <dir>           Where to write  (default: the timeline's own directory)
@@ -616,11 +649,15 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
   oneasr-cli transcribe --input <音视频> [选项]
   oneasr-cli asr-chunk  --wav <16k.wav> --start <秒> --end <秒> [选项]
   oneasr-cli render     --timeline <{stem}.timeline.json> [选项]
+  oneasr-cli align      --audio <音视频> --text <文稿> [选项]
 
 子命令：
   transcribe   完整流水线，默认输出到 {data-root}/output/{stem}.srt（别名：run、pipeline）
   asr-chunk    只对一段时间做转写（排查幻觉 / 长度问题）
-  render       重新呈现已测好的时间轴。不加载模型、不用 ffmpeg、不碰音频：
+  render       重新呈现已测好的时间轴。不加载模型、不用 ffmpeg、不碰音频
+  align        音视频 + 你自己的文稿 → 字幕，整个识别阶段跳过。文稿自己的分行
+               就是字幕的分行（一行 = 一条）。固定用 CTC 对齐器，它能整段一次
+               对齐，长音频不必切块：
                读 {stem}.timeline.json，再写一遍字幕
 
 transcribe 选项：
@@ -653,6 +690,19 @@ asr-chunk 选项：
   --out <路径>             把转写文本写入文件
   --backend <gpu|cpu|auto>
 
+align 选项：
+  --audio <路径>           音视频文件（必填）
+  --text <路径>            文稿 .txt / .md / .srt（必填）。一行 = 一条字幕行；
+                           .srt 自带的时间轴会被忽略
+  --app-root <目录>        应用目录（含 bin/ffmpeg）
+  --data-root <目录>       数据目录（放 models/、output/、runs/）
+  --language <代码>        zh|en|yue|ja|ko|...（默认 zh）
+  --backend <gpu|cpu|auto> 推理后端，默认 auto
+  --chunk-seconds <30-180> 与 transcribe 保持一致；对齐器自己会开窗
+  --txt                    额外写出 {stem}.txt（你的文稿）
+  --ass                    额外写出 {stem}.ass（卡拉OK）
+  --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
+
 render 选项：
   --timeline <路径>        transcribe 写出的已测时间轴（必填）
   --output <目录>          输出目录（默认与时间轴同目录）
@@ -684,6 +734,29 @@ pub fn cli_render_banner() -> &'static str {
 
 /// 见 [`CLI_KV_INPUT`]。
 pub const CLI_KV_TIMELINE: Str = Str::new("时间轴:  ", "timeline: ");
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_TRANSCRIPT: Str = Str::new("文稿:    ", "transcript:");
+
+/// `=== OneAsr CLI · 文稿匹配 ===` / `=== OneAsr CLI · align ===`。
+pub fn cli_align_banner() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "=== OneAsr CLI · 文稿匹配 ===",
+        UiLang::En => "=== OneAsr CLI · align ===",
+    }
+}
+
+/// `— {lines} 行 · {chars} 字{ignored}`，括号里那句只在 SRT 出现：原时间轴被丢了。
+pub fn cli_transcript_loaded(lines: usize, chars: usize, ignored: bool) -> String {
+    let dropped = match (ui_lang(), ignored) {
+        (UiLang::Zh, true) => "（已忽略原时间轴，将重新打轴）",
+        (UiLang::En, true) => " (original timings ignored; re-aligning)",
+        _ => "",
+    };
+    match ui_lang() {
+        UiLang::Zh => format!("— {lines} 行 · {chars} 字{dropped}"),
+        UiLang::En => format!("— {lines} lines · {chars} chars{dropped}"),
+    }
+}
 
 /// `重渲染失败: {e}` / `render failed: {e}`。
 pub fn cli_render_failed(e: &str) -> String {

@@ -64,6 +64,7 @@ fn main() -> ExitCode {
     let result = match cmd {
         "transcribe" | "run" | "pipeline" => cmd_transcribe(rest),
         "asr-chunk" | "chunk" => cmd_asr_chunk(rest),
+        "align" => cmd_align(rest),
         "render" => cmd_render(rest),
         "help" | "--help" | "-h" => {
             print_help();
@@ -590,6 +591,127 @@ fn apply_app_root_paths(
     // Headless runs keep writing to {data-root}/output (GUI's "next to source"
     // default would be surprising for batch scripts).
     settings.save_next_to_source = false;
+}
+
+/// `align` —— 音频 + 文稿 → 字幕，**整个识别阶段跳过**。
+///
+/// 与 `transcribe` 的差别只有一句：文字从哪来。所以这里没有识别模型的检查、
+/// 没有语言模型的加载，阶段列表里也就**没有「转写」这一项**——那就是用户判断
+/// 「这次是文稿匹配」的全部依据。
+fn cmd_align(args: &[String]) -> Result<(), i32> {
+    if flag(args, "--help") || flag(args, "-h") {
+        print_help();
+        return Ok(());
+    }
+    let audio = PathBuf::from(require_arg(args, "--audio")?);
+    if !audio.is_file() {
+        eprintln!("{}", i18n::cli_input_not_found(&audio));
+        return Err(1);
+    }
+    let text_path = PathBuf::from(require_arg(args, "--text")?);
+    let transcript = oneasr_core::transcript::read_transcript(&text_path).map_err(|e| {
+        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
+        1
+    })?;
+
+    let app_root = parse_app_root(args)?;
+    // 数据目录必须在任何 `Settings::default()` / 路径解析之前钉住。
+    let data_root = pin_data_root(args, &app_root)?;
+    ensure_ffmpeg(&app_root)?;
+
+    let language = arg(args, "--language").unwrap_or_else(|| "zh".into());
+    let chunk_seconds: u32 = arg(args, "--chunk-seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let backend = arg(args, "--backend").unwrap_or_else(|| "auto".into());
+    let want_txt = flag(args, "--txt");
+    let want_ass = flag(args, "--ass");
+    let no_srt = flag(args, "--no-srt");
+    if no_srt && !want_txt && !want_ass {
+        eprintln!("{}", i18n::cli_no_srt_warning());
+    }
+
+    let mut settings = Settings {
+        language,
+        backend,
+        vocal_separation: flag(args, "--vocal-separation"),
+        save_next_to_source: false,
+        ..Settings::default()
+    };
+    settings.chunk_target_seconds = chunk_seconds;
+    settings.output_srt = !no_srt;
+    settings.output_txt = want_txt;
+    settings.output_ass = want_ass;
+    if let Some(dir) = arg(args, "--demucs-model-dir") {
+        settings.demucs_model_dir = PathBuf::from(dir);
+    }
+    // 文稿匹配固定用 CTC：整段一次对齐，块边界不伤词。见设计文档 §1.1。
+    settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+    settings.normalize();
+    if let Err(e) = settings.can_start() {
+        eprintln!("{e}");
+        return Err(1);
+    }
+
+    eprintln!("{}", i18n::cli_align_banner());
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_INPUT, &audio));
+    eprintln!(
+        "{} {}",
+        i18n::cli_kv(i18n::CLI_KV_TRANSCRIPT, &text_path),
+        i18n::cli_transcript_loaded(
+            transcript.line_count(),
+            transcript.char_count(),
+            transcript.dropped_timecodes()
+        )
+    );
+    eprintln!(
+        "{}",
+        i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.resolved_output_dir())
+    );
+
+    let media_name = audio
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| audio.display().to_string());
+    let mut clock = StageClock::new();
+    let t0 = Instant::now();
+    let result = oneasr_core::process_media_file_with_transcript_export(
+        &audio,
+        &media_name,
+        &oneasr_core::asr::TranscriptInput {
+            text: transcript.text,
+            path: Some(text_path),
+        },
+        &settings,
+        &data_root,
+        |update: StageUpdate| {
+            clock.note(&update);
+            if let Some(w) = &update.warning {
+                eprintln!("{}", i18n::cli_warn(w));
+            }
+            eprintln!("{}", i18n::cli_stage(&update.label(i18n::ui_lang())));
+        },
+        ProcessExportOptions { words_json: None },
+    );
+    let timing = clock.finish();
+    match result {
+        Ok(primary) => {
+            eprintln!("{}", i18n::cli_ok_output(&primary));
+            eprintln!(
+                "{}",
+                i18n::cli_timing(
+                    t0.elapsed().as_secs_f64(),
+                    timing.total_ms,
+                    timing.stages.len()
+                )
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            Err(1)
+        }
+    }
 }
 
 /// `--aligner` 旗标值 → 目录 id。接受短别名 `ctc` / `qwen` 与完整目录名。
