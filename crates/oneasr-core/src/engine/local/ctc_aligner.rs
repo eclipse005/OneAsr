@@ -51,19 +51,16 @@ impl Aligner for CtcAlignerAdapter {
         // 不移动任何时间戳指标（见其 README）；None 才是整文件一次前向。
         const WINDOW_SEC: f64 = 30.0;
         const CONTEXT_SEC: f64 = 2.0;
-        let out = match on_progress {
-            Some(sink) => self.inner.align_with_progress(
+        let out = self
+            .inner
+            .align(
                 req.wav,
                 req.text,
                 Some(WINDOW_SEC),
                 CONTEXT_SEC,
-                sink,
-            ),
-            None => self
-                .inner
-                .align(req.wav, req.text, Some(WINDOW_SEC), CONTEXT_SEC),
-        }
-        .map_err(|e| EngineError::new(format!("{e:#}")))?;
+                on_progress,
+            )
+            .map_err(|e| EngineError::new(format!("{e:#}")))?;
         Ok(out
             .words
             .into_iter()
