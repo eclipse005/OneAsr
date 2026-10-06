@@ -64,8 +64,8 @@ impl OneAsrApp {
                     opacity,
                     interactive,
                     queue_rank: ranks.get(t.id.as_str()).copied(),
-                    // 芯片上只放量级（那一列 88px），字数详情在卡片里。
-                    transcript: t.transcript.as_ref().map(|st| st.short_count()),
+                    // 芯片上不再写字数（「3.4k」对这一行没有可操作的意义），只留一个「挂没挂」。
+                    has_transcript: t.transcript.is_some(),
                     transcript_card_open: self.transcript_card.as_deref() == Some(t.id.as_str()),
                     transcript_card_progress: self.transcript_card_progress(),
                     transcript_card: t.transcript.as_ref().map(|st| {

@@ -3,6 +3,27 @@
 
 use crate::app::prelude::*;
 
+/// 悬停满 `delay`、且当前没开着这张卡片 → 该打开它（返回卡片 id）。
+///
+/// 「用时」和「文稿」两张卡片是照着彼此写的，所以判据只留这一份：它们曾经各写
+/// 一份，而文稿那份前面还多了一个「卡片还没开就 return」的守卫——悬停刚进来时
+/// 卡片本来就是 `None`，于是那条路永远走不到，卡片从来没被打开过。
+///
+/// 纯函数：不碰 app 状态，所以「延迟没到 / 已经开着 / 没有悬停」三种不该打开的
+/// 情况都能在没有 GPUI 上下文的地方钉住。
+fn hover_promotes(
+    hover: Option<&(String, Instant)>,
+    open: Option<&str>,
+    now: Instant,
+    delay: std::time::Duration,
+) -> Option<String> {
+    let (id, since) = hover?;
+    if open == Some(id.as_str()) || now.saturating_duration_since(*since) < delay {
+        return None;
+    }
+    Some(id.clone())
+}
+
 impl OneAsrApp {
     /// The one sound gate (「提示音」): interaction taps AND the run reminder
     /// together.
@@ -125,17 +146,17 @@ impl OneAsrApp {
 
     /// Promote delayed hover → open; honour the leave grace; clear on close.
     pub(crate) fn tick_transcript_card(&mut self) {
-        if self.transcript_card.is_none() {
-            return;
-        }
-        if let Some((id, since)) = self.transcript_hover_since.clone()
-            && since.elapsed() >= Duration::from_millis(TRANSCRIPT_HOVER_DELAY_MS)
-            && self.transcript_card.as_deref() != Some(id.as_str())
-        {
-            self.transcript_card_from = self.transcript_card_progress();
-            self.transcript_card_to = 1.0;
-            self.transcript_card_anim_t0 = Instant::now();
-            self.transcript_card = Some(id);
+        // 这里**不能**先 `if self.transcript_card.is_none() { return }`：
+        // 悬停刚进来时卡片本来就是 None、只有 `hover_since` 有值，那个提前返回
+        // 会让「悬停 → 打开」永远走不到。开着的时候才需要守 leave grace，
+        // 所以判断本身而不是状态决定要不要往下走。
+        if let Some(id) = hover_promotes(
+            self.transcript_hover_since.as_ref(),
+            self.transcript_card.as_deref(),
+            Instant::now(),
+            Duration::from_millis(TRANSCRIPT_HOVER_DELAY_MS),
+        ) {
+            self.open_transcript_card(&id);
         }
         if !self.transcript_card_pinned
             && let Some((id, since)) = self.transcript_leave_since.clone()
@@ -147,6 +168,19 @@ impl OneAsrApp {
                 self.transcript_leave_since = None;
             }
         }
+    }
+
+    /// 打开一张文稿卡片。**这是 `transcript_card` 唯一的赋值入口。**
+    ///
+    /// 悬停与点击两条路必须都走这里：只写 `transcript_card = Some(id)` 而不启动
+    /// 动画，`progress()` 停在初值 0，卡片会以 0 透明度画出来——渲染了，但看着
+    /// 跟没渲染一样（曾被当成「点击没反应」）。收敛到一处就没有「忘了启动动画」
+    /// 这种可能了。
+    pub(crate) fn open_transcript_card(&mut self, id: &str) {
+        self.transcript_card_from = self.transcript_card_progress();
+        self.transcript_card_to = 1.0;
+        self.transcript_card_anim_t0 = Instant::now();
+        self.transcript_card = Some(id.to_string());
     }
 
     pub(crate) fn close_transcript_card(&mut self) {
@@ -178,7 +212,7 @@ impl OneAsrApp {
         if self.transcript_card.as_deref() == Some(id) && self.transcript_card_pinned {
             self.close_transcript_card();
         } else {
-            self.transcript_card = Some(id.to_string());
+            self.open_transcript_card(id);
             self.transcript_card_pinned = true;
             // 粘住时卡片上有按钮，被别的浮层压住就点不到。
             self.close_lang_selects();
@@ -233,10 +267,12 @@ impl OneAsrApp {
 
     /// Promote delayed hover → open; honor leave grace; clear id when closed.
     pub(crate) fn tick_timing_popover(&mut self) {
-        if let Some((id, since)) = self.timing_hover_since.clone()
-            && since.elapsed() >= Duration::from_millis(TIMING_HOVER_DELAY_MS)
-            && self.timing_popover.as_deref() != Some(id.as_str())
-        {
+        if let Some(id) = hover_promotes(
+            self.timing_hover_since.as_ref(),
+            self.timing_popover.as_deref(),
+            Instant::now(),
+            Duration::from_millis(TIMING_HOVER_DELAY_MS),
+        ) {
             self.open_timing_popover(&id);
         }
         if let Some((id, since)) = self.timing_leave_since.clone()
@@ -436,5 +472,55 @@ impl OneAsrApp {
             self.empty_wave_amp = 0.0;
         }
         self.empty_wave_smooth_x += (self.empty_wave_cursor_x - self.empty_wave_smooth_x) * 0.22;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hover_promotes;
+    use std::time::{Duration, Instant};
+
+    const D: Duration = Duration::from_millis(300);
+
+    /// 悬停经过了 `elapsed`，返回可以传给 `hover_promotes` 的借用值。
+    fn hover_for(elapsed: Duration) -> Option<(String, Instant)> {
+        Some(("task-1".to_string(), Instant::now() - elapsed))
+    }
+
+    /// 没到延迟不开——指针扫过一行不该弹卡片。
+    #[test]
+    fn a_hover_shorter_than_the_delay_opens_nothing() {
+        let hover = hover_for(Duration::from_millis(100));
+        assert_eq!(
+            hover_promotes(hover.as_ref(), None, Instant::now(), D),
+            None
+        );
+    }
+
+    /// 到点就开，**哪怕此刻一张卡片都还没开着**。这条就是「悬停打不开卡片」
+    /// 那个 bug 的正面写法：它之前被一个「没开卡片就别往下走」的守卫挡死了。
+    #[test]
+    fn a_hover_past_the_delay_opens_a_card_that_is_not_yet_open() {
+        let hover = hover_for(Duration::from_millis(400));
+        assert_eq!(
+            hover_promotes(hover.as_ref(), None, Instant::now(), D),
+            Some("task-1".to_string())
+        );
+    }
+
+    /// 已经开着就别再开一遍。
+    #[test]
+    fn an_already_open_card_is_not_promoted_again() {
+        let hover = hover_for(Duration::from_millis(400));
+        assert_eq!(
+            hover_promotes(hover.as_ref(), Some("task-1"), Instant::now(), D),
+            None
+        );
+    }
+
+    /// 指针根本没在芯片上时，没有任何事发生。
+    #[test]
+    fn no_hover_opens_nothing() {
+        assert_eq!(hover_promotes(None, None, Instant::now(), D), None);
     }
 }

@@ -192,10 +192,6 @@ pub mod L {
         "挂一份文稿，跳过识别直接打轴；文稿的一行 = 一条字幕",
         "Attach a transcript: skips recognition and aligns your own text — one line = one subtitle",
     );
-    pub const TRANSCRIPT_TIP_HAS: Str = Str::new(
-        "打轴固定使用 CTC；点开可重新读取 / 智能断句 / 移除",
-        "Aligned with the CTC aligner; click to re-read, smart-break or remove",
-    );
     /// 卡片：`{lines} 行 · {chars} 字`
     pub const TRANSCRIPT_SUMMARY: Str =
         Str::new("{lines} 行 · {chars} 字", "{lines} lines · {chars} chars");

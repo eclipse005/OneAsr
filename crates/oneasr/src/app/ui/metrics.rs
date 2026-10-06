@@ -20,8 +20,9 @@ pub(crate) const LANG_COL_PX: f32 = 64.;
 pub(crate) const SEPARATE_COL_PX: f32 = 76.;
 /// Transcript chip column, between the separation chip and the actions: it is a
 /// one-button two-state control, and it sits next to the start button whose
-/// behaviour it decides.
-pub(crate) const TRANSCRIPT_COL_PX: f32 = 88.;
+/// behaviour it decides. Just wide enough for「+ 文稿」/「文稿」— the counts
+/// live in the card, not on the chip.
+pub(crate) const TRANSCRIPT_COL_PX: f32 = 72.;
 /// Hover-to-open delay for the transcript card. Same feel as the 用时 card: long
 /// enough that sweeping the pointer across the row does not flash it.
 pub(crate) const TRANSCRIPT_HOVER_DELAY_MS: u64 = 420;

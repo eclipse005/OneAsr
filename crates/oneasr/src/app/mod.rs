@@ -434,8 +434,8 @@ pub(crate) fn run_task(
 /// Per-frame paint snapshot of a list row. Owned so the children closure
 /// does not clone `Task` (path, output path, …).
 pub(crate) struct TaskRowView {
-    /// 文稿芯片上的量级（`None` = 还没挂文稿）。
-    pub(crate) transcript: Option<String>,
+    /// 这行挂了文稿没有（`false` = 芯片是「+ 文稿」）。
+    pub(crate) has_transcript: bool,
     /// 卡片正为这行开着。
     pub(crate) transcript_card_open: bool,
     /// 卡片淡入淡出进度。

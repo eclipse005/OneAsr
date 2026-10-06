@@ -116,18 +116,6 @@ impl StagedTranscript {
         self.text.lines().filter(|l| !l.trim().is_empty()).count()
     }
 
-    /// 芯片上的量级写法：`3.2k` / `840`。那一列只有 88px，行上不写「字」。
-    pub fn short_count(&self) -> String {
-        let n = self.char_count();
-        if n >= 10_000 {
-            format!("{}w", n / 10_000)
-        } else if n >= 1_000 {
-            format!("{:.1}k", n as f64 / 1000.0)
-        } else {
-            n.to_string()
-        }
-    }
-
     /// 密度：每秒多少字。文稿与音频对不上时，强制对齐**不会报错**，它给出一个
     /// 看起来正常但慢慢漂移的时间轴——比报错糟糕得多。所以这个数必须在**点开始
     /// 之前**给用户看。
@@ -312,15 +300,6 @@ mod transcript_tests {
         let st = staged("第一行。\n第二行。");
         assert_eq!(st.char_count(), 8, "第一行。第二行。");
         assert_eq!(st.line_count(), 2);
-        assert_eq!(st.short_count(), "8");
-    }
-
-    /// 芯片上只有 88px，量级要压短——但不能压到看不出是「三千字」。
-    #[test]
-    fn the_chip_count_stays_short() {
-        assert_eq!(staged(&"字".repeat(3_200)).short_count(), "3.2k");
-        assert_eq!(staged(&"字".repeat(999)).short_count(), "999");
-        assert_eq!(staged(&"字".repeat(12_345)).short_count(), "1w");
     }
 
     /// 挂 SRT 时原时间轴被丢了，界面上要说明一次。

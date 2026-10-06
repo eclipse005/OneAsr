@@ -66,7 +66,10 @@ impl OneAsrApp {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
                     task.transcript = Some(StagedTranscript::from_core(&parsed, Some(path)));
                 }
-                self.transcript_card = Some(id.to_string());
+                // 选完就把卡片弹出来：这是「刚挂上」的反馈，说的是「它现在是什么样、
+                // 会被怎么用」。走 `open_transcript_card` 是为了和悬停、点击共用
+                // 一次动画——直接写 `transcript_card = Some(..)` 画出来是 0 透明度。
+                self.open_transcript_card(id);
                 self.transcript_card_pinned = true;
             }
             Err(e) => {
