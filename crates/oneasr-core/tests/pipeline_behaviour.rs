@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use oneasr_core::engine::AlignedToken;
 use oneasr_core::engine::testing::{FakeProvider, FakeSeparation};
 use oneasr_core::{ProcessExportOptions, Settings, StageUpdate, process_media_file_with_provider};
+use oneasr_core::{TranscriptInput, process_media_file_with_transcript};
 
 /// Per-test scratch root (`cargo test` runs tests in parallel threads).
 fn scratch_root(label: &str) -> PathBuf {
@@ -111,6 +112,32 @@ impl Run {
         let result = process_media_file_with_provider(
             &self.input,
             "sample.wav",
+            &self.settings,
+            &self.app_root,
+            provider,
+            |update: StageUpdate| stages.push(update),
+            ProcessExportOptions::default(),
+        )
+        .map_err(|e| e.to_string());
+        (stages, result)
+    }
+
+    /// The transcript path: same pipeline, the text comes from the caller and
+    /// the ASR stage never runs.
+    fn run_with_transcript(
+        &self,
+        provider: &FakeProvider,
+        transcript: &str,
+    ) -> (Vec<StageUpdate>, Result<PathBuf, String>) {
+        let mut stages = Vec::new();
+        let input = TranscriptInput {
+            text: transcript.to_string(),
+            path: None,
+        };
+        let result = process_media_file_with_transcript(
+            &self.input,
+            "sample.wav",
+            &input,
             &self.settings,
             &self.app_root,
             provider,
@@ -266,4 +293,64 @@ fn separation_reports_progress_and_cpu_fallback() {
         .unwrap();
     let conv = labels.iter().position(|l| l == "转码音频").unwrap();
     assert!(sep < conv, "stage order changed: {labels:?}");
+}
+
+/// 文稿路径的那一段静默，是这个功能最贵的一处体验债：一份二十分钟的文稿要对着
+/// 一个不动的「打轴中」等二十几秒。分母由对齐器自己数（CTC 数编码窗口），这里
+/// 用假引擎把它数成 4 颗，钉住「引擎报的进度真的变成了阶段更新」。
+#[test]
+fn transcript_alignment_surfaces_the_aligners_own_progress() {
+    let run = Run::new("align_progress", false);
+    let provider = FakeProvider::new(
+        "unused",
+        vec![AlignedToken {
+            text: "你好".into(),
+            start_sec: 0.10,
+            end_sec: 1.00,
+        }],
+    )
+    .with_align_progress(4);
+    let (stages, result) = run.run_with_transcript(&provider, "你好世界。");
+    result.expect("transcript pipeline should succeed");
+
+    let align_chunks: Vec<(usize, usize)> = stages
+        .iter()
+        .filter(|s| s.stage == oneasr_core::AsrStage::Aligning)
+        .filter_map(|s| s.chunk)
+        .collect();
+    assert_eq!(
+        align_chunks,
+        vec![(1, 4), (2, 4), (3, 4), (4, 4)],
+        "every tick must reach the UI stage, in order"
+    );
+}
+
+/// 反过来也要钉住：引擎没有分母时**不要**造一个。文稿路径上模型加载、导出这些
+/// 阶段本来就没有块数，凭空补一个 `1/1` 会让界面显示一条永远满着的条。
+#[test]
+fn a_denominator_less_stage_keeps_its_chunk_empty() {
+    let run = Run::new("align_no_progress", false);
+    let provider = FakeProvider::new(
+        "unused",
+        vec![AlignedToken {
+            text: "你好".into(),
+            start_sec: 0.10,
+            end_sec: 1.00,
+        }],
+    );
+    let (stages, result) = run.run_with_transcript(&provider, "你好世界。");
+    result.expect("transcript pipeline should succeed");
+
+    for stage in &stages {
+        if matches!(
+            stage.stage,
+            oneasr_core::AsrStage::LoadingAligner | oneasr_core::AsrStage::Exporting
+        ) {
+            assert_eq!(
+                stage.chunk, None,
+                "{:?} has no denominator and must not claim one",
+                stage.stage
+            );
+        }
+    }
 }

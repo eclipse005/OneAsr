@@ -28,7 +28,7 @@ qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.g
 # CTC 强制对齐（omniASR-CTC-300M-v2），与 Qwen 对齐器并存可选 —— 见
 # docs/ctc-aligner-adoption-analysis.md。`AlignOutput::words` 已是成品对齐单元
 # （CJK 逐字、空格语言逐词），上层不再自己做分组。
-ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "95f2111f67132747a464bc4f498095ee09f79459" }
+ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "290d87651144037ff8819eb5cfb6bf2aaccbee9d" }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
 # HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
 demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "ac088c66980c4ea55255acfb54e6c6a4d067e0b0" }

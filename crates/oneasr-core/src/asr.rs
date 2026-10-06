@@ -955,11 +955,16 @@ impl<'a> Pipeline<'a> {
                 };
 
                 let result = aligner
-                    .align(AlignRequest {
-                        wav: chunk_path,
-                        text: &seg.text,
-                        language: &seg.language,
-                    })
+                    .align(
+                        AlignRequest {
+                            wav: chunk_path,
+                            text: &seg.text,
+                            language: &seg.language,
+                        },
+                        // 这里循环本身已经是分母：第 i 段 / 共 n 段。引擎内部再报
+                        // 一层窗口进度会和它重叠，所以传 `None`。
+                        None,
+                    )
                     .map_err(|e| {
                         AsrError::AlignChunk(
                             i + 1,
@@ -1023,12 +1028,21 @@ impl<'a> Pipeline<'a> {
             .map_err(|e| AsrError::LoadAligner(e.message().to_string()))?;
 
         self.emit(StageUpdate::new(AsrStage::Aligning));
+        // 进度是真的：分母由 CTC 对齐器自己数（编码窗口），不是这里估的秒数。
+        // 用户给一份 21 分钟的文稿要对着一个不动的「打轴中」等二十几秒，
+        // 那二十几秒里唯一能告诉他「还在动」的东西就是这条进度。
+        let mut sink = |done: usize, total: usize| {
+            self.emit(StageUpdate::with_chunk(AsrStage::Aligning, done, total));
+        };
         let result = aligner
-            .align(AlignRequest {
-                wav: conv.wav_path.as_path(),
-                text: transcript,
-                language: &self.settings.language,
-            })
+            .align(
+                AlignRequest {
+                    wav: conv.wav_path.as_path(),
+                    text: transcript,
+                    language: &self.settings.language,
+                },
+                Some(&mut sink),
+            )
             .map_err(|e| {
                 AsrError::AlignChunk(1, format!("{:.1}s", conv.duration), e.message().to_string())
             })?;

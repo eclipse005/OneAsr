@@ -20,7 +20,7 @@ use std::path::Path;
 use super::backend::ComputeBackend;
 use ctc_forced_aligner_wgpu::{Aligner as CtcAligner, DeviceSelector as CtcDeviceSelector};
 
-use crate::engine::{AlignRequest, AlignedToken, Aligner, EngineError};
+use crate::engine::{AlignProgress, AlignRequest, AlignedToken, Aligner, EngineError};
 
 pub(super) struct CtcAlignerAdapter {
     inner: CtcAligner,
@@ -39,13 +39,31 @@ impl CtcAlignerAdapter {
 }
 
 impl Aligner for CtcAlignerAdapter {
-    fn align(&self, req: AlignRequest<'_>) -> Result<Vec<AlignedToken>, EngineError> {
+    /// 把 crate 的窗口进度原样交给上层：一小时音频按 30 s 窗口是 120 个刻度，
+    /// 足够画一条不跳的条。分母由 crate 数出来（`div_ceil`），这里不重算——
+    /// 上面猜的秒数没有下面数出来的窗口准。
+    fn align(
+        &self,
+        req: AlignRequest<'_>,
+        on_progress: Option<AlignProgress<'_>>,
+    ) -> Result<Vec<AlignedToken>, EngineError> {
         // window 30s + context 2s：crate 实测的内存/吞吐旋钮，跨合法区间
         // 不移动任何时间戳指标（见其 README）；None 才是整文件一次前向。
-        let out = self
-            .inner
-            .align(req.wav, req.text, Some(30.0), 2.0)
-            .map_err(|e| EngineError::new(format!("{e:#}")))?;
+        const WINDOW_SEC: f64 = 30.0;
+        const CONTEXT_SEC: f64 = 2.0;
+        let out = match on_progress {
+            Some(sink) => self.inner.align_with_progress(
+                req.wav,
+                req.text,
+                Some(WINDOW_SEC),
+                CONTEXT_SEC,
+                sink,
+            ),
+            None => self
+                .inner
+                .align(req.wav, req.text, Some(WINDOW_SEC), CONTEXT_SEC),
+        }
+        .map_err(|e| EngineError::new(format!("{e:#}")))?;
         Ok(out
             .words
             .into_iter()

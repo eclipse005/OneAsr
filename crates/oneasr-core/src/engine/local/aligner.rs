@@ -8,7 +8,7 @@ use super::backend::ComputeBackend;
 use qwen3_aligner_wgpu::align_inference::Aligner as WgpuAligner;
 use qwen3_aligner_wgpu::gpu::DeviceSelector;
 
-use crate::engine::{AlignRequest, AlignedToken, Aligner, EngineError};
+use crate::engine::{AlignProgress, AlignRequest, AlignedToken, Aligner, EngineError};
 
 pub(super) struct QwenAlignerAdapter {
     /// wgpu `align` takes `&mut self`; the pipeline trait is `&self`.
@@ -31,7 +31,13 @@ impl QwenAlignerAdapter {
 }
 
 impl Aligner for QwenAlignerAdapter {
-    fn align(&self, req: AlignRequest<'_>) -> Result<Vec<AlignedToken>, EngineError> {
+    /// 忽略 `on_progress`：这个对齐器一次算完一整段，没有分母可报。上层拿到
+    /// `None`，界面显示「打轴中」而不画条——给一条不动的条比没有条更糟。
+    fn align(
+        &self,
+        req: AlignRequest<'_>,
+        _on_progress: Option<AlignProgress<'_>>,
+    ) -> Result<Vec<AlignedToken>, EngineError> {
         let mut inner = self
             .inner
             .lock()

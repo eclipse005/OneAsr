@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::engine::{
-    AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider, SeparateRequest,
-    SeparationEvent, Separator, TranscribeRequest, Transcript,
+    AlignProgress, AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider,
+    SeparateRequest, SeparationEvent, Separator, TranscribeRequest, Transcript,
 };
 
 /// Shared, ordered record of engine lifecycle events (`asr.load`, `asr.drop`, …).
@@ -61,6 +61,7 @@ pub struct FakeProvider {
     transcript: String,
     tokens: Vec<AlignedToken>,
     separation: Option<FakeSeparation>,
+    align_progress_total: usize,
     align_inputs: Arc<Mutex<Vec<String>>>,
     separator_loads: Arc<AtomicUsize>,
 }
@@ -73,9 +74,17 @@ impl FakeProvider {
             transcript: transcript.into(),
             tokens,
             separation: None,
+            align_progress_total: 0,
             align_inputs: Arc::new(Mutex::new(Vec::new())),
             separator_loads: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Make the fake aligner report `1..=total` against the sink it is handed,
+    /// the way the CTC crate reports its encoded windows. `0` = report nothing.
+    pub fn with_align_progress(mut self, total: usize) -> Self {
+        self.align_progress_total = total;
+        self
     }
 
     /// Enable the fake separator (only called by runs with separation enabled).
@@ -115,6 +124,7 @@ impl EngineProvider for FakeProvider {
             log: self.log.clone(),
             tokens: self.tokens.clone(),
             inputs: self.align_inputs.clone(),
+            progress_total: self.align_progress_total,
         }))
     }
 
@@ -157,12 +167,26 @@ struct FakeAligner {
     log: EngineLog,
     tokens: Vec<AlignedToken>,
     inputs: Arc<Mutex<Vec<String>>>,
+    /// `0` = 一个刻度都不发（引擎没有分母）；否则发 `1..=progress_total`。
+    progress_total: usize,
 }
 
 impl Aligner for FakeAligner {
-    fn align(&self, req: AlignRequest<'_>) -> Result<Vec<AlignedToken>, EngineError> {
+    /// 假引擎默认**不发**进度：它没有窗口可数。`stage_align_transcript` 那条路
+    /// 要在没有进度的情况下也跑通（界面退回「打轴中」文字），所以默认值是 0，
+    /// 要测进度接线就 `FakeProvider::with_align_progress`。
+    fn align(
+        &self,
+        req: AlignRequest<'_>,
+        on_progress: Option<AlignProgress<'_>>,
+    ) -> Result<Vec<AlignedToken>, EngineError> {
         self.log.push("aligner.align");
         self.inputs.lock().unwrap().push(req.text.to_string());
+        if let Some(sink) = on_progress {
+            for done in 1..=self.progress_total {
+                sink(done, self.progress_total);
+            }
+        }
         Ok(self.tokens.clone())
     }
 }
