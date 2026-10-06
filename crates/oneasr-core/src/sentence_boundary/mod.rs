@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 mod assembly;
 mod boundary_rules;
 mod digit_glue;
+mod line_break;
 mod preset;
 mod profile;
 mod punkt_map;
@@ -36,8 +37,6 @@ use preset::subtitle_length_preset_from_id;
 use semantic::{build_split_points_from_hard_boundaries, split_points_to_spans};
 use subtitle_layout::build_subtitle_layout_split_points;
 use types::SourceSentenceStep2;
-#[cfg(test)]
-use util::join_words;
 use util::{from_core_words, to_core_words};
 use watchability_merge::merge_watchability_spans;
 
@@ -50,10 +49,11 @@ pub use types::{
 // a space, so it reads the same decision `join_words` is made of. Exposed
 // crate-wide rather than public: it is an answer about *these* words, not a
 // promise to anyone outside.
-pub(crate) use util::spacing_pieces;
+pub(crate) use util::{join_words, spacing_pieces};
 // Test-only: the karaoke renderer's fixture builds the token list the aligners
 // would hand over, which means asking the same question about the same scripts
 // that the joiner asks. Nothing outside a test needs the answer.
+pub use line_break::break_long_lines;
 #[cfg(test)]
 pub(crate) use util::is_no_space_script;
 

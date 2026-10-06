@@ -114,7 +114,11 @@ fn tighten_marks(token: &str) -> String {
 
 /// Join word tokens into a cue string, inserting spaces only where the scripts
 /// involved actually use them (Han/kana do not; Latin/Cyrillic/Hangul do).
-pub(super) fn join_words<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+///
+/// Also how a piece of a transcript is spelled back out: the karaoke renderer
+/// and the SRT renderer both go through here, so a line's spacing is decided in
+/// exactly one place.
+pub(crate) fn join_words<'a>(parts: impl Iterator<Item = &'a str>) -> String {
     let mut out = String::new();
     for piece in spacing_pieces(parts) {
         if piece.space_before {
