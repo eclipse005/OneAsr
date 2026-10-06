@@ -68,31 +68,41 @@ impl OneAsrApp {
                     has_transcript: t.transcript.is_some(),
                     transcript_card_visible: self.transcript_card_visible(),
                     transcript_card_progress: self.transcript_card_progress(),
-                    transcript_card: t.transcript.as_ref().map(|st| {
-                        let audio = match t.duration {
-                            crate::app::DurationState::Known(s) => s,
-                            _ => 0.0,
-                        };
-                        TranscriptCardView {
-                            file: st
-                                .path
-                                .as_ref()
-                                .map(|p| {
-                                    p.file_name()
-                                        .map(|n| n.to_string_lossy().into_owned())
-                                        .unwrap_or_else(|| p.display().to_string())
-                                })
-                                .unwrap_or_else(|| {
-                                    oneasr_core::i18n::t(crate::i18n::L::TRANSCRIPT_PASTED)
-                                        .to_string()
-                                }),
-                            lines: st.line_count(),
-                            chars: st.char_count(),
-                            dropped_timecodes: st.dropped_timecodes,
-                            rate: st.speech_rate(audio),
+                    // 视图**始终**给一份，哪怕还没挂文稿：「+ 文稿」悬停出的那张卡片
+                    // 只讲「挂一份会怎样」，那也是悬停的一部分。
+                    transcript_card: Some(match t.transcript.as_ref() {
+                        None => TranscriptCardView {
+                            has_transcript: false,
                             audio_label: t.duration.label(),
-                            from_file: st.path.is_some(),
-                            note: self.transcript_card_note.clone(),
+                            ..Default::default()
+                        },
+                        Some(st) => {
+                            let audio = match t.duration {
+                                crate::app::DurationState::Known(s) => s,
+                                _ => 0.0,
+                            };
+                            TranscriptCardView {
+                                has_transcript: true,
+                                file: st
+                                    .path
+                                    .as_ref()
+                                    .map(|p| {
+                                        p.file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_else(|| p.display().to_string())
+                                    })
+                                    .unwrap_or_else(|| {
+                                        oneasr_core::i18n::t(crate::i18n::L::TRANSCRIPT_PASTED)
+                                            .to_string()
+                                    }),
+                                lines: st.line_count(),
+                                chars: st.char_count(),
+                                dropped_timecodes: st.dropped_timecodes,
+                                rate: st.speech_rate(audio),
+                                audio_label: t.duration.label(),
+                                from_file: st.path.is_some(),
+                                note: self.transcript_card_note.clone(),
+                            }
                         }
                     }),
                 }

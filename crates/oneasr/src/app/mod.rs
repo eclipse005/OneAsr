@@ -71,6 +71,8 @@ pub(crate) struct OneAsrApp {
     transcript_hover_since: Option<(String, Instant)>,
     /// Leave grace before an unpinned card closes.
     transcript_leave_since: Option<(String, Instant)>,
+    /// 指针真的落在卡片上（芯片的悬停不算）——见 `transcript_card_hover_leave`。
+    transcript_card_hovered: bool,
     transcript_card_from: f32,
     transcript_card_to: f32,
     transcript_card_anim_t0: Instant,
@@ -178,6 +180,7 @@ impl OneAsrApp {
             transcript_card_pinned: false,
             transcript_hover_since: None,
             transcript_leave_since: None,
+            transcript_card_hovered: false,
             transcript_card_from: 0.0,
             transcript_card_to: 0.0,
             transcript_card_anim_t0: Instant::now(),

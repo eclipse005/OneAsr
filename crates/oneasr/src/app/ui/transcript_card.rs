@@ -13,6 +13,9 @@ use crate::app::transcript_ui::expand;
 /// Row data the card needs, so the closure below doesn't capture `self`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TranscriptCardView {
+    /// 这一行挂了文稿没有。`false` 时卡片只讲「挂一份会怎样」，其余一概没有——
+    /// 没有文稿就没有行数、字数、语速，也就没有按钮可按。
+    pub has_transcript: bool,
     pub file: String,
     pub lines: usize,
     pub chars: usize,
@@ -57,25 +60,39 @@ pub(crate) fn transcript_card(
             // would need the pin.
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
-                    this.transcript_hover_enter(&id_hover, cx);
+                    this.transcript_card_hover_enter(&id_hover, cx);
                 } else {
-                    this.transcript_hover_leave(&id_hover, cx);
+                    this.transcript_card_hover_leave(&id_hover, cx);
                 }
             }))
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(TEXT)
-                    .child(view.file),
-            )
-            .child(div().mt_1().text_xs().text_color(MUTED).child(expand(
-                t(L::TRANSCRIPT_SUMMARY),
-                &[
-                    ("lines", &view.lines.to_string()),
-                    ("chars", &view.chars.to_string()),
-                ],
-            )))
+            // 「还没挂文稿」时只有这一句话。没有提示框来抢这个位置——提示框浮在
+            // 光标附近，盖住芯片就会打断悬停，卡片一闪一闪。
+            .when(!view.has_transcript, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(MUTED)
+                        .child(t(L::TRANSCRIPT_TIP_NONE)),
+                )
+            })
+            .when(view.has_transcript, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(TEXT)
+                        .child(view.file.clone()),
+                )
+            })
+            .when(view.has_transcript, |el| {
+                el.child(div().mt_1().text_xs().text_color(MUTED).child(expand(
+                    t(L::TRANSCRIPT_SUMMARY),
+                    &[
+                        ("lines", &view.lines.to_string()),
+                        ("chars", &view.chars.to_string()),
+                    ],
+                )))
+            })
             // The one thing the program does to your file's content: drop the
             // timings. Say it, once, here.
             .when(view.dropped_timecodes, |el| {
@@ -119,43 +136,20 @@ pub(crate) fn transcript_card(
             .when_some(view.note, |el, note| {
                 el.child(div().mt_1().text_xs().text_color(ACCENT).child(note))
             })
-            .child(div().mt_2().h(px(1.0)).w_full().bg(LINE))
-            .child(
-                div()
-                    .mt_2()
-                    .flex()
-                    .gap_1p5()
-                    .child(
-                        // `btn` takes no tooltip, so the wrapper carries it —
-                        // "不改一个字、原文件不会被改动" is the whole promise of
-                        // this button and it deserves to be readable.
-                        div()
-                            .id(SharedString::from(format!("tr-break-{id}")))
-                            .tooltip({
-                                let tip = t(L::TRANSCRIPT_BREAK_TIP).to_string();
-                                move |_, cx| {
-                                    cx.new(|_| NameTooltip {
-                                        text: tip.clone().into(),
-                                    })
-                                    .into()
-                                }
-                            })
-                            .child(btn(
-                                t(L::TRANSCRIPT_BTN_BREAK),
-                                BtnKind::Secondary,
-                                true,
-                                cx.listener(move |this, _, _, cx| this.smart_break_transcript(cx)),
-                            )),
-                    )
-                    // Re-read is the round trip for "I edited the file in my own
-                    // editor". Only meaningful when the transcript came from a
-                    // file at all.
-                    .when(view.from_file, |el| {
-                        el.child(
+            .when(view.has_transcript, |el| {
+                el.child(div().mt_2().h(px(1.0)).w_full().bg(LINE)).child(
+                    div()
+                        .mt_2()
+                        .flex()
+                        .gap_1p5()
+                        .child(
+                            // `btn` takes no tooltip, so the wrapper carries it —
+                            // "不改一个字、原文件不会被改动" is the whole promise of
+                            // this button and it deserves to be readable.
                             div()
-                                .id(SharedString::from(format!("tr-reread-{id}")))
+                                .id(SharedString::from(format!("tr-break-{id}")))
                                 .tooltip({
-                                    let tip = t(L::TRANSCRIPT_REREAD_TIP).to_string();
+                                    let tip = t(L::TRANSCRIPT_BREAK_TIP).to_string();
                                     move |_, cx| {
                                         cx.new(|_| NameTooltip {
                                             text: tip.clone().into(),
@@ -164,33 +158,61 @@ pub(crate) fn transcript_card(
                                     }
                                 })
                                 .child(btn(
-                                    t(L::TRANSCRIPT_BTN_REREAD),
+                                    t(L::TRANSCRIPT_BTN_BREAK),
                                     BtnKind::Secondary,
                                     true,
-                                    cx.listener(move |this, _, _, cx| this.reread_transcript(cx)),
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.smart_break_transcript(cx)
+                                    }),
                                 )),
                         )
-                    })
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("tr-remove-{id}")))
-                            .tooltip({
-                                let tip = t(L::TRANSCRIPT_REMOVE_TIP).to_string();
-                                move |_, cx| {
-                                    cx.new(|_| NameTooltip {
-                                        text: tip.clone().into(),
+                        // Re-read is the round trip for "I edited the file in my own
+                        // editor". Only meaningful when the transcript came from a
+                        // file at all.
+                        .when(view.from_file, |el| {
+                            el.child(
+                                div()
+                                    .id(SharedString::from(format!("tr-reread-{id}")))
+                                    .tooltip({
+                                        let tip = t(L::TRANSCRIPT_REREAD_TIP).to_string();
+                                        move |_, cx| {
+                                            cx.new(|_| NameTooltip {
+                                                text: tip.clone().into(),
+                                            })
+                                            .into()
+                                        }
                                     })
-                                    .into()
-                                }
-                            })
-                            .child(btn(
-                                t(L::TRANSCRIPT_BTN_REMOVE),
-                                BtnKind::Secondary,
-                                true,
-                                cx.listener(move |this, _, _, cx| this.remove_transcript(cx)),
-                            )),
-                    ),
-            ),
+                                    .child(btn(
+                                        t(L::TRANSCRIPT_BTN_REREAD),
+                                        BtnKind::Secondary,
+                                        true,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.reread_transcript(cx)
+                                        }),
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("tr-remove-{id}")))
+                                .tooltip({
+                                    let tip = t(L::TRANSCRIPT_REMOVE_TIP).to_string();
+                                    move |_, cx| {
+                                        cx.new(|_| NameTooltip {
+                                            text: tip.clone().into(),
+                                        })
+                                        .into()
+                                    }
+                                })
+                                .child(btn(
+                                    t(L::TRANSCRIPT_BTN_REMOVE),
+                                    BtnKind::Secondary,
+                                    true,
+                                    cx.listener(move |this, _, _, cx| this.remove_transcript(cx)),
+                                )),
+                        ),
+                )
+            }),
     )
     // 和「用时」卡片同一个层级（`MENU_Z`）：浮层之间要有一处说了算的地方，
     // 否则谁后画谁在上面，全看行在列表里的顺序。

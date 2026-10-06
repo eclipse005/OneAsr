@@ -530,15 +530,15 @@ pub(super) fn task_row_view(
                             let id_hover = id_tr.clone();
                             let id_click = id_tr.clone();
                             let has = row.has_transcript;
-                            // 有文稿 → 悬停出**卡片**（和「用时」同款），不再叠一个
-                            // 提示框：卡片就是解释，两个叠在一起只会互相挡。
-                            // 没有文稿时卡片没内容可写，留一句提示说明这个按钮能干什么。
+                            // 悬停**永远**出卡片，没有第二个浮层了。原来的提示框是
+                            // 一块浮在光标附近的东西：它一旦盖住芯片就会把悬停打断，
+                            // 卡片关掉、提示框又冒出来，肉眼就是一闪一闪。「+ 文稿」
+                            // 那句话现在由卡片自己讲。
                             let label = if has {
                                 t(L::TRANSCRIPT_CHIP).to_string()
                             } else {
                                 t(L::TRANSCRIPT_ADD).to_string()
                             };
-                            let tip = t(L::TRANSCRIPT_TIP_NONE).to_string();
                             div()
                                 .w(px(TRANSCRIPT_COL_PX))
                                 .flex_shrink_0()
@@ -587,17 +587,7 @@ pub(super) fn task_row_view(
                                                 .whitespace_nowrap()
                                                 .text_color(if has { ACCENT } else { MUTED })
                                                 .child(label),
-                                        )
-                                        // 只有「还没挂文稿」时才有提示框：那时没有
-                                        // 卡片可看，一句话说明这个按钮能干什么就够。
-                                        .when(!has, |el| {
-                                            el.tooltip(move |_, cx| {
-                                                cx.new(|_| NameTooltip {
-                                                    text: tip.clone().into(),
-                                                })
-                                                .into()
-                                            })
-                                        }),
+                                        ),
                                 )
                                 // Card is a sibling of the chip inside this
                                 // relative wrapper, anchored to the chip's right
