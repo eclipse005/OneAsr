@@ -26,9 +26,6 @@ pub(crate) enum WorkerMsg {
     Progress {
         id: String,
         stage: SharedString,
-        /// `(done, total)` while the stage counts chunks; `None` for a stage with
-        /// no natural denominator (转码 / 加载模型 / 导出).
-        chunk: Option<(usize, usize)>,
         /// Non-fatal message raised by the pipeline (e.g. separation fell back
         /// to CPU); flashed in the status bar.
         warning: Option<SharedString>,
@@ -41,37 +38,6 @@ pub(crate) enum WorkerMsg {
     },
     /// Model download progress / completion (background thread).
     ModelDownload(DownloadProgress),
-}
-
-/// The Processing row's live stage, as the UI holds it.
-///
-/// 单独一个结构体而不是 `(String, SharedString)` 元组：第三个字段（进度）不加
-/// 进去的时候，**编译不过**才是我们想要的——之前 `update.chunk` 就是在这个边界
-/// 上被丢掉的，core 侧转写与打轴一直在发，界面却只收到一行文字。
-#[derive(Debug, Clone)]
-pub(crate) struct ActiveStage {
-    /// 正在处理的这一行。
-    pub(crate) id: String,
-    /// 已翻译的阶段标签（转码音频 / 转写中 / 打轴中 …）。
-    pub(crate) label: SharedString,
-    /// `(done, total)`：阶段本身按块计数时的进度。没有分母的阶段是 `None`。
-    pub(crate) chunk: Option<(usize, usize)>,
-}
-
-impl ActiveStage {
-    pub(crate) fn new(id: String, label: SharedString) -> Self {
-        Self {
-            id,
-            label,
-            chunk: None,
-        }
-    }
-
-    /// 这一行是不是正在播报的这个阶段？匹配上就一并给出标签与进度，
-    /// 不匹配（别的行在跑、或没有行在跑）一律 `None`。
-    pub(crate) fn for_row(&self, id: &str) -> Option<(&str, Option<(usize, usize)>)> {
-        (self.id == id).then_some((self.label.as_ref(), self.chunk))
-    }
 }
 
 /// Jobs for the long-lived ASR worker (one active job at a time by design).
@@ -104,12 +70,9 @@ impl OneAsrApp {
                 Ok(WorkerMsg::Probed { id, duration_sec }) => {
                     self.handle_probed(id, duration_sec, cx)
                 }
-                Ok(WorkerMsg::Progress {
-                    id,
-                    stage,
-                    chunk,
-                    warning,
-                }) => self.handle_progress(id, stage, chunk, warning, cx),
+                Ok(WorkerMsg::Progress { id, stage, warning }) => {
+                    self.handle_progress(id, stage, warning, cx)
+                }
                 Ok(WorkerMsg::Finished { id, result, timing }) => {
                     self.handle_finished(id, result, timing, cx)
                 }
@@ -304,15 +267,10 @@ impl OneAsrApp {
         &mut self,
         id: String,
         stage: SharedString,
-        chunk: Option<(usize, usize)>,
         warning: Option<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.active_stage = Some(ActiveStage {
-            id,
-            label: stage,
-            chunk,
-        });
+        self.active_stage = Some((id, stage));
         // Non-fatal pipeline warnings (e.g. separation fell back to
         // CPU) must be visible: this window has no console.
         if let Some(w) = warning {
@@ -330,7 +288,11 @@ impl OneAsrApp {
         cx: &mut Context<Self>,
     ) {
         self.busy = false;
-        if self.active_stage.as_ref().is_some_and(|s| s.id == id) {
+        if self
+            .active_stage
+            .as_ref()
+            .is_some_and(|(sid, _)| sid == &id)
+        {
             self.active_stage = None;
         }
         // Ledger row, filled inside the borrow and appended after it.
@@ -352,11 +314,6 @@ impl OneAsrApp {
                     cues = count_output_lines(&srt);
                     t.status = TaskStatus::Done;
                     t.queue_seq = None;
-                    // 字幕现在是**这一版**文稿打出来的。少了这一步，芯片会一直
-                    // 说「比文稿旧」，而主按钮会一直显示 ▶ 而不是 📁。
-                    if let Some(st) = t.transcript.as_mut() {
-                        st.aligned_revision = Some(st.revision);
-                    }
                     t.output_file = Some(srt);
                     t.error = None;
                     true
@@ -408,44 +365,5 @@ impl OneAsrApp {
         cx.notify();
         // Always drain the FIFO queue (one at a time).
         self.try_start_next(cx);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ActiveStage;
-
-    fn stage(id: &str, chunk: Option<(usize, usize)>) -> ActiveStage {
-        ActiveStage {
-            id: id.to_string(),
-            label: "打轴中 3/5".into(),
-            chunk,
-        }
-    }
-
-    /// 队列里同时只有一个任务在跑，所以**别人的进度绝不能画到自己行上**。
-    #[test]
-    fn another_rows_progress_never_lands_here() {
-        let live = stage("task-2", Some((3, 5)));
-        assert_eq!(live.for_row("task-1"), None);
-        let (label, chunk) = live.for_row("task-2").expect("its own row reads it");
-        assert_eq!(label, "打轴中 3/5");
-        assert_eq!(chunk, Some((3, 5)));
-    }
-
-    /// 文稿匹配那一段还没有分母：标签在，进度是 `None`。
-    #[test]
-    fn a_countless_stage_reports_none_rather_than_zero() {
-        let live = stage("task-1", None);
-        let (_, chunk) = live.for_row("task-1").expect("its own row reads it");
-        assert_eq!(chunk, None);
-    }
-
-    /// `new()` 是排队刚开始时用的：那时只有标签，没有块数。
-    #[test]
-    fn a_fresh_stage_starts_without_a_denominator() {
-        let fresh = ActiveStage::new("task-1".into(), "转码音频".into());
-        assert_eq!(fresh.chunk, None);
-        assert_eq!(fresh.for_row("task-1").map(|(l, _)| l), Some("转码音频"));
     }
 }

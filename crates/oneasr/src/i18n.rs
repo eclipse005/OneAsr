@@ -196,10 +196,6 @@ pub mod L {
         "打轴固定使用 CTC；点开可重新读取 / 智能断句 / 移除",
         "Aligned with the CTC aligner; click to re-read, smart-break or remove",
     );
-    pub const TRANSCRIPT_TIP_STALE: Str = Str::new(
-        "文稿改过了，字幕还是旧的——点开始重新打轴（跳过识别）",
-        "The transcript changed but the subtitle is stale — press start to re-align (skips recognition)",
-    );
     /// 卡片：`{lines} 行 · {chars} 字`
     pub const TRANSCRIPT_SUMMARY: Str =
         Str::new("{lines} 行 · {chars} 字", "{lines} lines · {chars} chars");

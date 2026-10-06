@@ -84,6 +84,9 @@ pub struct Task {
 /// **程序永不写回用户的原文件。** `text` 是从文件解析出来的一份暂存：只有
 /// 「智能断句」会改它（且只改换行），其余时候它和文件里的内容一致——所以
 /// 「恢复原始内容」不是撤销，是重新读一遍。
+///
+/// 这里**没有**「文稿第几版 / 字幕是哪一版打出来的」这类计数：这不是文稿编辑器，
+/// 没有多轮改写要记账，进度由状态胶囊的 `打轴中 8/8` 说完就够了。
 #[derive(Debug, Clone)]
 pub struct StagedTranscript {
     /// 规范化后的纯文本，**一行 = 一条字幕**。
@@ -93,11 +96,6 @@ pub struct StagedTranscript {
     /// 原时间轴被丢弃了没有——挂 `.srt` 时为真，界面上要说明一次。这是程序
     /// 唯一一次对「你文件的内容」动了手脚，所以那句话说一次就够。
     pub dropped_timecodes: bool,
-    /// 字幕是用**哪一版**文稿打出来的。`None` = 从来没打过轴——这和「打的正是
-    /// 当前这一版」必须分得开，否则「有产物」和「产物过期」会撞成同一个信号。
-    pub aligned_revision: Option<u64>,
-    /// 每次改动暂存内容自增（目前只有「智能断句」会改）。
-    pub revision: u64,
 }
 
 impl StagedTranscript {
@@ -106,8 +104,6 @@ impl StagedTranscript {
             text: t.text.clone(),
             path,
             dropped_timecodes: t.dropped_timecodes(),
-            aligned_revision: None,
-            revision: 0,
         }
     }
 
@@ -130,12 +126,6 @@ impl StagedTranscript {
         } else {
             n.to_string()
         }
-    }
-
-    /// 字幕比文稿旧吗。从没打过轴算「旧」——那正是主按钮该显示 ▶ 而不是 📁 的
-    /// 情形；有产物但文稿又改过，也是。
-    pub fn is_stale(&self) -> bool {
-        self.aligned_revision != Some(self.revision)
     }
 
     /// 密度：每秒多少字。文稿与音频对不上时，强制对齐**不会报错**，它给出一个
@@ -331,18 +321,6 @@ mod transcript_tests {
         assert_eq!(staged(&"字".repeat(3_200)).short_count(), "3.2k");
         assert_eq!(staged(&"字".repeat(999)).short_count(), "999");
         assert_eq!(staged(&"字".repeat(12_345)).short_count(), "1w");
-    }
-
-    /// 刚挂上时字幕当然比文稿旧——主按钮会因此是 ▶ 而不是 📁。
-    #[test]
-    fn a_freshly_attached_transcript_is_stale_until_aligned() {
-        let mut st = staged("第一行。");
-        assert!(st.is_stale());
-        st.revision = 1;
-        st.aligned_revision = Some(1);
-        assert!(!st.is_stale());
-        st.revision = 2;
-        assert!(st.is_stale(), "文稿又改了");
     }
 
     /// 挂 SRT 时原时间轴被丢了，界面上要说明一次。
