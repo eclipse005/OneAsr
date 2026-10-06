@@ -436,8 +436,9 @@ pub(crate) fn run_task(
 pub(crate) struct TaskRowView {
     /// 这行挂了文稿没有（`false` = 芯片是「+ 文稿」）。
     pub(crate) has_transcript: bool,
-    /// 卡片正为这行开着。
-    pub(crate) transcript_card_open: bool,
+    /// 卡片这一帧该不该进渲染树（`progress > 0.01`）。开着但还在淡入的第一帧
+    /// 不该进树——进去了就是一块看不见却带 `occlude()` 的遮挡层。
+    pub(crate) transcript_card_visible: bool,
     /// 卡片淡入淡出进度。
     pub(crate) transcript_card_progress: f32,
     /// 卡片内容；没挂文稿时是 `None`。

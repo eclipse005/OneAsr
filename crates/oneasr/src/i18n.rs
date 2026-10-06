@@ -201,13 +201,23 @@ pub mod L {
         "已忽略原时间轴，将重新打轴",
         "original timings ignored — re-aligning from scratch",
     );
-    pub const TRANSCRIPT_DENSITY_OK: Str = Str::new(
-        "约 {cps} 字/秒 ✓  音频 {len}",
-        "{cps} chars/s ✓  audio {len}",
+    /// 语速行。文案按**单位**分两组（字/秒 · 词/秒）——单位是文稿自己的书写系统
+    /// 决定的，一句话里不能同时出现两个单位。`{rate}` 是数值，`{len}` 是音频时长。
+    pub const TRANSCRIPT_RATE_CHARS_OK: Str = Str::new(
+        "约 {rate} 字/秒 ✓  音频 {len}",
+        "{rate} chars/s ✓  audio {len}",
     );
-    pub const TRANSCRIPT_DENSITY_WARN: Str = Str::new(
-        "约 {cps} 字/秒 ⚠ 文稿可能与音频不匹配",
-        "{cps} chars/s ⚠ transcript may not match the audio",
+    pub const TRANSCRIPT_RATE_CHARS_WARN: Str = Str::new(
+        "约 {rate} 字/秒 ⚠ 文稿可能与音频不匹配",
+        "{rate} chars/s ⚠ transcript may not match the audio",
+    );
+    pub const TRANSCRIPT_RATE_WORDS_OK: Str = Str::new(
+        "约 {rate} 词/秒 ✓  音频 {len}",
+        "{rate} words/s ✓  audio {len}",
+    );
+    pub const TRANSCRIPT_RATE_WORDS_WARN: Str = Str::new(
+        "约 {rate} 词/秒 ⚠ 文稿可能与音频不匹配",
+        "{rate} words/s ⚠ transcript may not match the audio",
     );
     pub const TRANSCRIPT_BTN_BREAK: Str = Str::new("智能断句", "Smart break");
     pub const TRANSCRIPT_BTN_REREAD: Str = Str::new("重新读取", "Re-read");

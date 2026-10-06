@@ -7,7 +7,7 @@
 //! method here would fight the borrow checker for no gain.
 
 use crate::app::prelude::*;
-use crate::app::ui::transcript_card::{TranscriptCardView, transcript_card};
+use crate::app::ui::transcript_card::transcript_card;
 use crate::app::{LangMenuLayout, LangSelectTarget, OneAsrApp, TaskRowView};
 
 /// Row-invariant state for one repaint: captured once, not once per row.
@@ -530,7 +530,6 @@ pub(super) fn task_row_view(
                             let id_hover = id_tr.clone();
                             let id_click = id_tr.clone();
                             let has = row.has_transcript;
-                            let open = row.transcript_card_open;
                             // 有文稿 → 悬停出**卡片**（和「用时」同款），不再叠一个
                             // 提示框：卡片就是解释，两个叠在一起只会互相挡。
                             // 没有文稿时卡片没内容可写，留一句提示说明这个按钮能干什么。
@@ -571,18 +570,16 @@ pub(super) fn task_row_view(
                                                 }
                                             },
                                         ))
-                                        // 还没有文稿时点它 = 选一份文件；有了 = 开卡片。
-                                        // 悬停出的是**卡片**而不是选文件框：卡片才是
-                                        // 「这份文稿会被怎么用」的解释。
-                                        .on_click(cx.listener(
-                                            move |this, _, _, cx| {
-                                                if has {
-                                                    this.toggle_transcript_card(&id_click, cx);
-                                                } else {
+                                        // 「+ 文稿」点它 = 选一份文件。有文稿之后芯片就只是**纯悬停**的入口，
+                                        // 和「用时」芯片一样：点它什么也不做，卡片靠悬停出。
+                                        // 取消 / 换文稿走卡片里的按钮，那才是它们的家。
+                                        .when(!has, |chip| {
+                                            chip.on_click(cx.listener(
+                                                move |this, _, _, cx| {
                                                     this.pick_transcript_for(&id_click, cx);
-                                                }
-                                            },
-                                        ))
+                                                },
+                                            ))
+                                        })
                                         .child(
                                             div()
                                                 .text_xs()
@@ -607,13 +604,15 @@ pub(super) fn task_row_view(
                                 // edge and growing leftward — the chip sits in the
                                 // right-hand control cluster, so a left-anchored
                                 // card would run off the window.
-                                .when(open, |wrap| {
+                                // 渲染门用 `transcript_card_visible()`（progress > 0.01），和「用时」卡片一致。
+                                // 用 `is_some()` 的话，一张 opacity 0 的卡片仍然带着
+                                // 自己的盒子进命中测试，而它带 `occlude()`——整块区域
+                                // 的点击会被一张看不见的卡片吃掉，表现为「点哪都没用」。
+                                .when(row.transcript_card_visible, |wrap| {
                                     let id_card = row.id.clone();
                                     let progress = row.transcript_card_progress;
-                                    let view = row.transcript_card.clone().unwrap_or_else(|| TranscriptCardView { file: String::new(), lines: 0, chars: 0, dropped_timecodes: false, density: None, audio_label: String::new(), from_file: false, note: None });
-                                    wrap.child(
-                                        transcript_card(id_card, progress, view, cx),
-                                    )
+                                    let view = row.transcript_card.clone().unwrap_or_default();
+                                    wrap.child(transcript_card(id_card, progress, view, cx))
                                 })
                         })
                         // Two fixed slots: primary (开始 | 打开字幕) + 删除.

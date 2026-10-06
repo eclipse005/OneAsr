@@ -108,15 +108,15 @@ impl OneAsrApp {
         }
     }
 
-    // ── 文稿卡片（悬停打开 / 点击粘住）────────────────────────────────────
+    // ── 文稿卡片（纯悬停）────────────────────────────────────────────
     //
-    // 和「用时」卡片同一套机制：悬停延时打开、移开有宽限期、卡片自己挂
-    // `on_hover`，所以鼠标移上去不会关——里面因此放得下按钮。唯一差别是
-    // `pinned`：纯悬停的卡片上按按钮是难受的，点一下芯片把它粘住。
+    // 和「用时」卡片是**同一套机制**，逐条对齐：悬停延时打开、移开有宽限期、
+    // 卡片自己挂 `on_hover`（所以指针能移上去按按钮）、`animations_active()`
+    // 里带它、只在 `progress > 0.01` 时才进渲染树。
+    //
+    // 没有「点击粘住」：那个是当初自己加的，理由是「纯悬停的卡片上按按钮难受」。
+    // 实际上宽限期已经让指针有足够时间移过去，用时卡片也是这么用的。
     pub(crate) fn transcript_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.transcript_card_pinned {
-            return;
-        }
         self.transcript_leave_since = None;
         if self
             .transcript_hover_since
@@ -130,9 +130,6 @@ impl OneAsrApp {
     }
 
     pub(crate) fn transcript_hover_leave(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.transcript_card_pinned {
-            return;
-        }
         if self
             .transcript_hover_since
             .as_ref()
@@ -158,8 +155,7 @@ impl OneAsrApp {
         ) {
             self.open_transcript_card(&id);
         }
-        if !self.transcript_card_pinned
-            && let Some((id, since)) = self.transcript_leave_since.clone()
+        if let Some((id, since)) = self.transcript_leave_since.clone()
             && since.elapsed() >= Duration::from_millis(TRANSCRIPT_LEVER_GRACE_MS)
         {
             if self.transcript_card.as_deref() == Some(id.as_str()) {
@@ -172,10 +168,9 @@ impl OneAsrApp {
 
     /// 打开一张文稿卡片。**这是 `transcript_card` 唯一的赋值入口。**
     ///
-    /// 悬停与点击两条路必须都走这里：只写 `transcript_card = Some(id)` 而不启动
-    /// 动画，`progress()` 停在初值 0，卡片会以 0 透明度画出来——渲染了，但看着
-    /// 跟没渲染一样（曾被当成「点击没反应」）。收敛到一处就没有「忘了启动动画」
-    /// 这种可能了。
+    /// 只写 `transcript_card = Some(id)` 而不启动动画，`progress()` 停在初值 0，
+    /// 卡片会以 0 透明度画出来——渲染了，但看着跟没渲染一样（曾被当成「点击没
+    /// 反应」）。收敛到一处就没有「忘了启动动画」这种可能了。
     pub(crate) fn open_transcript_card(&mut self, id: &str) {
         self.transcript_card_from = self.transcript_card_progress();
         self.transcript_card_to = 1.0;
@@ -185,7 +180,6 @@ impl OneAsrApp {
 
     pub(crate) fn close_transcript_card(&mut self) {
         self.transcript_card = None;
-        self.transcript_card_pinned = false;
         self.transcript_hover_since = None;
         self.transcript_leave_since = None;
         self.transcript_card_note = None;
@@ -202,23 +196,11 @@ impl OneAsrApp {
         self.transcript_card_from + (self.transcript_card_to - self.transcript_card_from) * e
     }
 
-    /// 卡片开着吗（含淡入淡出）。
+    /// 卡片开着吗（含淡入淡出）。**渲染门也用它**：不在渲染树里的元素不参与
+    /// 命中测试，所以一个 `progress == 0` 的卡片不会变成一块看不见却吞点击的
+    /// 遮挡层（带 `occlude()` 时尤其致命）。这正是「用时」卡片一直在做的事。
     pub(crate) fn transcript_card_visible(&self) -> bool {
         self.transcript_card_progress() > 0.01
-    }
-
-    /// 芯片被点击：粘住 / 取消粘住。粘住时卡片不因移开鼠标而关闭。
-    pub(crate) fn toggle_transcript_card(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.transcript_card.as_deref() == Some(id) && self.transcript_card_pinned {
-            self.close_transcript_card();
-        } else {
-            self.open_transcript_card(id);
-            self.transcript_card_pinned = true;
-            // 粘住时卡片上有按钮，被别的浮层压住就点不到。
-            self.close_lang_selects();
-            self.close_timing_popover();
-        }
-        cx.notify();
     }
 
     /// Hover entered the timing chip / card for `id`.
@@ -460,7 +442,14 @@ impl OneAsrApp {
         let timing_pop = (self.timing_popover_progress() - self.timing_pop_to).abs() > 0.002
             || self.timing_hover_since.is_some()
             || self.timing_leave_since.is_some();
-        drawer || row_anim || empty_wave || timing_pop
+        // 文稿卡片和用时卡片是同一套浮层机制，所以这三项必须一起在：少了它们，
+        // 悬停延时到期后没有任何东西请求下一帧，`tick_transcript_card` 也就再也不会
+        // 被调用——卡片只能靠点击（一个真实输入事件）才开得起来。
+        let transcript_card = (self.transcript_card_progress() - self.transcript_card_to).abs()
+            > 0.002
+            || self.transcript_hover_since.is_some()
+            || self.transcript_leave_since.is_some();
+        drawer || row_anim || empty_wave || timing_pop || transcript_card
     }
 
     /// Advance empty-wave smoothing (cursor follow + amp ease). Call once per frame while active.
