@@ -4,8 +4,10 @@ use super::aligner::QwenAlignerAdapter;
 use super::backend::{
     ComputeBackend, gpu_load_failure_msg, is_forced_gpu, resolve_compute_backend,
 };
+use super::ctc_aligner::CtcAlignerAdapter;
 use super::demucs::DemucsSeparatorAdapter;
 use super::qwen_asr::QwenAsrAdapter;
+use crate::model::ModelId;
 use std::cell::Cell;
 use std::path::PathBuf;
 
@@ -22,6 +24,8 @@ use crate::settings::Settings;
 pub struct LocalEngineProvider {
     asr_model_dir: PathBuf,
     aligner_model_dir: PathBuf,
+    /// Which aligner engine the settings selected (`CTC` | `Qwen`).
+    aligner: ModelId,
     demucs_model_dir: PathBuf,
     backend_pref: String,
     resolved: Cell<ComputeBackend>,
@@ -48,6 +52,7 @@ impl LocalEngineProvider {
         Ok(Self {
             asr_model_dir: settings.asr_model_dir.clone(),
             aligner_model_dir: settings.aligner_model_dir.clone(),
+            aligner: settings.selected_aligner_id(),
             demucs_model_dir: settings.resolved_demucs_model_dir(),
             backend_pref: settings.backend.clone(),
             resolved: Cell::new(resolved),
@@ -84,8 +89,14 @@ impl EngineProvider for LocalEngineProvider {
     }
 
     fn load_aligner(&self) -> Result<Box<dyn Aligner>, EngineError> {
-        QwenAlignerAdapter::load(&self.aligner_model_dir, self.resolved.get())
-            .map(|engine| Box::new(engine) as Box<dyn Aligner>)
+        match self.aligner {
+            ModelId::OmniAsrCtc300M => {
+                CtcAlignerAdapter::load(&self.aligner_model_dir, self.resolved.get())
+                    .map(|engine| Box::new(engine) as Box<dyn Aligner>)
+            }
+            _ => QwenAlignerAdapter::load(&self.aligner_model_dir, self.resolved.get())
+                .map(|engine| Box::new(engine) as Box<dyn Aligner>),
+        }
     }
 
     fn load_separator(&self) -> Result<Box<dyn Separator>, EngineError> {

@@ -180,6 +180,10 @@ pub mod L {
         "ASR 下载进行中，请稍后再切换",
         "ASR download in progress — try again later",
     );
+    pub const ALIGN_DL_BUSY: Str = Str::new(
+        "对齐模型下载进行中，请稍后再切换",
+        "Aligner download in progress — try again later",
+    );
     /// 英文侧跟术语表（`量化 quantization(int8)`）对齐，不再只写 `int8`。
     pub const QUANT: Str = Str::new("量化", "Quantization");
     pub const ALIGNER_MODEL: Str = Str::new("对齐模型", "Aligner model");

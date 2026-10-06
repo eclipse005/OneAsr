@@ -306,6 +306,15 @@ pub fn sep_gpu_load_failed_reason() -> &'static str {
     }
 }
 
+/// `ONEASR_DEVICE 无效（{spec}）: {e}` / `Invalid ONEASR_DEVICE ({spec}): {e}`
+/// （设备选择 spec 解析失败——显式指定的卡名/runtime 拼错时直接报错，不静默回退）。
+pub fn device_spec_invalid(spec: &str, e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("ONEASR_DEVICE 无效（{spec}）: {e}"),
+        UiLang::En => format!("Invalid ONEASR_DEVICE ({spec}): {e}"),
+    }
+}
+
 /// `人声分离失败: {e}` / `Vocal separation failed: {e}`。
 pub fn sep_failed(e: &str) -> String {
     match ui_lang() {
@@ -540,10 +549,13 @@ oneasr-cli — headless Qwen ASR + ForcedAligner pipeline
 Usage:
   oneasr-cli transcribe --input <media> [options]
   oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
+  oneasr-cli render     --timeline <{stem}.timeline.json> [options]
 
 Commands:
   transcribe   Full pipeline → {data-root}/output/{stem}.srt by default  (alias: run, pipeline)
   asr-chunk    ASR only for one time range (hallucination / length debug)
+  render       Re-present a measured timeline. No models, no ffmpeg, no audio:
+               reads {stem}.timeline.json and writes a subtitle again
 
 transcribe options:
   --input <path>           Media file (required)
@@ -554,10 +566,12 @@ transcribe options:
   --language <code>        zh|en|yue|ja|ko|...  (default: zh)
   --chunk-seconds <30-180> VAD chunk target (default: 60)
   --backend <gpu|cpu|auto> Default: auto (GPU if a driver is present, else CPU)
+  --aligner <ctc|qwen>     Forced-aligner engine (default: scan CTC first, then Qwen)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy the primary result (SRT, else TXT) to this path
   --txt                    Also write {stem}.txt (one transcript line per cue)
-  --no-srt                 Suppress the .srt file (requires --txt)
+  --ass                    Also write {stem}.ass (karaoke: a sweep per word / CJK char)
+  --no-srt                 Suppress the .srt file (requires --txt or --ass)
   --script <simplified|traditional>
                            Chinese output script for zh / yue (default: simplified)
   --vocal-separation       Run HTDemucs vocal separation before ASR
@@ -574,6 +588,17 @@ asr-chunk options:
   --out <path>             Write ASR text to file
   --backend <gpu|cpu|auto>
 
+render options:
+  --timeline <path>        Measured timeline written by transcribe (required)
+  --output <dir>           Where to write  (default: the timeline's own directory)
+  --preset <id>            Segment length: short|standard|loose
+                           (default: the one the timeline was measured with)
+  --script <simplified|traditional>
+                           Chinese output script, as in transcribe
+  --txt                    Also write {stem}.txt
+  --ass                    Also write {stem}.ass (karaoke)
+  --no-srt                 Suppress the .srt file (requires --txt or --ass)
+
 Env:
   ONEASR_DATA_DIR=<dir>    Override the data directory (same as --data-root)
   ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
@@ -588,10 +613,13 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
 用法：
   oneasr-cli transcribe --input <音视频> [选项]
   oneasr-cli asr-chunk  --wav <16k.wav> --start <秒> --end <秒> [选项]
+  oneasr-cli render     --timeline <{stem}.timeline.json> [选项]
 
 子命令：
   transcribe   完整流水线，默认输出到 {data-root}/output/{stem}.srt（别名：run、pipeline）
   asr-chunk    只对一段时间做转写（排查幻觉 / 长度问题）
+  render       重新呈现已测好的时间轴。不加载模型、不用 ffmpeg、不碰音频：
+               读 {stem}.timeline.json，再写一遍字幕
 
 transcribe 选项：
   --input <路径>           音视频文件（必填）
@@ -601,10 +629,12 @@ transcribe 选项：
   --language <代码>        zh|en|yue|ja|ko|...（默认 zh）
   --chunk-seconds <30-180> VAD 分段目标时长（默认 60）
   --backend <gpu|cpu|auto> 推理后端，默认 auto（有显卡驱动走 GPU，否则 CPU）
+  --aligner <ctc|qwen>     对齐引擎（默认按 CTC→Qwen 顺序扫描已装目录）
   --max-new-tokens <n>     转写解码上限（默认取设置 / 2048）
   --output <路径>          把主产物（SRT，没有则 TXT）复制到该路径
   --txt                    额外写出 {stem}.txt（每条字幕一行转写）
-  --no-srt                 不写 .srt 文件（需配合 --txt）
+  --ass                    额外写出 {stem}.ass（卡拉OK：逐词 / 中日韩逐字扫光）
+  --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
   --script <simplified|traditional>
                            zh / yue 的中文字形（默认 simplified）
   --vocal-separation       转写前先做人声分离
@@ -621,13 +651,77 @@ asr-chunk 选项：
   --out <路径>             把转写文本写入文件
   --backend <gpu|cpu|auto>
 
+render 选项：
+  --timeline <路径>        transcribe 写出的已测时间轴（必填）
+  --output <目录>          输出目录（默认与时间轴同目录）
+  --preset <id>            分段时长：short|standard|loose
+                           （默认沿用测量时的那个）
+  --script <simplified|traditional>
+                           中文字形，同 transcribe
+  --txt                    额外写出 {stem}.txt
+  --no-srt                 不写 .srt 文件（需配合 --txt）
+
 环境变量：
   ONEASR_DATA_DIR=<目录>   覆盖数据目录（等价于 --data-root）
   ONEASR_PIPELINE_TRACE=1  打印每个分段的转写/对齐细节
 
 示例：
   oneasr-cli transcribe --input video.mp4 --app-root D:\\OneAsr --chunk-seconds 120 --backend auto
-  oneasr-cli asr-chunk --wav runs\\x\\input_16k.wav --start 722 --end 843 --language zh";
+  oneasr-cli asr-chunk --wav runs\\x\\input_16k.wav --start 722 --end 843 --language zh
+  oneasr-cli render --timeline output\\clip.timeline.json --preset short --output output";
+
+/// `=== OneAsr CLI · 重渲染 ===` / `=== OneAsr CLI · render ===`。
+pub fn cli_render_banner() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "=== OneAsr CLI · 重渲染 ===",
+        UiLang::En => "=== OneAsr CLI · render ===",
+    }
+}
+
+/// 见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_TIMELINE: Str = Str::new("时间轴:  ", "timeline: ");
+
+/// `重渲染失败: {e}` / `render failed: {e}`。
+pub fn cli_render_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("重渲染失败: {e}"),
+        UiLang::En => format!("render failed: {e}"),
+    }
+}
+
+/// `.{ext} 是空的，没有写出` / `.{ext} came out empty; nothing written`。
+pub fn cli_render_empty(ext: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(".{ext} 是空的，没有写出"),
+        UiLang::En => format!(".{ext} came out empty; nothing written"),
+    }
+}
+
+/// `读不了时间轴: {e}` / `cannot read timeline: {e}`。
+pub fn cli_timeline_read_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("读不了时间轴: {e}"),
+        UiLang::En => format!("cannot read timeline: {e}"),
+    }
+}
+
+/// `未知的分段时长：{raw}（可选 short | standard | loose）`
+/// / `Unknown segment length: {raw} (choose short | standard | loose)`。
+pub fn cli_preset_unknown(raw: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("未知的分段时长：{raw}（可选 short | standard | loose）"),
+        UiLang::En => format!("Unknown segment length: {raw} (choose short | standard | loose)"),
+    }
+}
+
+/// `未知的对齐引擎：{raw}（可选 ctc | qwen）`
+/// / `Unknown aligner engine: {raw} (choose ctc | qwen)`。
+pub fn cli_aligner_unknown(raw: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("未知的对齐引擎：{raw}（可选 ctc | qwen）"),
+        UiLang::En => format!("Unknown aligner engine: {raw} (choose ctc | qwen)"),
+    }
+}
 
 /// `未知命令: {other}` / `unknown command: {other}`。
 pub fn cli_unknown_command(other: &str) -> String {
@@ -1046,6 +1140,7 @@ mod tests {
             ("CLI_KV_ASR", CLI_KV_ASR),
             ("CLI_KV_ALIGN", CLI_KV_ALIGN),
             ("CLI_KV_OUTPUT", CLI_KV_OUTPUT),
+            ("CLI_KV_TIMELINE", CLI_KV_TIMELINE),
             ("CLI_ASR_TEXT_BEGIN", CLI_ASR_TEXT_BEGIN),
             ("CLI_ASR_TEXT_END", CLI_ASR_TEXT_END),
         ];

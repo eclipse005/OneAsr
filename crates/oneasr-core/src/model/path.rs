@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::media::resolve_app_root;
 use crate::paths::{DataRootSource, MODELS_DIR, choose_model_dir, data_root};
 
-use super::catalog::{HTDEMUCS_FT, QWEN_ALIGN_06B, QWEN3_ASR_06B};
+use super::catalog::{HTDEMUCS_FT, ModelId, QWEN3_ASR_06B};
 
 /// Directory of the running `oneasr.exe` (install dir or `target/*/`).
 pub fn resolve_exe_dir() -> PathBuf {
@@ -60,8 +60,10 @@ pub fn default_asr_model_dir() -> PathBuf {
     resolve_model_dir(QWEN3_ASR_06B)
 }
 
+/// 默认对齐器的安装布局目录。跟着 [`ModelId::default_aligner`] 走（当前是 CTC），
+/// 不钉死在某个引擎上——否则「默认引擎」和「默认目录」会指向两个模型。
 pub fn default_aligner_model_dir() -> PathBuf {
-    resolve_model_dir(QWEN_ALIGN_06B)
+    resolve_model_dir(ModelId::default_aligner().as_str())
 }
 
 /// `{data}/models/htdemucs_ft` — optional vocal-separation weights.

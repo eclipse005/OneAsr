@@ -20,6 +20,7 @@ pub mod settings;
 pub mod stats;
 pub mod subtitle;
 pub mod text_script;
+pub mod timeline;
 pub mod vad;
 
 pub use asr::{
@@ -56,3 +57,4 @@ pub use settings::{
     Settings, SettingsLoadReport, clamp_chunk_target_seconds,
 };
 pub use text_script::{TextScript, applies_to_language as script_applies_to_language};
+pub use timeline::{Cue, RenderOptions, Rendered, Timeline, TimelineWord, read_timeline, render};

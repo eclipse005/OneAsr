@@ -149,7 +149,8 @@ impl OneAsrApp {
 
     /// Aligner directory chosen: rebind, probe — staged, not saved.
     fn handle_aligner_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
-        self.settings.aligner_model_dir = dir;
+        // 目录绑定到当前所选对齐模型（CTC / Qwen 各记各的，同 ASR 每尺寸记忆）。
+        self.settings.set_aligner_dir(dir);
         self.mark_settings_dirty(cx);
         self.reset_model_config(cx);
     }

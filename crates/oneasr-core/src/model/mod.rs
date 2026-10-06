@@ -8,8 +8,9 @@ mod path;
 mod ready;
 
 pub use catalog::{
-    HTDEMUCS_FT, ModelDefinition, ModelDownloadFile, ModelId, ModelKind, QWEN_ALIGN_06B,
-    QWEN3_ASR_06B, QWEN3_ASR_06B_INT8, QWEN3_ASR_17B, QWEN3_ASR_17B_INT8, model_definition,
+    HTDEMUCS_FT, ModelDefinition, ModelDownloadFile, ModelId, ModelKind, OMNI_ASR_CTC_300M,
+    QWEN_ALIGN_06B, QWEN3_ASR_06B, QWEN3_ASR_06B_INT8, QWEN3_ASR_17B, QWEN3_ASR_17B_INT8,
+    model_definition,
 };
 pub use download::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, download_model,

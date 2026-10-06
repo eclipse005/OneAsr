@@ -19,7 +19,8 @@ impl QwenAlignerAdapter {
     pub(super) fn load(model_dir: &Path, backend: ComputeBackend) -> Result<Self, EngineError> {
         let selector = match backend {
             ComputeBackend::Cpu => DeviceSelector::Cpu,
-            ComputeBackend::Gpu => DeviceSelector::Auto,
+            // GPU + `ONEASR_DEVICE` → 用户指定的适配器；未设置保持 Auto。
+            ComputeBackend::Gpu => super::device::aligner_selector_from_env()?,
         };
         WgpuAligner::load(selector, model_dir)
             .map(|inner| Self {

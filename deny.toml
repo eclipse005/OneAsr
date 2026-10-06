@@ -60,6 +60,7 @@ unknown-git = "deny"
 # 会在 CI 被拦下，而不是静静进入产物。
 allow-git = [
     "https://github.com/eclipse005/FireRedVad",
+    "https://github.com/eclipse005/ctc-forced-aligner-wgpu",
     "https://github.com/eclipse005/demucs-wgpu",
     # 传递依赖：qwen3-aligner-wgpu 自己拉了 nagisa-rs，不是本仓库直接声明的，
     # 但同样会被打进产物，所以一样要在清单里（这条就是 check sources 逼出来的）。

@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use oneasr_core::i18n;
 use oneasr_core::media::slice_wav;
-use oneasr_core::model::{HTDEMUCS_FT, QWEN_ALIGN_06B};
+use oneasr_core::model::HTDEMUCS_FT;
 use oneasr_core::{
     ModelId, ProcessExportOptions, Settings, StageClock, StageUpdate, ffmpeg_source,
     process_media_file_with_export, resolve_app_root,
@@ -64,6 +64,7 @@ fn main() -> ExitCode {
     let result = match cmd {
         "transcribe" | "run" | "pipeline" => cmd_transcribe(rest),
         "asr-chunk" | "chunk" => cmd_asr_chunk(rest),
+        "render" => cmd_render(rest),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -106,6 +107,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let output_copy = arg(args, "--output").map(PathBuf::from);
     let words_json = arg(args, "--words-json").map(PathBuf::from);
     let want_txt = flag(args, "--txt");
+    let want_ass = flag(args, "--ass");
     let no_srt = flag(args, "--no-srt");
     let script = arg(args, "--script");
     let vocal_separation = flag(args, "--vocal-separation");
@@ -129,15 +131,27 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         settings.max_new_tokens = n;
     }
     settings.output_txt = want_txt;
+    settings.output_ass = want_ass;
     settings.output_srt = !no_srt;
-    if no_srt && !want_txt {
+    if no_srt && !want_txt && !want_ass {
         eprintln!("{}", i18n::cli_no_srt_warning());
     }
     if let Some(s) = script {
         settings.text_script = s;
     }
     settings.vocal_separation = vocal_separation;
-    apply_app_root_paths(&mut settings, &app_root, &data_root);
+    // `--aligner ctc|qwen|<目录名>`：显式指定只认那一个，否则按 CTC→Qwen 扫描。
+    let aligner_override = match arg(args, "--aligner").as_deref() {
+        None => None,
+        Some(raw) => match parse_aligner_arg(raw) {
+            Some(id) => Some(id),
+            None => {
+                eprintln!("{}", i18n::cli_aligner_unknown(raw));
+                return Err(2);
+            }
+        },
+    };
+    apply_app_root_paths(&mut settings, &app_root, &data_root, aligner_override);
     if let Some(dir) = demucs_model_dir {
         settings.demucs_model_dir = dir;
     }
@@ -293,7 +307,7 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
-    apply_app_root_paths(&mut settings, &app_root, &data_root);
+    apply_app_root_paths(&mut settings, &app_root, &data_root, None);
     settings.normalize();
 
     let tmp = env::temp_dir().join(format!(
@@ -364,6 +378,109 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     Ok(())
 }
 
+/// `render` — Phase B on its own: present a measured timeline again, with no
+/// model, no ffmpeg and no audio in sight.
+///
+/// This is the reason the timeline is a file. Changing the segment length, the
+/// output script or the output directory used to mean re-running two models;
+/// here it is a re-render in milliseconds, and the words it works from cannot
+/// drift from the words the original run measured because they *are* those
+/// words, on disk.
+fn cmd_render(args: &[String]) -> Result<(), i32> {
+    if flag(args, "--help") || flag(args, "-h") {
+        print_help();
+        return Ok(());
+    }
+    let timeline_arg = require_arg(args, "--timeline")?;
+    let timeline_path = PathBuf::from(&timeline_arg);
+    if !timeline_path.is_file() {
+        eprintln!("{}", i18n::cli_input_not_found(&timeline_path));
+        return Err(1);
+    }
+
+    // `--preset` is checked here rather than parsed leniently downstream: a
+    // typo that silently rendered the default would be indistinguishable from
+    // the option having done nothing.
+    let preset = match arg(args, "--preset") {
+        None => None,
+        Some(raw) => match raw.as_str() {
+            "short" | "standard" | "loose" => Some(raw),
+            other => {
+                eprintln!("{}", i18n::cli_preset_unknown(other));
+                return Err(2);
+            }
+        },
+    };
+
+    let want_txt = flag(args, "--txt");
+    let want_ass = flag(args, "--ass");
+    let want_srt = !flag(args, "--no-srt");
+    if !want_srt && !want_txt && !want_ass {
+        eprintln!("{}", i18n::cli_no_srt_warning());
+    }
+
+    eprintln!("{}", i18n::cli_render_banner());
+    let measured = oneasr_core::timeline::read_timeline(&timeline_path).map_err(|e| {
+        eprintln!("{}", i18n::cli_timeline_read_failed(&e));
+        1
+    })?;
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_TIMELINE, &timeline_path));
+
+    let script = match arg(args, "--script") {
+        Some(raw) => oneasr_core::TextScript::from_id(&raw),
+        None => oneasr_core::TextScript::Original,
+    };
+    let rendered = oneasr_core::timeline::render(
+        &measured,
+        &oneasr_core::RenderOptions {
+            preset,
+            script,
+            srt: want_srt,
+            txt: want_txt,
+            ass: want_ass,
+        },
+    )
+    .map_err(|e| {
+        eprintln!("{}", i18n::cli_render_failed(&e));
+        1
+    })?;
+
+    // `clip.timeline.json` → `clip.srt`: the stem is the timeline's own, so a
+    // re-render lands beside the timeline it came from unless told otherwise.
+    let out_dir = arg(args, "--output")
+        .map(PathBuf::from)
+        .or_else(|| timeline_path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stem = oneasr_core::paths::media_stem(&timeline_path);
+    let stem = stem.strip_suffix(".timeline").unwrap_or(&stem);
+
+    let mut wrote_any = false;
+    for (body, ext) in [
+        (&rendered.srt, "srt"),
+        (&rendered.txt, "txt"),
+        (&rendered.ass, "ass"),
+    ] {
+        let Some(body) = body.as_deref() else {
+            continue;
+        };
+        if body.trim().is_empty() {
+            eprintln!("{}", i18n::cli_render_empty(ext));
+            continue;
+        }
+        let path = out_dir.join(format!("{stem}.{ext}"));
+        oneasr_core::media::write_atomic(&path, body).map_err(|e| {
+            eprintln!("{}", i18n::cli_write_failed(&e.to_string()));
+            1
+        })?;
+        eprintln!("{}", i18n::cli_wrote(&path));
+        wrote_any = true;
+    }
+    if !wrote_any {
+        return Err(1);
+    }
+    Ok(())
+}
+
 /// 删除临时文件的 RAII 守卫。
 ///
 /// `asr-chunk` 会在切片之后经历转写、写 `--out` 等多个可能提前 `?` 返回的步骤；
@@ -400,7 +517,12 @@ impl Drop for TempFileGuard {
 /// 目录"的规则：CLI 的 `--app-root` / `--data-root` 都是用户自己指的路，两边都查
 /// 一遍最不容易"看不见已下好的模型"（老脚本把权重放在 `--app-root` 下，换到
 /// `--data-root` 后权重在新家）；那里防的是程序自己猜出来的 exe 目录。
-fn apply_app_root_paths(settings: &mut Settings, app_root: &Path, data_root: &Path) {
+fn apply_app_root_paths(
+    settings: &mut Settings,
+    app_root: &Path,
+    data_root: &Path,
+    aligner_override: Option<ModelId>,
+) {
     let roots: Vec<&Path> = if data_root == app_root {
         vec![data_root]
     } else {
@@ -423,11 +545,21 @@ fn apply_app_root_paths(settings: &mut Settings, app_root: &Path, data_root: &Pa
         settings.asr_model = id.as_str().into();
         settings.asr_model_dir = dir;
     }
-    let align = roots
-        .iter()
-        .map(|root| root.join("models").join(QWEN_ALIGN_06B))
-        .find(|dir| dir.is_dir());
-    if let Some(dir) = align {
+    // 对齐模型：`--aligner` 显式指定只认那一个；否则按 ALIGNER_CHOICES 顺序
+    // （CTC 优先）扫描安装布局，都没有就保留默认路径让模型检查报缺目录。
+    let align_candidates: Vec<ModelId> = match aligner_override {
+        Some(id) => vec![id],
+        None => ModelId::ALIGNER_CHOICES.into_iter().collect(),
+    };
+    let align = roots.iter().find_map(|root| {
+        let models = root.join("models");
+        align_candidates
+            .iter()
+            .find(|id| models.join(id.as_str()).is_dir())
+            .map(|id| (models.join(id.as_str()), *id))
+    });
+    if let Some((dir, id)) = align {
+        settings.aligner_model = id.as_str().into();
         settings.aligner_model_dir = dir;
     }
     let demucs = roots
@@ -441,6 +573,18 @@ fn apply_app_root_paths(settings: &mut Settings, app_root: &Path, data_root: &Pa
     // Headless runs keep writing to {data-root}/output (GUI's "next to source"
     // default would be surprising for batch scripts).
     settings.save_next_to_source = false;
+}
+
+/// `--aligner` 旗标值 → 目录 id。接受短别名 `ctc` / `qwen` 与完整目录名。
+fn parse_aligner_arg(raw: &str) -> Option<ModelId> {
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case("ctc") {
+        return Some(ModelId::OmniAsrCtc300M);
+    }
+    if s.eq_ignore_ascii_case("qwen") {
+        return Some(ModelId::QwenAlign06B);
+    }
+    ModelId::try_parse_aligner(s)
 }
 
 /// `--data-root`：给了就必须是目录（可以还不存在——第一次运行会在那里建

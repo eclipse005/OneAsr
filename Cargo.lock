@@ -1593,6 +1593,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctc-forced-aligner-wgpu"
+version = "0.1.0"
+source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=95f2111f67132747a464bc4f498095ee09f79459#95f2111f67132747a464bc4f498095ee09f79459"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "bytes",
+ "gemm",
+ "hound",
+ "libm",
+ "memmap2",
+ "pollster 0.4.0",
+ "rayon",
+ "safetensors",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "ctor"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4856,6 +4876,7 @@ dependencies = [
 name = "oneasr-core"
 version = "1.1.0"
 dependencies = [
+ "ctc-forced-aligner-wgpu",
  "demucs-core",
  "ferrous-opencc",
  "fireredvad",

@@ -9,6 +9,9 @@ pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B-hf";
 pub const QWEN3_ASR_06B_INT8: &str = "Qwen3-ASR-0.6B-int8";
 pub const QWEN3_ASR_17B_INT8: &str = "Qwen3-ASR-1.7B-int8";
 pub const QWEN_ALIGN_06B: &str = "Qwen3-ForcedAligner-0.6B-hf";
+/// CTC forced-alignment checkpoint (Meta Omnilingual family, Apache-2.0
+/// upstream). The ModelScope repo name omits the `-hf` install-layout suffix.
+pub const OMNI_ASR_CTC_300M: &str = "omniASR-CTC-300M-v2-hf";
 /// HTDemucs v4 vocals weights (optional vocal separation stage).
 pub const HTDEMUCS_FT: &str = "htdemucs_ft";
 
@@ -27,6 +30,7 @@ pub enum ModelId {
     Qwen3Asr06BInt8,
     Qwen3Asr17BInt8,
     QwenAlign06B,
+    OmniAsrCtc300M,
     /// HTDemucs v4 vocals shard (`htdemucs_ft_vocals.safetensors`).
     HtdemucsFt,
 }
@@ -39,6 +43,7 @@ impl ModelId {
             Self::Qwen3Asr06BInt8 => QWEN3_ASR_06B_INT8,
             Self::Qwen3Asr17BInt8 => QWEN3_ASR_17B_INT8,
             Self::QwenAlign06B => QWEN_ALIGN_06B,
+            Self::OmniAsrCtc300M => OMNI_ASR_CTC_300M,
             Self::HtdemucsFt => HTDEMUCS_FT,
         }
     }
@@ -49,7 +54,7 @@ impl ModelId {
             | Self::Qwen3Asr17B
             | Self::Qwen3Asr06BInt8
             | Self::Qwen3Asr17BInt8 => ModelKind::Asr,
-            Self::QwenAlign06B => ModelKind::Align,
+            Self::QwenAlign06B | Self::OmniAsrCtc300M => ModelKind::Align,
             Self::HtdemucsFt => ModelKind::Demucs,
         }
     }
@@ -61,6 +66,7 @@ impl ModelId {
             Self::Qwen3Asr06BInt8 => "Qwen3-ASR 0.6B int8",
             Self::Qwen3Asr17BInt8 => "Qwen3-ASR 1.7B int8",
             Self::QwenAlign06B => "ForcedAligner 0.6B",
+            Self::OmniAsrCtc300M => "omniASR-CTC 300M",
             Self::HtdemucsFt => match lang {
                 crate::i18n::UiLang::Zh => "人声分离 HTDemucs",
                 crate::i18n::UiLang::En => "Vocal separation (HTDemucs)",
@@ -68,12 +74,15 @@ impl ModelId {
         }
     }
 
-    /// Short chip label for ASR size picker.
+    /// Short chip label for the model pickers. The aligner picker shows the
+    /// engine family (`CTC` / `Qwen`), not a size — the two aligners differ
+    /// in behavior, not in "size".
     pub fn short_label(self) -> &'static str {
         match self {
             Self::Qwen3Asr06B | Self::Qwen3Asr06BInt8 => "0.6B",
             Self::Qwen3Asr17B | Self::Qwen3Asr17BInt8 => "1.7B",
-            Self::QwenAlign06B => "0.6B",
+            Self::QwenAlign06B => "Qwen",
+            Self::OmniAsrCtc300M => "CTC",
             Self::HtdemucsFt => "Demucs",
         }
     }
@@ -105,6 +114,33 @@ impl ModelId {
     }
 
     pub const ASR_CHOICES: [ModelId; 2] = [ModelId::Qwen3Asr06B, ModelId::Qwen3Asr17B];
+
+    /// Aligner picker order: CTC first and **default** (单调 DP 打轴更稳，
+    /// 见 docs/ctc-aligner-adoption-analysis.md)，Qwen 兜底共存。
+    pub const ALIGNER_CHOICES: [ModelId; 2] = [ModelId::OmniAsrCtc300M, ModelId::QwenAlign06B];
+
+    /// Default aligner for a fresh install / an unknown settings value.
+    pub fn default_aligner() -> Self {
+        Self::OmniAsrCtc300M
+    }
+
+    /// Parse a catalog name / settings field into an aligner model id.
+    /// Unknown strings fall back to the default (CTC).
+    pub fn parse_aligner(raw: &str) -> Self {
+        Self::try_parse_aligner(raw).unwrap_or(Self::default_aligner())
+    }
+
+    /// Exact catalog-name match only (no substring heuristics).
+    pub fn try_parse_aligner(raw: &str) -> Option<Self> {
+        let s = raw.trim();
+        if s.eq_ignore_ascii_case(OMNI_ASR_CTC_300M) {
+            Some(Self::OmniAsrCtc300M)
+        } else if s.eq_ignore_ascii_case(QWEN_ALIGN_06B) {
+            Some(Self::QwenAlign06B)
+        } else {
+            None
+        }
+    }
 
     /// Parse a catalog name / settings field into an ASR model id.
     ///
@@ -143,12 +179,17 @@ impl ModelId {
     }
 
     /// Infer the aligner model from an install-layout folder name only
-    /// (`Qwen3-ForcedAligner-0.6B-hf`); custom dir names return `None`.
+    /// (`Qwen3-ForcedAligner-0.6B-hf` / `omniASR-CTC-300M-v2-hf`); custom dir
+    /// names return `None`.
     pub fn try_from_aligner_dir(path: &std::path::Path) -> Option<Self> {
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case(QWEN_ALIGN_06B))
-            .then_some(Self::QwenAlign06B)
+        let name = path.file_name().and_then(|n| n.to_str())?;
+        if name.eq_ignore_ascii_case(OMNI_ASR_CTC_300M) {
+            Some(Self::OmniAsrCtc300M)
+        } else if name.eq_ignore_ascii_case(QWEN_ALIGN_06B) {
+            Some(Self::QwenAlign06B)
+        } else {
+            None
+        }
     }
 }
 
@@ -205,6 +246,13 @@ pub fn model_definition(id: ModelId) -> ModelDefinition {
         ModelId::QwenAlign06B => model_def(id, "Qwen", QWEN_ALIGN_06B, qwen_align_files()),
         // ModelScope repo name differs from the install-layout folder name.
         ModelId::HtdemucsFt => model_def(id, "eclipse005", "htdemucs", htdemucs_ft_files()),
+        ModelId::OmniAsrCtc300M => model_def(
+            id,
+            "eclipse005",
+            // ModelScope repo name (no `-hf` suffix).
+            "omniASR-CTC-300M-v2",
+            omni_asr_ctc_300m_files(),
+        ),
     }
 }
 
@@ -342,6 +390,51 @@ fn qwen3_asr_17b_int8_files() -> Vec<CatalogFile> {
     ]
 }
 
+/// omniASR-CTC-300M-v2 (Meta Omnilingual family, Apache-2.0 upstream) — the
+/// CTC forced aligner. Sizes + hashes verified against the ModelScope file
+/// listing and the local copy of the weights; revision is the upload commit.
+fn omni_asr_ctc_300m_files() -> Vec<CatalogFile> {
+    const REV: &str = "ecd67cd0a814c13b3a0e9314c4a12037f60bc052";
+    vec![
+        CatalogFile {
+            file_name: "config.json",
+            size: 1_968,
+            sha256: "a78b50a52e4e067bd5e502c33447dc556db1dd08f5286bb5ece49b61d522b194",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "preprocessor_config.json",
+            size: 187,
+            sha256: "06cd0728688a41b0d4ff87a7eb08479b2fdae9a9521fb1c328bc8c4230a4f6f7",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "special_tokens_map.json",
+            size: 93,
+            sha256: "d9a757b89920ad7c0cd8329f2320709943c21d96c1ab7bce56c258930f6b07b7",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "tokenizer_config.json",
+            size: 233,
+            sha256: "413ddc3802665f3b11a96161b565e38644750fdb592c325564ddd75d6cf6b8bf",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "vocab.json",
+            size: 152_362,
+            sha256: "4568040d826f2584ca2b76ed10c679dd051e7e1df9742acb5285370cd16a331f",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "model.safetensors",
+            size: 1_303_988_352,
+            sha256: "606d849a55b746e698976b8a979b597f4902be7a799ecf723dd283d6210e5871",
+            revision: REV,
+        },
+    ]
+}
+
 fn qwen_align_files() -> Vec<CatalogFile> {
     const REV: &str = "053506a54ad1c9deea6105050330d7c500b9f098";
     vec![
@@ -438,6 +531,7 @@ mod tests {
             ModelId::Qwen3Asr06BInt8,
             ModelId::Qwen3Asr17BInt8,
             ModelId::QwenAlign06B,
+            ModelId::OmniAsrCtc300M,
             ModelId::HtdemucsFt,
         ] {
             let def = model_definition(id);
@@ -463,6 +557,76 @@ mod tests {
                 assert!(file.expected_size > 0, "{id:?} {}", file.file_name);
             }
         }
+    }
+
+    #[test]
+    fn ctc_aligner_catalog_is_the_local_upload() {
+        let def = model_definition(ModelId::OmniAsrCtc300M);
+        assert_eq!(
+            def.required_files,
+            [
+                "config.json",
+                "preprocessor_config.json",
+                "special_tokens_map.json",
+                "tokenizer_config.json",
+                "vocab.json",
+                "model.safetensors",
+            ]
+        );
+        // The ModelScope repo name omits the `-hf` install-layout suffix.
+        assert!(
+            def.download_files
+                .iter()
+                .all(|f| f.url.contains("models/eclipse005/omniASR-CTC-300M-v2/")),
+            "{:?}",
+            def.download_files[0].url
+        );
+        let weights = def
+            .download_files
+            .iter()
+            .find(|f| f.file_name == "model.safetensors")
+            .unwrap();
+        assert_eq!(weights.expected_size, 1_303_988_352);
+        assert_eq!(
+            weights.sha256,
+            "606d849a55b746e698976b8a979b597f4902be7a799ecf723dd283d6210e5871"
+        );
+    }
+
+    #[test]
+    fn parse_aligner_is_exact_catalog_name_only() {
+        // CTC first and default (settings button order follows ALIGNER_CHOICES).
+        assert_eq!(ModelId::ALIGNER_CHOICES[0], ModelId::OmniAsrCtc300M);
+        assert_eq!(ModelId::default_aligner(), ModelId::OmniAsrCtc300M);
+        assert_eq!(
+            ModelId::parse_aligner(OMNI_ASR_CTC_300M),
+            ModelId::OmniAsrCtc300M
+        );
+        assert_eq!(
+            ModelId::parse_aligner(QWEN_ALIGN_06B),
+            ModelId::QwenAlign06B
+        );
+        assert_eq!(ModelId::try_parse_aligner("ctc"), None);
+        assert_eq!(
+            ModelId::parse_aligner("something-else"),
+            ModelId::OmniAsrCtc300M
+        );
+        assert_eq!(
+            ModelId::try_from_aligner_dir(
+                &std::path::Path::new("m").join("omniASR-CTC-300M-v2-hf")
+            ),
+            Some(ModelId::OmniAsrCtc300M)
+        );
+        assert_eq!(
+            ModelId::try_from_aligner_dir(
+                &std::path::Path::new("m").join("Qwen3-ForcedAligner-0.6B-hf")
+            ),
+            Some(ModelId::QwenAlign06B)
+        );
+        assert_eq!(
+            ModelId::try_from_aligner_dir(&std::path::Path::new("m").join("custom")),
+            None
+        );
     }
 
     #[test]

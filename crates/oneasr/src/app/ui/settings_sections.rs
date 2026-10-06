@@ -267,7 +267,7 @@ impl OneAsrApp {
                                 },
                                 true,
                                 cx.listener(|this, _, _, cx| {
-                                    if !this.settings.output_txt {
+                                    if !this.settings.output_txt && !this.settings.output_ass {
                                         this.flash_hint(t(L::KEEP_ONE_FORMAT), cx);
                                         return;
                                     }
@@ -284,11 +284,28 @@ impl OneAsrApp {
                                 },
                                 true,
                                 cx.listener(|this, _, _, cx| {
-                                    if !this.settings.output_srt {
+                                    if !this.settings.output_srt && !this.settings.output_ass {
                                         this.flash_hint(t(L::KEEP_ONE_FORMAT), cx);
                                         return;
                                     }
                                     this.settings.output_txt = !this.settings.output_txt;
+                                    this.mark_settings_dirty(cx);
+                                }),
+                            ))
+                            .child(btn(
+                                "ASS",
+                                if form.output_ass {
+                                    BtnKind::Primary
+                                } else {
+                                    BtnKind::Secondary
+                                },
+                                true,
+                                cx.listener(|this, _, _, cx| {
+                                    if !this.settings.output_srt && !this.settings.output_txt {
+                                        this.flash_hint(t(L::KEEP_ONE_FORMAT), cx);
+                                        return;
+                                    }
+                                    this.settings.output_ass = !this.settings.output_ass;
                                     this.mark_settings_dirty(cx);
                                 }),
                             )),
@@ -627,6 +644,39 @@ impl OneAsrApp {
                         DANGER
                     })),
             )
+            .child({
+                // 对齐引擎选择：CTC 在前、默认 CTC（与 ASR 尺寸 chip 同款交互）。
+                let chips: Vec<AnyElement> = ModelId::ALIGNER_CHOICES
+                    .into_iter()
+                    .map(|id| {
+                        let active = form.align_base_id == id;
+                        let can_switch = !form.align_locked || active;
+                        btn(
+                            id.short_label(),
+                            if active {
+                                BtnKind::Primary
+                            } else {
+                                BtnKind::Secondary
+                            },
+                            can_switch,
+                            cx.listener(move |this, _, _, cx| {
+                                if this.settings.selected_aligner_id() == id {
+                                    return;
+                                }
+                                if this.download_kind_busy(ModelKind::Align) {
+                                    this.flash_hint(t(L::ALIGN_DL_BUSY), cx);
+                                    return;
+                                }
+                                this.settings.select_aligner_model(id);
+                                this.refresh_model_probe();
+                                this.mark_settings_dirty(cx);
+                            }),
+                        )
+                        .into_any_element()
+                    })
+                    .collect();
+                div().flex().gap_1p5().children(chips)
+            })
             .child(model_download_row(
                 ComponentRow {
                     id: "align-dl-btn",
@@ -685,10 +735,10 @@ impl OneAsrApp {
                             .on_click(cx.listener(|this, _, _, cx| this.pick_aligner_dir(cx))),
                     ),
                 cx.listener(|this, _, _, cx| {
-                    this.start_model_download(ModelId::QwenAlign06B, cx);
+                    this.start_model_download(this.settings.selected_aligner_id(), cx);
                 }),
                 cx.listener(|this, _, _, cx| {
-                    this.cancel_model_download(ModelId::QwenAlign06B, cx);
+                    this.cancel_model_download(this.settings.selected_aligner_id(), cx);
                 }),
             ))
             .into_any_element();

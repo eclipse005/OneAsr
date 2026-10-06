@@ -4,18 +4,12 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use super::backend::ComputeBackend;
+use super::device::demucs_selector_from_env;
 use crate::engine::{EngineError, SeparateRequest, SeparationEvent, Separator};
 
 /// Weights file expected inside the configured Demucs model directory.
 /// Vocals-only shard of `htdemucs_ft`, loaded as a single FourStem network.
 pub const DEMUCS_WEIGHTS_FILE: &str = "htdemucs_ft_vocals.safetensors";
-
-pub(super) fn separator_backend(backend: ComputeBackend) -> demucs_core::Backend {
-    match backend {
-        ComputeBackend::Cpu => demucs_core::Backend::Cpu,
-        ComputeBackend::Gpu => demucs_core::Backend::Gpu(demucs_core::gpu::DeviceSelector::Auto),
-    }
-}
 
 pub(super) struct DemucsSeparatorAdapter {
     inner: demucs_core::Demucs,
@@ -44,7 +38,11 @@ impl DemucsSeparatorAdapter {
             variant: ModelVariant::FourStem,
             stems: StemSelection::Some(vec![StemId::Vocals]),
         };
-        let attempt = separator_backend(backend);
+        // GPU + `ONEASR_DEVICE` → 用户指定的适配器；spec 非法直接报错，不静默回退。
+        let attempt = match backend {
+            ComputeBackend::Cpu => demucs_core::Backend::Cpu,
+            ComputeBackend::Gpu => demucs_core::Backend::Gpu(demucs_selector_from_env()?),
+        };
         log(format!("vocal-separation backend {}", attempt.tag()));
 
         let (inner, fell_back) = match Demucs::load(&weights, opts.clone(), attempt.clone()) {
