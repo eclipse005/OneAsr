@@ -127,8 +127,8 @@ pub(crate) struct OneAsrApp {
     /// Saved time of the first task ever finished, handed to the run-complete
     /// notice so the one moment the number is news does not pass unread.
     nudge_saved: Option<SharedString>,
-    /// Live stage label for the row currently Processing (from worker Progress).
-    active_stage: Option<(String, SharedString)>,
+    /// Live stage label + chunk progress for the row currently Processing.
+    active_stage: Option<ActiveStage>,
     /// Latest download progress (settings panel).
     asr_download: Option<DownloadProgress>,
     align_download: Option<DownloadProgress>,
@@ -292,6 +292,7 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                                 let _ = ptx.send(WorkerMsg::Progress {
                                     id: id_for_progress.clone(),
                                     stage: SharedString::from(update.label(ui_lang())),
+                                    chunk: update.chunk,
                                     warning,
                                 });
                             })

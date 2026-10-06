@@ -102,7 +102,10 @@ pub(crate) fn status_border_color(status: TaskStatus) -> Rgba {
 }
 
 /// Status pill: (label, foreground, soft background). `stage` is the live
-/// pipeline label (already translated); everything else is per `lang`.
+/// pipeline label (already translated **and already carrying `3/5`** — see
+/// `StageUpdate::label`); everything else is per `lang`.
+///
+/// 不要再在这里拼一次块数：标签里已经有一个了。
 pub(crate) fn status_pill_style(
     status: TaskStatus,
     queue_n: Option<usize>,
@@ -178,4 +181,65 @@ pub(crate) fn media_type_icon(is_video: bool, status: TaskStatus) -> impl IntoEl
         .items_center()
         .justify_center()
         .child(svg().size(px(18.)).path(icon_path).text_color(ink))
+}
+
+/// `(done, total)` → 行内进度条的填充比例（0.0–1.0）。
+///
+/// 三种输入都收在同一个出口，因为**每一个都能从真实管线里走到**：
+/// `total == 0` 是管线还没数出块（分母未知 → 不画条，而不是除零画满），
+/// `done > total` 是管线换了分母（换段、换阶段）而旧值还在飞越的间隙，
+/// 正常情况才是 `0 <= done <= total`。夹到 1.0 就好——界面只需要一个比例，
+/// 倒退一格比短暂画满更难解释。
+pub(crate) fn stage_fraction(chunk: Option<(usize, usize)>) -> Option<f32> {
+    let (done, total) = chunk?;
+    (total > 0).then(|| (done as f32 / total as f32).clamp(0.0, 1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stage_fraction;
+
+    #[test]
+    fn no_chunk_means_no_bar() {
+        assert_eq!(stage_fraction(None), None);
+    }
+
+    #[test]
+    fn zero_total_never_becomes_a_full_bar() {
+        // 分母还没数出来的时候画满，比不画条更像「已经做完了」。
+        assert_eq!(stage_fraction(Some((0, 0))), None);
+    }
+
+    #[test]
+    fn a_chunked_stage_reads_as_its_own_fraction() {
+        let f = stage_fraction(Some((12, 42))).expect("chunked stage has a bar");
+        assert!((f - 12.0 / 42.0).abs() < 1e-6, "got {f}");
+    }
+
+    #[test]
+    fn a_denominator_that_shrinks_clamps_instead_of_overshooting() {
+        assert_eq!(stage_fraction(Some((9, 3))), Some(1.0));
+    }
+
+    use super::{TaskStatus, status_pill_style};
+    use oneasr_core::i18n::UiLang;
+
+    /// 块数是 `StageUpdate::label` 拼进标签的，胶囊里**已经有一个**。
+    /// 在这里再拼一次就成了 `转写中 3/5 3/5` —— 这条钉住「不在这里拼」。
+    #[test]
+    fn the_pill_does_not_append_a_second_count() {
+        let (label, _, _) =
+            status_pill_style(TaskStatus::Processing, None, Some("转写中 3/5"), UiLang::Zh);
+        assert_eq!(label, "转写中 3/5");
+        assert_eq!(label.matches('/').count(), 1, "count got printed twice");
+    }
+
+    /// 文稿路径那一段是空的：没有分母就没有条，胶囊照旧只显示「打轴中」。
+    #[test]
+    fn a_countless_stage_pill_is_the_bare_label() {
+        let (label, _, _) =
+            status_pill_style(TaskStatus::Processing, None, Some("打轴中"), UiLang::Zh);
+        assert_eq!(label, "打轴中");
+        assert_eq!(stage_fraction(None), None, "no denominator means no bar");
+    }
 }

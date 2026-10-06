@@ -236,7 +236,10 @@ impl OneAsrApp {
         } else {
             AsrStage::Converting
         };
-        self.active_stage = Some((id.clone(), SharedString::from(first_stage.label(ui_lang()))));
+        self.active_stage = Some(ActiveStage::new(
+            id.clone(),
+            SharedString::from(first_stage.label(ui_lang())),
+        ));
 
         // Start context: failures log only `{id}` + message, so this entry is
         // what makes a pasted log self-sufficient (which file/model/backend).
