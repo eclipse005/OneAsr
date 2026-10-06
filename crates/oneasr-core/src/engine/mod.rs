@@ -85,6 +85,13 @@ pub struct AlignRequest<'a> {
     pub language: &'a str,
 }
 
+/// `(done, total)` 进度回调，**只在引擎自己分块时**才会有。
+///
+/// 分母是引擎的工作单元（CTC 是编码窗口），不是秒：秒只能估，单元是数出来的。
+/// 引擎整段一次算完的路径（Qwen 对齐器按 ASR 段调用）传 `None`——上层据此
+/// 显示「没有分母」，而不是一个假的一跳到底。
+pub type AlignProgress<'a> = &'a mut dyn FnMut(usize, usize);
+
 /// One aligned token with seconds relative to the request's audio.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlignedToken {
@@ -118,7 +125,12 @@ pub trait AsrEngine {
 
 /// Forced-alignment engine: turns text + audio into timed tokens.
 pub trait Aligner {
-    fn align(&self, req: AlignRequest<'_>) -> Result<Vec<AlignedToken>, EngineError>;
+    /// `on_progress` is the optional sink described on [`AlignProgress`].
+    fn align(
+        &self,
+        req: AlignRequest<'_>,
+        on_progress: Option<AlignProgress<'_>>,
+    ) -> Result<Vec<AlignedToken>, EngineError>;
 }
 
 /// Vocal-separation engine: writes a vocals-only WAV and returns its path.
