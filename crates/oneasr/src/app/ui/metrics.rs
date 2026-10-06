@@ -18,6 +18,22 @@ pub(crate) const ACTIONS_COL_PX: f32 = 120.;
 pub(crate) const LANG_COL_PX: f32 = 64.;
 /// Per-task vocal-separation toggle column (right of the language chip).
 pub(crate) const SEPARATE_COL_PX: f32 = 76.;
+/// Transcript chip column, between the separation chip and the actions: it is a
+/// one-button two-state control, and it sits next to the start button whose
+/// behaviour it decides.
+pub(crate) const TRANSCRIPT_COL_PX: f32 = 88.;
+/// Hover-to-open delay for the transcript card. Same feel as the 用时 card: long
+/// enough that sweeping the pointer across the row does not flash it.
+pub(crate) const TRANSCRIPT_HOVER_DELAY_MS: u64 = 420;
+/// Grace after leaving the chip or card. Generous, because the pointer has to
+/// cross the gap between the two.
+pub(crate) const TRANSCRIPT_LEVER_GRACE_MS: u64 = 260;
+/// The card's fade/rise duration.
+pub(crate) const TRANSCRIPT_CARD_ANIM_SECS: f32 = 0.18;
+/// The card's width. Anchored to the chip's **right** edge and growing leftward,
+/// because the chip sits in the right-hand control cluster — a left-anchored
+/// card would run off the window.
+pub(crate) const TRANSCRIPT_CARD_W: f32 = 280.;
 /// Status pill column — wide enough for「人声分离 1800/1800」「转写中 99/99」.
 pub(crate) const STATUS_COL_PX: f32 = 132.;
 /// List language menu width (absolute panel under the chip).

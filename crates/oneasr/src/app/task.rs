@@ -74,6 +74,79 @@ pub struct Task {
     pub output_file: Option<PathBuf>,
     /// Per-stage processing wall time (set when a run finishes or fails mid-way).
     pub timing: Option<TaskTiming>,
+    /// 这条任务挂着的文稿。挂了就意味着「这次不识别」——所以它不是任务的模式
+    /// 开关，是任务的**另一个输入**。行上那个芯片就是它的全部呈现。
+    pub transcript: Option<StagedTranscript>,
+}
+
+/// 一份挂在任务上的文稿。
+///
+/// **程序永不写回用户的原文件。** `text` 是从文件解析出来的一份暂存：只有
+/// 「智能断句」会改它（且只改换行），其余时候它和文件里的内容一致——所以
+/// 「恢复原始内容」不是撤销，是重新读一遍。
+#[derive(Debug, Clone)]
+pub struct StagedTranscript {
+    /// 规范化后的纯文本，**一行 = 一条字幕**。
+    pub text: String,
+    /// 原始文件路径。文稿来自粘贴时为 `None`。
+    pub path: Option<PathBuf>,
+    /// 原时间轴被丢弃了没有——挂 `.srt` 时为真，界面上要说明一次。这是程序
+    /// 唯一一次对「你文件的内容」动了手脚，所以那句话说一次就够。
+    pub dropped_timecodes: bool,
+    /// 字幕是用**哪一版**文稿打出来的。`None` = 从来没打过轴——这和「打的正是
+    /// 当前这一版」必须分得开，否则「有产物」和「产物过期」会撞成同一个信号。
+    pub aligned_revision: Option<u64>,
+    /// 每次改动暂存内容自增（目前只有「智能断句」会改）。
+    pub revision: u64,
+}
+
+impl StagedTranscript {
+    pub fn from_core(t: &oneasr_core::transcript::Transcript, path: Option<PathBuf>) -> Self {
+        Self {
+            text: t.text.clone(),
+            path,
+            dropped_timecodes: t.dropped_timecodes(),
+            aligned_revision: None,
+            revision: 0,
+        }
+    }
+
+    /// 文字量（不含空白）——卡片上的字数与密度校验共用。
+    pub fn char_count(&self) -> usize {
+        self.text.chars().filter(|c| !c.is_whitespace()).count()
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.text.lines().filter(|l| !l.trim().is_empty()).count()
+    }
+
+    /// 芯片上的量级写法：`3.2k` / `840`。那一列只有 88px，行上不写「字」。
+    pub fn short_count(&self) -> String {
+        let n = self.char_count();
+        if n >= 10_000 {
+            format!("{}w", n / 10_000)
+        } else if n >= 1_000 {
+            format!("{:.1}k", n as f64 / 1000.0)
+        } else {
+            n.to_string()
+        }
+    }
+
+    /// 字幕比文稿旧吗。从没打过轴算「旧」——那正是主按钮该显示 ▶ 而不是 📁 的
+    /// 情形；有产物但文稿又改过，也是。
+    pub fn is_stale(&self) -> bool {
+        self.aligned_revision != Some(self.revision)
+    }
+
+    /// 密度：每秒多少字。文稿与音频对不上时，强制对齐**不会报错**，它给出一个
+    /// 看起来正常但慢慢漂移的时间轴——比报错糟糕得多。所以这个数必须在**点开始
+    /// 之前**给用户看。
+    pub fn chars_per_second(&self, audio_seconds: f64) -> f64 {
+        if audio_seconds <= 0.0 {
+            return 0.0;
+        }
+        self.char_count() as f64 / audio_seconds
+    }
 }
 
 impl Task {
@@ -108,6 +181,7 @@ impl Task {
             queue_seq: None,
             output_file: None,
             timing: None,
+            transcript: None,
         }
     }
 
@@ -230,5 +304,65 @@ mod tests {
         assert_eq!(b.language, "en");
         assert!(!a.vocal_separation);
         assert!(b.vocal_separation);
+    }
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use super::*;
+    use oneasr_core::transcript::{TranscriptKind, parse_transcript};
+
+    fn staged(text: &str) -> StagedTranscript {
+        let t = parse_transcript(TranscriptKind::Plain, text).expect("transcript");
+        StagedTranscript::from_core(&t, None)
+    }
+
+    #[test]
+    fn counts_match_what_the_card_shows() {
+        let st = staged("第一行。\n第二行。");
+        assert_eq!(st.char_count(), 8, "第一行。第二行。");
+        assert_eq!(st.line_count(), 2);
+        assert_eq!(st.short_count(), "8");
+    }
+
+    /// 芯片上只有 88px，量级要压短——但不能压到看不出是「三千字」。
+    #[test]
+    fn the_chip_count_stays_short() {
+        assert_eq!(staged(&"字".repeat(3_200)).short_count(), "3.2k");
+        assert_eq!(staged(&"字".repeat(999)).short_count(), "999");
+        assert_eq!(staged(&"字".repeat(12_345)).short_count(), "1w");
+    }
+
+    /// 刚挂上时字幕当然比文稿旧——主按钮会因此是 ▶ 而不是 📁。
+    #[test]
+    fn a_freshly_attached_transcript_is_stale_until_aligned() {
+        let mut st = staged("第一行。");
+        assert!(st.is_stale());
+        st.revision = 1;
+        st.aligned_revision = Some(1);
+        assert!(!st.is_stale());
+        st.revision = 2;
+        assert!(st.is_stale(), "文稿又改了");
+    }
+
+    /// 挂 SRT 时原时间轴被丢了，界面上要说明一次。
+    #[test]
+    fn an_srt_records_that_its_timings_were_dropped() {
+        let t = parse_transcript(
+            TranscriptKind::SubRip,
+            "1\n00:00:01,000 --> 00:00:03,000\n你好。\n",
+        )
+        .expect("srt");
+        let st = StagedTranscript::from_core(&t, None);
+        assert!(st.dropped_timecodes);
+        assert_eq!(st.text, "你好。", "只剩正文，时间轴没了");
+        assert!(!staged("你好。").dropped_timecodes);
+    }
+
+    #[test]
+    fn density_is_zero_rather_than_infinite_when_the_length_is_unknown() {
+        // 0.0 字/秒 会被读成「文稿是空的」；这里必须给「未知」。
+        assert_eq!(staged("第一行。").chars_per_second(0.0), 0.0);
+        assert_eq!(staged("字字字字").chars_per_second(2.0), 2.0);
     }
 }

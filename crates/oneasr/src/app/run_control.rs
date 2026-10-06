@@ -177,6 +177,14 @@ impl OneAsrApp {
         let name = task.name.clone();
         let task_lang = task.language.clone();
         let task_sep = task.vocal_separation;
+        // 挂了文稿就走「只打轴」那条路。
+        let task_transcript = task
+            .transcript
+            .as_ref()
+            .map(|st| oneasr_core::TranscriptInput {
+                text: st.text.clone(),
+                path: st.path.clone(),
+            });
 
         // Effective settings for **this row**: per-task language + separation
         // override the settings defaults. Built before anything is marked
@@ -184,6 +192,13 @@ impl OneAsrApp {
         let mut settings = self.settings.clone();
         settings.language = normalize_source_language(&task_lang);
         settings.vocal_separation = task_sep;
+        if task_transcript.is_some() {
+            // 文稿任务固定用 CTC：整段一次对齐，块边界不伤词。这个闸门是
+            // **任务级**的——全局 `align_ready` 问的是「设置里选中的对齐器就绪吗」，
+            // 对挂文稿的行是错的问题：设着 Qwen、Qwen 已装的用户会放行，然后跑到
+            // 打轴阶段才发现 CTC 没装，而那是 3 秒就能知道的事。
+            settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+        }
         if let Err(e) = settings.can_start() {
             crashlog::log_warn(format!(
                 "task blocked before start: {id}\n  reason: {e}\n  vocal_separation: {task_sep}"
@@ -242,6 +257,7 @@ impl OneAsrApp {
                 path,
                 name,
                 settings,
+                transcript: task_transcript,
             })
             .is_err()
         {
