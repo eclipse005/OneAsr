@@ -1,6 +1,7 @@
 //! Settings persistence and the path pickers behind the drawer's fields.
 
 use crate::app::prelude::*;
+use crate::app::transcript_ui::expand;
 
 impl OneAsrApp {
     /// Fast FS check for status bar + settings dots. Does not touch GPU / weights.
@@ -110,6 +111,18 @@ impl OneAsrApp {
         thread::spawn(move || {
             let files = rfd::FileDialog::new()
                 .set_title(t(L::DLG_ADD_MEDIA))
+                // 「全部」必须排在第一个并且**默认选中**：rfd 一次只能选当前
+                // 过滤器匹配的类型，而「音频和它的文稿一起挑」正是这个功能要的
+                // 动作——先切过滤器选媒体、再切回来选文稿，那不叫一步。
+                .add_filter(
+                    "All supported",
+                    &[
+                        // media
+                        "wav", "mp3", "m4a", "flac", "ogg", "opus", "mp4", "mkv", "mov", "webm",
+                        "avi", "m4v", "aac", "wma", // transcript
+                        "txt", "md", "srt",
+                    ],
+                )
                 .add_filter(
                     "Media",
                     &[
@@ -117,6 +130,7 @@ impl OneAsrApp {
                         "avi", "m4v", "aac", "wma",
                     ],
                 )
+                .add_filter("Transcript", &["txt", "md", "srt"])
                 .pick_files();
             match files {
                 Some(paths) => {
@@ -191,12 +205,40 @@ impl OneAsrApp {
     }
 
     pub(crate) fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        // New tasks inherit the settings defaults (language + vocal separation);
-        // both stay overridable per row afterwards.
+        // 文稿按文件名配给同名的媒体：音视频建任务，文本挂上去。配不上的**要
+        // 报出来**——用户挑了一堆文件，最后靠数行数才知道哪份稿子没生效。
+        let pairing = crate::app::transcript::pair_picked(&paths);
         let default_lang = self.settings.language.clone();
         let default_sep = self.settings.vocal_separation;
+        // 读在循环外：媒体行要挂的那份文稿，先解析一次；读不了的当场报，任务照建
+        // （不因为一份坏文稿丢掉整个添加动作）。
+        let mut staged: Vec<(PathBuf, Option<StagedTranscript>)> = Vec::new();
+        for (text_path, _) in &pairing.transcripts {
+            let read = match oneasr_core::transcript::read_transcript(text_path) {
+                Ok(parsed) => Some(StagedTranscript::from_core(
+                    &parsed,
+                    Some(text_path.clone()),
+                )),
+                Err(e) => {
+                    self.flash_hint(expand(t(L::TRANSCRIPT_UNREADABLE), &[("e", &e)]), cx);
+                    None
+                }
+            };
+            staged.push((text_path.clone(), read));
+        }
+        // 每条媒体配到哪份文稿：按**规范化后**的媒体路径索引，循环里一次查完。
+        let mut by_media: Vec<(PathBuf, Option<StagedTranscript>)> = Vec::new();
+        for ((_, media), (_, parsed)) in pairing.transcripts.iter().zip(staged) {
+            by_media.push((media.canonicalize().unwrap_or(media.clone()), parsed));
+        }
+        let crate::app::transcript::Pairing {
+            media,
+            transcripts,
+            unpaired_texts,
+        } = pairing;
+
         let before = self.tasks.len();
-        for path in paths {
+        for path in media {
             let path = path.canonicalize().unwrap_or(path);
             if !accept_input_path(&path) {
                 // Silent skip in the UI is intentional ("no reaction"), but a
@@ -207,7 +249,11 @@ impl OneAsrApp {
             if self.tasks.iter().any(|t| t.path == path) {
                 continue;
             }
-            let task = Task::from_path(&path, default_lang.clone(), default_sep);
+            let mut task = Task::from_path(&path, default_lang.clone(), default_sep);
+            task.transcript = by_media
+                .iter()
+                .find(|(media, _)| *media == path)
+                .and_then(|(_, st)| st.clone());
             let id = task.id.clone();
             let p = task.path.clone();
             let tx = self.tx.clone();
@@ -227,6 +273,48 @@ impl OneAsrApp {
         // Deliberately NOT one per file: dropping 20 files must not stutter.
         if self.tasks.len() > before {
             self.play_ui(sfx::Sfx::Click);
+        }
+        // 配对结果**一条说两件事**：成了几个、谁没配上。没配上的那份文稿不会
+        // 建出任务，名字必须出现在提示里，否则它就凭空消失了。
+        if !transcripts.is_empty() {
+            let names: Vec<String> = transcripts
+                .iter()
+                .map(|(text, _)| {
+                    text.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| text.display().to_string())
+                })
+                .collect();
+            self.flash_hint(
+                expand(
+                    t(L::TRANSCRIPT_PAIRED),
+                    &[
+                        ("n", &transcripts.len().to_string()),
+                        ("files", &names.join("、")),
+                    ],
+                ),
+                cx,
+            );
+        }
+        if !unpaired_texts.is_empty() {
+            let names: Vec<String> = unpaired_texts
+                .iter()
+                .map(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.display().to_string())
+                })
+                .collect();
+            self.flash_hint(
+                expand(
+                    t(L::TRANSCRIPT_UNPAIRED),
+                    &[
+                        ("n", &unpaired_texts.len().to_string()),
+                        ("files", &names.join("、")),
+                    ],
+                ),
+                cx,
+            );
         }
         cx.notify();
     }

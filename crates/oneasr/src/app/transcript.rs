@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 /// 媒体扩展名与添加对话框的过滤器一致。两处必须同步：这里决定「什么建任务」，
 /// 那里决定「什么能被选到」。
 const MEDIA_EXTS: &[&str] = &[
-    "wav", "mp3", "m4a", "flac", "ogg", "opus", "aac", "wma", "mp4", "mkv", "mov", "webm",
-    "avi", "m4v",
+    "wav", "mp3", "m4a", "flac", "ogg", "opus", "aac", "wma", "mp4", "mkv", "mov", "webm", "avi",
+    "m4v",
 ];
 
 /// 选完文件之后的配对结果。
@@ -24,13 +24,6 @@ pub struct Pairing {
     pub transcripts: Vec<(PathBuf, PathBuf)>,
     /// 没找到同名媒体的文稿。
     pub unpaired_texts: Vec<PathBuf>,
-}
-
-impl Pairing {
-    /// 提示语要说清三件事：成了几个、配给谁、谁没配上。
-    pub fn paired_count(&self) -> usize {
-        self.transcripts.len()
-    }
 }
 
 /// 文件名去掉扩展名。用 `file_stem` 而不是自己切——`a.tar.gz`、`a.b.mp4` 这类
@@ -146,7 +139,7 @@ mod tests {
         let got = pair_picked(&[p("a.mp4"), p("b.txt"), p("c.srt"), p("d.webm")]);
         assert_eq!(got.media, vec![p("a.mp4"), p("d.webm")]);
         assert_eq!(got.unpaired_texts, vec![p("b.txt"), p("c.srt")]);
-        assert_eq!(got.paired_count(), 0);
+        assert!(got.transcripts.is_empty());
     }
 
     /// 只有文稿、没有媒体：一条任务都建不出来，所以必须报出来而不是建空任务。

@@ -4,6 +4,7 @@
 //! `exiting` until its fade finishes, so the list does not jump.
 
 use crate::app::prelude::*;
+use crate::app::ui::transcript_card::TranscriptCardView;
 
 impl OneAsrApp {
     pub(crate) fn is_exiting(&self, id: &str) -> bool {
@@ -63,6 +64,38 @@ impl OneAsrApp {
                     opacity,
                     interactive,
                     queue_rank: ranks.get(t.id.as_str()).copied(),
+                    // 芯片上只放量级（那一列 88px），字数详情在卡片里。
+                    transcript: t.transcript.as_ref().map(|st| st.short_count()),
+                    transcript_stale: t.transcript.as_ref().is_some_and(|st| st.is_stale()),
+                    transcript_card_open: self.transcript_card.as_deref() == Some(t.id.as_str()),
+                    transcript_card_progress: self.transcript_card_progress(),
+                    transcript_card: t.transcript.as_ref().map(|st| {
+                        let audio = match t.duration {
+                            crate::app::DurationState::Known(s) => s,
+                            _ => 0.0,
+                        };
+                        TranscriptCardView {
+                            file: st
+                                .path
+                                .as_ref()
+                                .map(|p| {
+                                    p.file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| p.display().to_string())
+                                })
+                                .unwrap_or_else(|| {
+                                    oneasr_core::i18n::t(crate::i18n::L::TRANSCRIPT_PASTED)
+                                        .to_string()
+                                }),
+                            lines: st.line_count(),
+                            chars: st.char_count(),
+                            dropped_timecodes: st.dropped_timecodes,
+                            density: (audio > 0.0).then(|| st.chars_per_second(audio)),
+                            audio_label: t.duration.label(),
+                            from_file: st.path.is_some(),
+                            note: self.transcript_card_note.clone(),
+                        }
+                    }),
                 }
             })
             .collect()

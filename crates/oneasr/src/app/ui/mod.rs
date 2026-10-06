@@ -17,6 +17,7 @@ pub(crate) mod status_bar;
 pub(crate) mod task_list;
 pub(crate) mod task_row;
 pub(crate) mod text;
+pub(crate) mod transcript_card;
 pub(crate) mod util;
 
 impl Render for OneAsrApp {
@@ -24,6 +25,7 @@ impl Render for OneAsrApp {
         // Drop select state that can no longer paint (locked / deleted / drawer closed).
         self.sync_lang_select_state();
         self.tick_timing_popover();
+        self.tick_transcript_card();
 
         // Drive drawer / row-hover fades at display refresh.
         if self.animations_active() {
@@ -31,7 +33,7 @@ impl Render for OneAsrApp {
         }
 
         let drawer_p = self.settings_progress();
-        let menu_open = self.any_menu_open();
+        let menu_open = self.any_menu_open() || self.transcript_card_visible();
         let stats_open = self.stats_open;
 
         div()

@@ -8,6 +8,11 @@ use crate::app::prelude::*;
 
 pub(crate) enum WorkerMsg {
     FilesPicked(Vec<PathBuf>),
+    /// A transcript file chosen for one specific row (the chip's `+ 文稿`).
+    TranscriptPicked {
+        id: String,
+        path: Option<PathBuf>,
+    },
     PickCancelled,
     ModelDirPicked(PathBuf),
     AlignerDirPicked(PathBuf),
@@ -42,6 +47,8 @@ pub(crate) enum AsrJob {
         path: PathBuf,
         name: String,
         settings: Settings,
+        /// 挂了这行任务的文稿就整段跳过识别，只做打轴。
+        transcript: Option<oneasr_core::TranscriptInput>,
     },
 }
 
@@ -51,6 +58,9 @@ impl OneAsrApp {
         loop {
             match self.rx.try_recv() {
                 Ok(WorkerMsg::FilesPicked(paths)) => self.handle_files_picked(paths, cx),
+                Ok(WorkerMsg::TranscriptPicked { id, path }) => {
+                    self.handle_transcript_picked(&id, path, cx)
+                }
                 Ok(WorkerMsg::PickCancelled) => self.handle_pick_cancelled(cx),
                 Ok(WorkerMsg::ModelDirPicked(dir)) => self.handle_model_dir_picked(dir, cx),
                 Ok(WorkerMsg::AlignerDirPicked(dir)) => self.handle_aligner_dir_picked(dir, cx),
@@ -304,6 +314,11 @@ impl OneAsrApp {
                     cues = count_output_lines(&srt);
                     t.status = TaskStatus::Done;
                     t.queue_seq = None;
+                    // 字幕现在是**这一版**文稿打出来的。少了这一步，芯片会一直
+                    // 说「比文稿旧」，而主按钮会一直显示 ▶ 而不是 📁。
+                    if let Some(st) = t.transcript.as_mut() {
+                        st.aligned_revision = Some(st.revision);
+                    }
                     t.output_file = Some(srt);
                     t.error = None;
                     true

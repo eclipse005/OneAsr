@@ -7,6 +7,7 @@
 //! method here would fight the borrow checker for no gain.
 
 use crate::app::prelude::*;
+use crate::app::ui::transcript_card::{TranscriptCardView, transcript_card};
 use crate::app::{LangMenuLayout, LangSelectTarget, OneAsrApp, TaskRowView};
 
 /// Row-invariant state for one repaint: captured once, not once per row.
@@ -518,6 +519,101 @@ pub(super) fn task_row_view(
                                         }),
                                 ),
                         )
+                        // 文稿芯片 —— **一个按钮的两个状态**，位置固定在「分离」与
+                        // 「▶」之间：它紧挨着它所改变的那个按钮，因果关系用相邻
+                        // 表达。悬停弹出卡片（和「用时」同款），点击把卡片粘住。
+                        //
+                        // 「字幕比文稿旧」这个状态**不在这里加记号**：主按钮自己会
+                        // 从 📁 变回 ▶，那才是该说这件事的地方。
+                        .child({
+                            let id_tr = row.id.clone();
+                            let id_hover = id_tr.clone();
+                            let id_click = id_tr.clone();
+                            let has = row.transcript.is_some();
+                            let open = row.transcript_card_open;
+                            let tip = if !has {
+                                t(L::TRANSCRIPT_TIP_NONE)
+                            } else if row.transcript_stale {
+                                t(L::TRANSCRIPT_TIP_STALE)
+                            } else {
+                                t(L::TRANSCRIPT_TIP_HAS)
+                            };
+                            let label = match row.transcript.as_deref() {
+                                Some(n) => format!("{} {n}", t(L::TRANSCRIPT_CHIP)),
+                                None => t(L::TRANSCRIPT_ADD).to_string(),
+                            };
+                            div()
+                                .w(px(TRANSCRIPT_COL_PX))
+                                .flex_shrink_0()
+                                .flex()
+                                .justify_center()
+                                .items_center()
+                                .relative()
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("tr-{id_tr}")))
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(if has { ACCENT } else { LINE_SOFT })
+                                        .bg(if has {
+                                            ACCENT_SOFT
+                                        } else {
+                                            BG
+                                        })
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(ACCENT_SOFT).border_color(ACCENT))
+                                        .on_hover(cx.listener(
+                                            move |this, hovered: &bool, _, cx| {
+                                                if *hovered {
+                                                    this.transcript_hover_enter(&id_hover, cx);
+                                                } else {
+                                                    this.transcript_hover_leave(&id_hover, cx);
+                                                }
+                                            },
+                                        ))
+                                        // 还没有文稿时点它 = 选一份文件；有了 = 开卡片。
+                                        // 悬停出的是**卡片**而不是选文件框：卡片才是
+                                        // 「这份文稿会被怎么用」的解释。
+                                        .on_click(cx.listener(
+                                            move |this, _, _, cx| {
+                                                if has {
+                                                    this.toggle_transcript_card(&id_click, cx);
+                                                } else {
+                                                    this.pick_transcript_for(&id_click, cx);
+                                                }
+                                            },
+                                        ))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .whitespace_nowrap()
+                                                .text_color(if has { ACCENT } else { MUTED })
+                                                .child(label),
+                                        )
+                                        .tooltip(move |_, cx| {
+                                            cx.new(|_| NameTooltip {
+                                                text: tip.to_string().into(),
+                                            })
+                                            .into()
+                                        }),
+                                )
+                                // Card is a sibling of the chip inside this
+                                // relative wrapper, anchored to the chip's right
+                                // edge and growing leftward — the chip sits in the
+                                // right-hand control cluster, so a left-anchored
+                                // card would run off the window.
+                                .when(open, |wrap| {
+                                    let id_card = row.id.clone();
+                                    let progress = row.transcript_card_progress;
+                                    let view = row.transcript_card.clone().unwrap_or_else(|| TranscriptCardView { file: String::new(), lines: 0, chars: 0, dropped_timecodes: false, density: None, audio_label: String::new(), from_file: false, note: None });
+                                    wrap.child(
+                                        transcript_card(id_card, progress, view, cx),
+                                    )
+                                })
+                        })
                         // Two fixed slots: primary (开始 | 打开字幕) + 删除.
                         .child(
                             div()

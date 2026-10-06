@@ -87,6 +87,106 @@ impl OneAsrApp {
         }
     }
 
+    // ── 文稿卡片（悬停打开 / 点击粘住）────────────────────────────────────
+    //
+    // 和「用时」卡片同一套机制：悬停延时打开、移开有宽限期、卡片自己挂
+    // `on_hover`，所以鼠标移上去不会关——里面因此放得下按钮。唯一差别是
+    // `pinned`：纯悬停的卡片上按按钮是难受的，点一下芯片把它粘住。
+    pub(crate) fn transcript_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.transcript_card_pinned {
+            return;
+        }
+        self.transcript_leave_since = None;
+        if self
+            .transcript_hover_since
+            .as_ref()
+            .is_some_and(|(hid, _)| hid == id)
+        {
+            return;
+        }
+        self.transcript_hover_since = Some((id.to_string(), Instant::now()));
+        cx.notify();
+    }
+
+    pub(crate) fn transcript_hover_leave(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.transcript_card_pinned {
+            return;
+        }
+        if self
+            .transcript_hover_since
+            .as_ref()
+            .is_some_and(|(hid, _)| hid == id)
+        {
+            self.transcript_hover_since = None;
+            self.transcript_leave_since = Some((id.to_string(), Instant::now()));
+        }
+        cx.notify();
+    }
+
+    /// Promote delayed hover → open; honour the leave grace; clear on close.
+    pub(crate) fn tick_transcript_card(&mut self) {
+        if self.transcript_card.is_none() {
+            return;
+        }
+        if let Some((id, since)) = self.transcript_hover_since.clone()
+            && since.elapsed() >= Duration::from_millis(TRANSCRIPT_HOVER_DELAY_MS)
+            && self.transcript_card.as_deref() != Some(id.as_str())
+        {
+            self.transcript_card_from = self.transcript_card_progress();
+            self.transcript_card_to = 1.0;
+            self.transcript_card_anim_t0 = Instant::now();
+            self.transcript_card = Some(id);
+        }
+        if !self.transcript_card_pinned
+            && let Some((id, since)) = self.transcript_leave_since.clone()
+            && since.elapsed() >= Duration::from_millis(TRANSCRIPT_LEVER_GRACE_MS)
+        {
+            if self.transcript_card.as_deref() == Some(id.as_str()) {
+                self.close_transcript_card();
+            } else {
+                self.transcript_leave_since = None;
+            }
+        }
+    }
+
+    pub(crate) fn close_transcript_card(&mut self) {
+        self.transcript_card = None;
+        self.transcript_card_pinned = false;
+        self.transcript_hover_since = None;
+        self.transcript_leave_since = None;
+        self.transcript_card_note = None;
+    }
+
+    /// Eased 0..=1 progress for the card's fade/rise.
+    pub(crate) fn transcript_card_progress(&self) -> f32 {
+        if self.transcript_card.is_none() {
+            return 0.0;
+        }
+        let t = (self.transcript_card_anim_t0.elapsed().as_secs_f32() / TRANSCRIPT_CARD_ANIM_SECS)
+            .min(1.0);
+        let e = ease_out_cubic(t);
+        self.transcript_card_from + (self.transcript_card_to - self.transcript_card_from) * e
+    }
+
+    /// 卡片开着吗（含淡入淡出）。
+    pub(crate) fn transcript_card_visible(&self) -> bool {
+        self.transcript_card_progress() > 0.01
+    }
+
+    /// 芯片被点击：粘住 / 取消粘住。粘住时卡片不因移开鼠标而关闭。
+    pub(crate) fn toggle_transcript_card(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.transcript_card.as_deref() == Some(id) && self.transcript_card_pinned {
+            self.close_transcript_card();
+        } else {
+            self.transcript_card = Some(id.to_string());
+            self.transcript_card_pinned = true;
+            // 粘住时卡片上有按钮，被别的浮层压住就点不到。
+            self.close_lang_selects();
+            self.close_timing_popover();
+        }
+        cx.notify();
+    }
+
     /// Hover entered the timing chip / card for `id`.
     pub(crate) fn timing_hover_enter(&mut self, id: &str, cx: &mut Context<Self>) {
         // Do not stack under an open language menu.

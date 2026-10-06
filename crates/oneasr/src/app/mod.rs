@@ -7,6 +7,7 @@
 //! module do that without widening anything to `pub(crate)`.
 
 use crate::app::prelude::*;
+use crate::app::ui::transcript_card::TranscriptCardView;
 
 pub(crate) mod downloads;
 pub(crate) mod overlays;
@@ -16,6 +17,8 @@ pub(crate) mod run_control;
 pub(crate) mod settings;
 pub(crate) mod stats;
 pub(crate) mod task;
+pub(crate) mod transcript;
+pub(crate) mod transcript_ui;
 pub(crate) mod ui;
 pub(crate) mod worker;
 
@@ -56,6 +59,23 @@ pub(crate) struct OneAsrApp {
     timing_pop_from: f32,
     timing_pop_to: f32,
     timing_pop_t0: Instant,
+    // ── 文稿卡片（悬停打开 / 点击粘住）────────────────────────────────────
+    //
+    // 和「用时」卡片同一套机制。`pinned` 是唯一的差别：纯悬停的卡片上按按钮是
+    // 难受的，点一下芯片把它粘住，它就变成一个随时可点的面板。
+    /// Task id whose transcript card is open (hover or pinned).
+    transcript_card: Option<String>,
+    /// Pinned by a click: survives the pointer leaving chip and card.
+    transcript_card_pinned: bool,
+    /// Hover candidate for the open delay (id + first-hover Instant).
+    transcript_hover_since: Option<(String, Instant)>,
+    /// Leave grace before an unpinned card closes.
+    transcript_leave_since: Option<(String, Instant)>,
+    transcript_card_from: f32,
+    transcript_card_to: f32,
+    transcript_card_anim_t0: Instant,
+    /// One-shot result of the last card action (断句行数 / 重新读取的结果).
+    transcript_card_note: Option<String>,
     /// Task id whose language dropdown is open (`None` = closed).
     lang_menu: Option<String>,
     /// Settings panel: default-language dropdown open.
@@ -154,6 +174,14 @@ impl OneAsrApp {
             hover_row: None,
             timing_popover: None,
             timing_hover_since: None,
+            transcript_card: None,
+            transcript_card_pinned: false,
+            transcript_hover_since: None,
+            transcript_leave_since: None,
+            transcript_card_from: 0.0,
+            transcript_card_to: 0.0,
+            transcript_card_anim_t0: Instant::now(),
+            transcript_card_note: None,
             timing_leave_since: None,
             timing_pop_from: 0.0,
             timing_pop_to: 0.0,
@@ -250,6 +278,7 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                         path,
                         name,
                         settings,
+                        transcript,
                     } => {
                         let id_for_progress = id.clone();
                         let ptx = worker_tx.clone();
@@ -257,7 +286,7 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                         // A panic inside the pipeline must not kill the shared
                         // worker (that would strand `Processing` rows forever).
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            run_task(&path, &name, &settings, |update| {
+                            run_task(&path, &name, &settings, transcript.as_ref(), |update| {
                                 clock.note(&update);
                                 let warning = update.warning.as_ref().map(SharedString::from);
                                 let _ = ptx.send(WorkerMsg::Progress {
@@ -377,6 +406,7 @@ pub(crate) fn run_task(
     path: &std::path::Path,
     name: &str,
     settings: &Settings,
+    transcript: Option<&oneasr_core::TranscriptInput>,
     on_stage: impl FnMut(StageUpdate),
 ) -> Result<PathBuf, String> {
     // `bin/ffmpeg` is the usual app-root marker, but a system ffmpeg on PATH
@@ -386,13 +416,34 @@ pub(crate) fn run_task(
     let data_root = oneasr_core::paths::data_dir();
     // Primary deliverable: {target_dir}/{stem}.srt, or .txt when SRT output is
     // switched off (real ASR, no stubs). Runs only on the dedicated worker thread.
-    process_media_file_with_progress(path, name, settings, &data_root, on_stage)
-        .map_err(|e| e.to_string())
+    let run = match transcript {
+        Some(t) => oneasr_core::process_media_file_with_transcript_export(
+            path,
+            name,
+            t,
+            settings,
+            &data_root,
+            on_stage,
+            oneasr_core::ProcessExportOptions { words_json: None },
+        ),
+        None => process_media_file_with_progress(path, name, settings, &data_root, on_stage),
+    };
+    run.map_err(|e| e.to_string())
 }
 
 /// Per-frame paint snapshot of a list row. Owned so the children closure
 /// does not clone `Task` (path, output path, …).
 pub(crate) struct TaskRowView {
+    /// 文稿芯片上的量级（`None` = 还没挂文稿）。
+    pub(crate) transcript: Option<String>,
+    /// 字幕比文稿旧。
+    pub(crate) transcript_stale: bool,
+    /// 卡片正为这行开着。
+    pub(crate) transcript_card_open: bool,
+    /// 卡片淡入淡出进度。
+    pub(crate) transcript_card_progress: f32,
+    /// 卡片内容；没挂文稿时是 `None`。
+    pub(crate) transcript_card: Option<TranscriptCardView>,
     id: String,
     status: TaskStatus,
     has_output: bool,
@@ -406,6 +457,11 @@ pub(crate) struct TaskRowView {
     /// `6.5 倍速` chip in the timing card header: media length ÷ this run's wall
     /// clock. `None` when either side is unusable — see `realtime_factor_label`.
     rtfx_label: Option<String>,
+    /// 文稿芯片上的量级（`None` = 还没挂文稿）。
+    /// 字幕比文稿旧。
+    /// 卡片正为这行开着。
+    /// 卡片淡入淡出进度。
+    /// 卡片内容；没挂文稿时是 `None`。
     is_video: bool,
     timing: Option<TaskTiming>,
     opacity: f32,

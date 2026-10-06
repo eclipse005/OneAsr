@@ -35,7 +35,7 @@ pub(crate) use oneasr_core::{
 pub(crate) use crate::i18n::L;
 
 pub(crate) use crate::app::task::{
-    DurationState, Task, TaskStatus, accept_input_path, next_queue_seq,
+    DurationState, StagedTranscript, Task, TaskStatus, accept_input_path, next_queue_seq,
 };
 pub(crate) use crate::app::ui::metrics::*;
 pub(crate) use crate::app::ui::text::*;

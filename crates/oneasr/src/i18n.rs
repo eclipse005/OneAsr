@@ -184,6 +184,79 @@ pub mod L {
         "对齐模型下载进行中，请稍后再切换",
         "Aligner download in progress — try again later",
     );
+    /// 芯片：还没挂文稿时的样子。**词，不用图标**——图标要解码，词不用。
+    pub const TRANSCRIPT_ADD: Str = Str::new("+ 文稿", "+ transcript");
+    /// 芯片：挂上之后的量级写法，后面跟一个数字。
+    pub const TRANSCRIPT_CHIP: Str = Str::new("文稿", "text");
+    pub const TRANSCRIPT_TIP_NONE: Str = Str::new(
+        "挂一份文稿，跳过识别直接打轴；文稿的一行 = 一条字幕",
+        "Attach a transcript: skips recognition and aligns your own text — one line = one subtitle",
+    );
+    pub const TRANSCRIPT_TIP_HAS: Str = Str::new(
+        "打轴固定使用 CTC；点开可重新读取 / 智能断句 / 移除",
+        "Aligned with the CTC aligner; click to re-read, smart-break or remove",
+    );
+    pub const TRANSCRIPT_TIP_STALE: Str = Str::new(
+        "文稿改过了，字幕还是旧的——点开始重新打轴（跳过识别）",
+        "The transcript changed but the subtitle is stale — press start to re-align (skips recognition)",
+    );
+    /// 卡片：`{lines} 行 · {chars} 字`
+    pub const TRANSCRIPT_SUMMARY: Str =
+        Str::new("{lines} 行 · {chars} 字", "{lines} lines · {chars} chars");
+    /// 挂 SRT 时的一句：原时间轴被丢了。程序唯一一次对「你文件的内容」动了手脚，
+    /// 所以必须说。
+    pub const TRANSCRIPT_TIMINGS_DROPPED: Str = Str::new(
+        "已忽略原时间轴，将重新打轴",
+        "original timings ignored — re-aligning from scratch",
+    );
+    pub const TRANSCRIPT_DENSITY_OK: Str = Str::new(
+        "约 {cps} 字/秒 ✓  音频 {len}",
+        "{cps} chars/s ✓  audio {len}",
+    );
+    pub const TRANSCRIPT_DENSITY_WARN: Str = Str::new(
+        "约 {cps} 字/秒 ⚠ 文稿可能与音频不匹配",
+        "{cps} chars/s ⚠ transcript may not match the audio",
+    );
+    pub const TRANSCRIPT_BTN_BREAK: Str = Str::new("智能断句", "Smart break");
+    pub const TRANSCRIPT_BTN_REREAD: Str = Str::new("重新读取", "Re-read");
+    pub const TRANSCRIPT_BTN_REMOVE: Str = Str::new("移除", "Remove");
+    pub const TRANSCRIPT_BREAK_TIP: Str = Str::new(
+        "只拆过长的行、不动一个字；原文件不会被改动",
+        "Splits only over-long lines, changes no character; your file is never written",
+    );
+    pub const TRANSCRIPT_REREAD_TIP: Str = Str::new(
+        "丢掉暂存上的改动，重新读一遍文件",
+        "Discard staged changes, read the file again",
+    );
+    pub const TRANSCRIPT_REMOVE_TIP: Str = Str::new(
+        "这条任务回到转录模式；已写出的产物不删",
+        "Back to transcription for this row; existing output is kept",
+    );
+    /// `{n} 行` —— 智能断句之后说的，行数当场可见。
+    pub const TRANSCRIPT_BROKE: Str = Str::new("已断为 {n} 行", "now {n} lines");
+    pub const TRANSCRIPT_REREAD: Str = Str::new("已重新读取", "re-read from file");
+    pub const TRANSCRIPT_REMOVED: Str = Str::new(
+        "已移除文稿，这条任务回到转录模式",
+        "transcript removed — back to transcription",
+    );
+    pub const TRANSCRIPT_NO_FILE: Str = Str::new(
+        "这份文稿不是来自文件，没有可重新读取的来源",
+        "not from a file — nothing to re-read",
+    );
+    pub const TRANSCRIPT_UNREADABLE: Str =
+        Str::new("读不了文稿: {e}", "cannot read transcript: {e}");
+    /// 配对结果提示，成对说。
+    pub const TRANSCRIPT_PAIRED: Str = Str::new(
+        "已配对 {n} 份文稿（{files}）",
+        "{n} transcript(s) attached ({files})",
+    );
+    pub const TRANSCRIPT_UNPAIRED: Str = Str::new(
+        "{n} 份文稿没有同名音视频：{files}",
+        "{n} transcript(s) had no matching media: {files}",
+    );
+    pub const DLG_PICK_TRANSCRIPT: Str = Str::new("选择文稿", "Pick a transcript");
+    /// 没有文件来源时（粘贴/手打）在卡片上显示的名字。
+    pub const TRANSCRIPT_PASTED: Str = Str::new("粘贴的文稿", "pasted transcript");
     /// 英文侧跟术语表（`量化 quantization(int8)`）对齐，不再只写 `int8`。
     pub const QUANT: Str = Str::new("量化", "Quantization");
     pub const ALIGNER_MODEL: Str = Str::new("对齐模型", "Aligner model");
