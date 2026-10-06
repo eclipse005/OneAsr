@@ -17,7 +17,13 @@ impl QwenAsrAdapter {
             ComputeBackend::Cpu => AsrBackend::Cpu,
             ComputeBackend::Gpu => AsrBackend::Gpu,
         };
-        AsrInference::load(model_dir, backend)
+        // GPU + `ONEASR_DEVICE` → 用户指定的适配器（如独显）；spec 非法直接报错。
+        let inner = if backend == AsrBackend::Gpu {
+            AsrInference::load_on(model_dir, super::device::asr_selector_from_env()?)
+        } else {
+            AsrInference::load(model_dir, backend)
+        };
+        inner
             .map(|inner| Self { inner })
             .map_err(|e| EngineError::new(format!("{e:#}")))
     }

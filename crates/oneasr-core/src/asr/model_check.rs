@@ -99,18 +99,26 @@ pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
 
 /// Check Aligner model directory with success-path caching.
 ///
-/// The install-layout dir (`Qwen3-ForcedAligner-0.6B`) is validated against
-/// the catalog's exact sizes; custom user-picked dirs fall back to an
-/// existence + non-trivial-size check.
+/// Install-layout dirs (`omniASR-CTC-300M-v2-hf` / `Qwen3-ForcedAligner-0.6B-hf`)
+/// are validated against the catalog's exact sizes; custom user-picked dirs
+/// fall back to an existence + non-trivial-size check, accepting either
+/// aligner's file contract.
 pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {
     run_cached_model_check(ModelRole::Aligner, model_dir, || {
         match crate::model::ModelId::try_from_aligner_dir(model_dir) {
             Some(id) => check_model_dir_against_catalog(ROLE_ALIGNER, model_dir, id),
-            None => check_model_dir_inner(
-                ROLE_ALIGNER,
-                model_dir,
-                &["config.json", "tokenizer.json", "tokenizer_config.json"],
-            ),
+            None => {
+                // The CTC checkpoint carries vocab.json and no tokenizer.json.
+                if model_dir.join("vocab.json").is_file() {
+                    check_model_dir_inner(ROLE_ALIGNER, model_dir, &["config.json", "vocab.json"])
+                } else {
+                    check_model_dir_inner(
+                        ROLE_ALIGNER,
+                        model_dir,
+                        &["config.json", "tokenizer.json", "tokenizer_config.json"],
+                    )
+                }
+            }
         }
     })
 }

@@ -17,7 +17,9 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use oneasr_core::{Settings, StageClock, StageUpdate, process_media_file_with_progress};
+use oneasr_core::{
+    Settings, StageClock, StageUpdate, clamp_chunk_target_seconds, process_media_file_with_progress,
+};
 
 fn usage() -> ! {
     eprintln!(
@@ -70,7 +72,7 @@ fn main() {
 
     let mut settings = Settings {
         language,
-        chunk_target_seconds: chunk_seconds.clamp(30, 180),
+        chunk_target_seconds: clamp_chunk_target_seconds(chunk_seconds),
         backend,
         ..Settings::default()
     };

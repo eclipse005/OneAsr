@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::i18n;
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::model::{
-    ModelId, ModelKind, QWEN3_ASR_06B, default_aligner_model_dir, default_asr_model_dir,
-    resolve_model_dir,
+    ModelId, ModelKind, OMNI_ASR_CTC_300M, QWEN_ALIGN_06B, QWEN3_ASR_06B,
+    default_aligner_model_dir, default_asr_model_dir, resolve_model_dir,
 };
 use crate::paths;
 use crate::text_script::{self, TextScript};
@@ -71,9 +71,19 @@ pub struct Settings {
     /// into the config (and break a moved app).
     #[serde(default)]
     pub asr_dirs: BTreeMap<String, PathBuf>,
-    /// Qwen3-ForcedAligner directory.
+    /// Active aligner catalog id (`omniASR-CTC-300M-v2-hf` |
+    /// `Qwen3-ForcedAligner-0.6B-hf`). Empty = unset (first run): normalize
+    /// decides — CTC when its weights are present or nothing is, Qwen when
+    /// only Qwen's are — and persists the choice.
+    #[serde(default)]
+    pub aligner_model: String,
+    /// Directory loaded for the aligner (install layout or user-picked).
     #[serde(default = "default_aligner_model_dir")]
     pub aligner_model_dir: PathBuf,
+    /// Per-aligner-model directories, keyed by catalog id — same per-model
+    /// memory as [`Self::asr_dirs`]; only deliberate picks live here.
+    #[serde(default)]
+    pub aligner_dirs: BTreeMap<String, PathBuf>,
     /// `auto` | `gpu` | `cpu`
     #[serde(default = "default_backend")]
     pub backend: String,
@@ -109,6 +119,9 @@ pub struct Settings {
     /// Write a plain-text `.txt` transcript (one cue per line, no timestamps).
     #[serde(default)]
     pub output_txt: bool,
+    /// Write a karaoke `.ass`: the same cues, a colour sweep per aligned unit.
+    #[serde(default)]
+    pub output_ass: bool,
     /// Chinese output script: `simplified` (default) | `traditional`.
     /// Applies to `zh` / `yue` sources; other languages ignore it.
     #[serde(default = "default_text_script")]
@@ -196,7 +209,13 @@ impl Default for Settings {
             asr_model: default_asr_model(),
             asr_model_dir: default_asr_model_dir(),
             asr_dirs: BTreeMap::new(),
+            // 自洽：引擎 id 与目录指向同一个模型。留空会让 `selected_aligner_id()`
+            // 兜底成默认（CTC）而目录还停在别处，于是「选了 CTC 却往 Qwen 目录加载/
+            // 下载」。磁盘上「只装了 Qwen」的情况由 `load_with_report` 的兜底分支
+            // 过一遍 `normalize` 来决定，不靠这个默认值猜。
+            aligner_model: ModelId::default_aligner().as_str().to_string(),
             aligner_model_dir: default_aligner_model_dir(),
+            aligner_dirs: BTreeMap::new(),
             backend: default_backend(),
             max_new_tokens: default_max_new_tokens(),
             language: default_source_language(),
@@ -207,6 +226,7 @@ impl Default for Settings {
             save_next_to_source: default_save_next_to_source(),
             output_srt: default_output_srt(),
             output_txt: false,
+            output_ass: false,
             text_script: default_text_script(),
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
@@ -272,8 +292,20 @@ impl Settings {
         match Self::load_first_of(&candidates, &mut report) {
             Some(settings) => (settings, report),
             // 一个候选都没读到：落默认值（原因已记进 report）。
-            None => (Self::default(), report),
+            None => (Self::default_normalized(&mut report), report),
         }
+    }
+
+    /// 落默认值的三个回退分支共用的收尾。
+    ///
+    /// [`Self::default`] 自身是自洽的（引擎 id 与目录指向同一个模型），但
+    /// 「磁盘上只装了另一个引擎的权重」这种首启情况要靠 `normalize` 的在盘
+    /// 决策来配平。不在这里过一遍 normalize 的话，GUI 会拿着默认引擎的 id
+    /// 去默认目录里找权重，1.3 GB 权重也会下错目录。
+    fn default_normalized(report: &mut SettingsLoadReport) -> Self {
+        let mut s = Self::default();
+        s.normalize_with_notes(&mut report.repairs);
+        s
     }
 
     /// 按候选顺序读第一份存在的 `settings.json`；一个都没有就返回 `None`，
@@ -293,7 +325,7 @@ impl Settings {
                         }
                         Err(e) => {
                             report.parse_error = Some(e.to_string());
-                            Self::default()
+                            Self::default_normalized(report)
                         }
                     });
                 }
@@ -302,7 +334,7 @@ impl Settings {
                 Err(e) => {
                     report.read_error = Some(e.to_string());
                     report.config_path = Some(path.clone());
-                    return Some(Self::default());
+                    return Some(Self::default_normalized(report));
                 }
             }
         }
@@ -364,7 +396,7 @@ impl Settings {
             self.legacy_task_notify = None;
         }
         // At least one output format must stay enabled.
-        if !self.output_srt && !self.output_txt {
+        if !self.output_srt && !self.output_txt && !self.output_ass {
             self.output_srt = true;
             notes.push("all output formats were off -> SRT restored".into());
         }
@@ -426,9 +458,55 @@ impl Settings {
             resolve_model_dir(id.as_str()),
             notes,
         );
+
+        // Aligner reconcile — mirrors the ASR block: the catalog id decides
+        // the layout default, per-model picks survive, and a legacy
+        // single-folder config (before aligner_model/aligner_dirs existed)
+        // seeds that model's pick so a hand-picked path survives the upgrade.
+        let parsed = ModelId::try_parse_aligner(&self.aligner_model);
+        let align_id = match parsed {
+            Some(id) => id,
+            None => {
+                // Unset (first run / upgrade from a config without the
+                // field): keep CTC when its weights are on disk or nothing
+                // is — the default selection matches the default button;
+                // fall back to Qwen only when it is the one that exists.
+                let ctc = resolve_model_dir(OMNI_ASR_CTC_300M).is_dir();
+                let qwen = resolve_model_dir(QWEN_ALIGN_06B).is_dir();
+                let id = decide_default_aligner(ctc, qwen);
+                notes.push(format!("aligner model unset -> {}", id.as_str()));
+                id
+            }
+        };
+        // 老配置里那**一个**目录属于谁：目录名认得出 catalog 名就对号入座，
+        // 认不出（用户自己改过名，GUI 的目录选择器允许）就归给这次决策选中的
+        // 模型。两种都得先保住路径 —— 丢掉它等于让升级用户重新找一遍权重，
+        // 而下面那行派生赋值会无条件覆盖它。
+        //
+        // 判据是「不是**任何一个**对齐器的布局默认」而不是「不是选中那个的」：
+        // 旧版本写进配置的就是 Qwen 布局目录，那不是用户挑的路径，不该在决策
+        // 翻到别的引擎时被记成它的「专属选择」。
+        let is_layout_default = ModelId::ALIGNER_CHOICES
+            .iter()
+            .any(|m| self.aligner_model_dir == resolve_model_dir(m.as_str()));
+        if parsed.is_none()
+            && self.aligner_dirs.is_empty()
+            && !self.aligner_model_dir.as_os_str().is_empty()
+            && !is_layout_default
+        {
+            let picked = self.aligner_model_dir.clone();
+            self.remember_aligner_dir(
+                ModelId::try_from_aligner_dir(&picked).unwrap_or(align_id),
+                &picked,
+            );
+        }
+        self.aligner_model = align_id.as_str().into();
+        // Derived, never stored twice: the active model's own pick, else the
+        // install layout.
+        self.aligner_model_dir = self.aligner_dir_for(align_id);
         repair_stale_model_dir(
             &mut self.aligner_model_dir,
-            default_aligner_model_dir(),
+            resolve_model_dir(align_id.as_str()),
             notes,
         );
     }
@@ -580,6 +658,56 @@ impl Settings {
         self.asr_model_dir = self.asr_dir_for(id);
     }
 
+    // ── Aligner selection（镜像 ASR 尺寸选择的模式）────────────────────
+
+    /// Active aligner catalog id.
+    pub fn selected_aligner_id(&self) -> ModelId {
+        ModelId::parse_aligner(&self.aligner_model)
+    }
+
+    /// Directory bound to one aligner model: the folder hand-picked for it,
+    /// else the install layout. Lookups never persist.
+    pub fn aligner_dir_for(&self, id: ModelId) -> PathBuf {
+        self.aligner_dirs
+            .get(id.as_str())
+            .cloned()
+            .unwrap_or_else(|| resolve_model_dir(id.as_str()))
+    }
+
+    /// Switch active aligner model; each model keeps its own directory —
+    /// same per-model memory as the ASR size switch.
+    pub fn select_aligner_model(&mut self, id: ModelId) {
+        if id.kind() != ModelKind::Align {
+            return;
+        }
+        self.aligner_model = id.as_str().into();
+        self.aligner_model_dir = self.aligner_dir_for(id);
+    }
+
+    /// Bind a hand-picked directory to the **active** aligner model, verbatim.
+    pub fn set_aligner_dir(&mut self, dir: PathBuf) -> ModelId {
+        let id = self.selected_aligner_id();
+        self.aligner_model_dir = dir.clone();
+        self.remember_aligner_dir(id, &dir);
+        id
+    }
+
+    fn remember_aligner_dir(&mut self, id: ModelId, dir: &Path) {
+        if dir == resolve_model_dir(id.as_str()).as_path() {
+            self.aligner_dirs.remove(id.as_str());
+        } else {
+            self.aligner_dirs
+                .insert(id.as_str().to_string(), dir.to_path_buf());
+        }
+    }
+
+    /// Qwen 的对齐器输出不带标点，管线从转写文本把标点贴回词上；CTC 对齐器的
+    /// token 原生保留标点（零时长搭在前一字符上）。决定对齐阶段是否要做
+    /// 标点恢复。
+    pub fn aligner_strips_punctuation(&self) -> bool {
+        self.selected_aligner_id() == ModelId::QwenAlign06B
+    }
+
     /// Normalize in place, then persist to `settings.json`.
     pub fn save(&mut self) -> Result<PathBuf, String> {
         self.normalize();
@@ -616,12 +744,12 @@ impl Settings {
     }
 
     /// After a successful download: bind paths **only if** this id is the active
-    /// selection (or is the single Align slot). Non-selected ASR installs leave
-    /// selection alone — files already live under install-layout dirs.
+    /// selection. A non-selected install leaves the selection alone — its files
+    /// already live under install-layout dirs.
     ///
     /// Returns `true` when active settings changed (caller should re-probe).
-    /// Nothing here persists: downloads land in the directory the settings
-    /// already point at, so there is nothing new to save.
+    /// Nothing new to save: downloads land in the directory the settings already
+    /// point at, and that pick is already recorded per model.
     pub fn bind_download_if_active(&mut self, id: ModelId, model_dir: PathBuf) -> bool {
         match id.kind() {
             ModelKind::Asr => {
@@ -634,6 +762,13 @@ impl Settings {
                 true
             }
             ModelKind::Align => {
+                // 两个对齐引擎并存后，「下载的一定是当前选中那个」不再由类型
+                // 保证：非选中引擎的下载不该动当前选择的目录，也不该把它的路径
+                // 写进 `aligner_dirs`（那是「用户挑过」的记录，不是下载产物）。
+                if self.selected_aligner_id() != id {
+                    return false;
+                }
+                self.remember_aligner_dir(id, &model_dir);
                 self.aligner_model_dir = model_dir;
                 true
             }
@@ -655,6 +790,16 @@ impl Settings {
 /// install-layout default does. Every actual switch is pushed into `notes` so
 /// the GUI can log the repair instead of silently rewriting settings; no-op
 /// calls record nothing.
+/// Aligner 模型的首次运行决策：CTC 缺席而 Qwen 在场才退 Qwen，否则一律 CTC
+/// （默认按钮 = 默认选择；两者都没装时选 CTC 让下载提示指向默认引擎）。
+fn decide_default_aligner(ctc_present: bool, qwen_present: bool) -> ModelId {
+    if !ctc_present && qwen_present {
+        ModelId::QwenAlign06B
+    } else {
+        ModelId::default_aligner()
+    }
+}
+
 fn repair_stale_model_dir(current: &mut PathBuf, default: PathBuf, notes: &mut Vec<String>) {
     if !current.is_dir() && default.is_dir() {
         notes.push(format!(
@@ -806,6 +951,28 @@ mod tests {
         let dir_17 = PathBuf::from(r"C:\App\models\Qwen3-ASR-1.7B-hf");
         assert!(s.bind_download_if_active(ModelId::Qwen3Asr17B, dir_17.clone()));
         assert_eq!(s.asr_model_dir, dir_17);
+    }
+
+    /// 对齐侧与 ASR 侧同一口径：非选中引擎的下载完成不得改动当前选择的目录，
+    /// 也不得把它写进 `aligner_dirs`（那是「用户挑过」的记录，不是下载产物）。
+    #[test]
+    fn bind_aligner_download_only_when_selected() {
+        let mut s = Settings::default();
+        let ctc = ModelId::OmniAsrCtc300M;
+        assert_eq!(s.selected_aligner_id(), ctc);
+        let ctc_pick = std::env::temp_dir().join("oneasr_bind_ctc");
+        s.set_aligner_dir(ctc_pick.clone());
+
+        // 非选中引擎：目录不动，也不进 per-model 记忆。
+        let qwen_dir = std::env::temp_dir().join("oneasr_bind_qwen");
+        assert!(!s.bind_download_if_active(ModelId::QwenAlign06B, qwen_dir.clone()));
+        assert_eq!(s.aligner_model_dir, ctc_pick);
+        assert!(!s.aligner_dirs.contains_key(ModelId::QwenAlign06B.as_str()));
+
+        // 选中的那个：绑定并记住（是用户挑过的目录，不是布局默认）。
+        assert!(s.bind_download_if_active(ctc, ctc_pick.clone()));
+        assert_eq!(s.aligner_model_dir, ctc_pick);
+        assert_eq!(s.aligner_dirs.get(ctc.as_str()), Some(&ctc_pick));
     }
 
     #[test]
@@ -1127,6 +1294,108 @@ mod tests {
     }
 
     #[test]
+    fn default_aligner_decision_prefers_ctc_unless_only_qwen_exists() {
+        use ModelId::OmniAsrCtc300M as Ctc;
+        use ModelId::QwenAlign06B as Qwen;
+        assert_eq!(decide_default_aligner(false, false), Ctc);
+        assert_eq!(decide_default_aligner(true, false), Ctc);
+        assert_eq!(decide_default_aligner(true, true), Ctc);
+        // Qwen is the fallback only when it is the one that exists.
+        assert_eq!(decide_default_aligner(false, true), Qwen);
+    }
+
+    #[test]
+    fn aligner_selection_keeps_per_model_dirs() {
+        let mut s = Settings {
+            aligner_model: ModelId::OmniAsrCtc300M.as_str().into(),
+            ..Settings::default()
+        };
+        assert!(!s.aligner_strips_punctuation());
+
+        let ctc_custom =
+            std::env::temp_dir().join(format!("oneasr_ctc_dir_{}", std::process::id()));
+        let qwen_custom =
+            std::env::temp_dir().join(format!("oneasr_qwen_dir_{}", std::process::id()));
+        s.set_aligner_dir(ctc_custom.clone());
+        assert_eq!(s.selected_aligner_id(), ModelId::OmniAsrCtc300M);
+        s.select_aligner_model(ModelId::QwenAlign06B);
+        assert!(s.aligner_strips_punctuation());
+        s.set_aligner_dir(qwen_custom.clone());
+        assert_eq!(s.selected_aligner_id(), ModelId::QwenAlign06B);
+
+        // Switching back restores each model's own pick.
+        s.select_aligner_model(ModelId::OmniAsrCtc300M);
+        assert_eq!(s.aligner_model_dir, ctc_custom);
+        s.select_aligner_model(ModelId::QwenAlign06B);
+        assert_eq!(s.aligner_model_dir, qwen_custom);
+        assert_eq!(s.aligner_dirs.len(), 2);
+
+        let _ = std::fs::remove_dir_all(ctc_custom);
+        let _ = std::fs::remove_dir_all(qwen_custom);
+    }
+
+    /// 默认值必须自洽：引擎 id 与目录指向**同一个**模型。不自洽时 GUI 会点着
+    /// CTC 的按钮、把权重下进 Qwen 目录，再按 Qwen 的文件表校验并报「不完整」。
+    #[test]
+    fn default_settings_pair_the_aligner_id_with_its_dir() {
+        let s = Settings::default();
+        let id = s.selected_aligner_id();
+        assert_eq!(id, ModelId::default_aligner());
+        assert_eq!(s.aligner_model_dir, resolve_model_dir(id.as_str()));
+        // 标点恢复的分流也跟着同一个 id 走，不看目录。
+        assert_eq!(s.aligner_strips_punctuation(), id == ModelId::QwenAlign06B);
+    }
+
+    /// 老配置（无 `aligner_model` 字段）里手挑的目录必须在升级后活下来，
+    /// 两种目录名都要保：catalog 原名按号入座，自改名归给决策选中的模型。
+    /// 目录名认不出来时若直接丢路径，升级用户就得重新找一遍权重。
+    #[test]
+    fn legacy_aligner_dir_survives_normalize_under_any_folder_name() {
+        // 目录必须是**真实存在**的：不存在时 `repair_stale_model_dir` 会按设计
+        // 回退到布局默认，测的就不是「保住手挑路径」这条规则了。
+        let root =
+            std::env::temp_dir().join(format!("oneasr_aligner_legacy_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for name in [QWEN_ALIGN_06B, "my-own-aligner"] {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+
+            let mut s: Settings =
+                serde_json::from_str(r#"{"language":"zh"}"#).expect("legacy config parses");
+            s.aligner_model_dir = dir.clone();
+            s.normalize();
+
+            // 归属：认得出 catalog 名就对号，否则归给这次决策选中的模型。
+            let owner =
+                ModelId::try_from_aligner_dir(&dir).unwrap_or_else(|| s.selected_aligner_id());
+            assert_eq!(
+                s.aligner_dirs.get(owner.as_str()),
+                Some(&dir),
+                "{name} 的目录没被记进 aligner_dirs：{:?}",
+                s.aligner_dirs
+            );
+            // 选中的正是那个模型时，派生目录就是它自己挑的那个。
+            if owner == s.selected_aligner_id() {
+                assert_eq!(s.aligner_model_dir, dir);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_settings_without_aligner_fields_parse_and_decide() {
+        let json = r#"{"language": "zh"}"#;
+        let mut s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.aligner_model, "");
+        s.normalize();
+        // 决策落回配置里成为显式 catalog id，且 id 与目录仍然配平。
+        let id = ModelId::try_parse_aligner(&s.aligner_model).expect("decision persisted");
+        assert!(id.kind() == ModelKind::Align);
+        // 布局目录不是用户挑的（这台机器上没挑过），所以不占 `aligner_dirs`。
+        assert!(s.aligner_dirs.is_empty(), "{:?}", s.aligner_dirs);
+    }
+
+    #[test]
     fn repair_stale_model_dir_switches_when_default_exists() {
         let tmp = std::env::temp_dir();
         // default exists (temp_dir is a real directory)
@@ -1270,6 +1539,17 @@ mod tests {
         txt_only.normalize();
         assert!(!txt_only.output_srt);
         assert!(txt_only.output_txt);
+
+        // ASS alone is a legal choice too — it carries the same cues as the SRT.
+        let mut ass_only = Settings {
+            output_srt: false,
+            output_txt: false,
+            output_ass: true,
+            ..Settings::default()
+        };
+        ass_only.normalize();
+        assert!(ass_only.output_ass, "ASS-only must survive normalization");
+        assert!(!ass_only.output_srt);
     }
 
     #[test]

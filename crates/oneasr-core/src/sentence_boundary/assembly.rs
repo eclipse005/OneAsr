@@ -1,7 +1,8 @@
 //! Assembling finished source sentences into exported text (SRT / TXT).
 
 use crate::sentence_boundary::WordTokenDto;
-use crate::subtitle::srt::{SrtCue, to_srt_from_cues};
+use crate::subtitle::srt::to_srt_from_cues;
+use crate::timeline::Cue;
 
 use super::types::{
     BoundaryDecision, BoundaryDecisionKind, MicroChunk, SourceSentence, SourceSentenceStep2,
@@ -15,7 +16,7 @@ pub fn source_sentences_to_srt(step2: &SourceSentenceStep2) -> String {
     let cues = step2
         .translation_sentences
         .iter()
-        .map(|sentence| SrtCue {
+        .map(|sentence| Cue {
             index: sentence.sentence_id,
             start_ms: sentence.start_ms,
             end_ms: sentence.end_ms,

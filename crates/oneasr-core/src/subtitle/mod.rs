@@ -5,6 +5,7 @@
 //! output but never **add** to it (see `beautify`).
 
 pub mod alignment;
+pub mod ass;
 pub mod beautify;
 pub mod segmenter;
 pub mod srt;

@@ -132,6 +132,8 @@ pub(super) struct SettingsFormState {
     pub(super) asr_base_id: ModelId,
     /// 当前档位是否为 int8 量化变体（量化按钮的选中态）。
     pub(super) asr_quant: bool,
+    /// 当前对齐模型（CTC / Qwen 按钮的选中态）。
+    pub(super) align_base_id: ModelId,
     pub(super) model: String,
     pub(super) model_tip: String,
     pub(super) aligner: String,
@@ -141,6 +143,7 @@ pub(super) struct SettingsFormState {
     pub(super) save_next: bool,
     pub(super) output_srt: bool,
     pub(super) output_txt: bool,
+    pub(super) output_ass: bool,
     pub(super) text_script: TextScript,
     pub(super) vocal_sep: bool,
     pub(super) sound: bool,
@@ -157,6 +160,10 @@ pub(super) struct SettingsFormState {
     pub(super) asr_dl_busy: bool,
     pub(super) asr_size_locked: bool,
     pub(super) align_dl_busy: bool,
+    /// 对齐引擎芯片的锁定态：按 **kind** 判定（对齐槽位上有任何下载就锁），
+    /// 与 `asr_size_locked` 同一口径。`align_dl_busy` 是「当前所选那个模型在
+    /// 下」，两者不能混用——写死 Qwen id 时 CTC 下载会让芯片看起来可点。
+    pub(super) align_locked: bool,
 }
 
 impl OneAsrApp {
@@ -170,6 +177,7 @@ impl OneAsrApp {
         let asr_id = self.settings.selected_asr_id();
         let asr_base_id = asr_id.asr_base();
         let asr_quant = asr_id.is_quantized();
+        let align_base_id = self.settings.selected_aligner_id();
         let model = self.settings.asr_model_dir.display().to_string();
         let model_tip = model.clone();
         let aligner = self.settings.aligner_model_dir.display().to_string();
@@ -179,6 +187,7 @@ impl OneAsrApp {
         let save_next = self.settings.save_next_to_source;
         let output_srt = self.settings.output_srt;
         let output_txt = self.settings.output_txt;
+        let output_ass = self.settings.output_ass;
         let text_script = self.settings.text_script_choice();
         let vocal_sep = self.settings.vocal_separation;
         let sound = self.settings.sound;
@@ -197,10 +206,13 @@ impl OneAsrApp {
         let align_ready = self.align_ready;
         // Progress is keyed by model id — never show another size’s snapshot here.
         let asr_dl = self.progress_for(asr_id).cloned();
-        let align_dl = self.progress_for(ModelId::QwenAlign06B).cloned();
+        // 对齐侧同理：跟着**所选**引擎取，写死 Qwen 的话 CTC 下载会没有进度条、
+        // 没有取消入口。
+        let align_dl = self.progress_for(align_base_id).cloned();
         let asr_dl_busy = self.download_busy(asr_id);
         let asr_size_locked = self.download_kind_busy(ModelKind::Asr);
-        let align_dl_busy = self.download_busy(ModelId::QwenAlign06B);
+        let align_dl_busy = self.download_busy(align_base_id);
+        let align_locked = self.download_kind_busy(ModelKind::Align);
         SettingsFormState {
             backend,
             language,
@@ -209,6 +221,7 @@ impl OneAsrApp {
             chunk_target,
             asr_base_id,
             asr_quant,
+            align_base_id,
             model,
             model_tip,
             aligner,
@@ -218,6 +231,7 @@ impl OneAsrApp {
             save_next,
             output_srt,
             output_txt,
+            output_ass,
             text_script,
             vocal_sep,
             sound,
@@ -234,6 +248,7 @@ impl OneAsrApp {
             asr_dl_busy,
             asr_size_locked,
             align_dl_busy,
+            align_locked,
         }
     }
 }

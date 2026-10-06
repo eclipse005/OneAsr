@@ -44,13 +44,9 @@ use crate::i18n::{self, UiLang, t};
 use crate::lang::{to_lang_key, to_qwen_language_label};
 use crate::media::{MediaError, convert_to_16k_mono_wav, slice_wav, wav_duration_sec};
 use crate::paths::media_stem;
-use crate::sentence_boundary::{
-    SentenceBoundaryRequest, WordTokenDto, build_source_sentences_from_words,
-    source_sentences_to_srt, source_sentences_to_txt,
-};
 use crate::settings::Settings;
 use crate::subtitle::segmenter::{WordToken, normalize_word_tokens};
-use crate::text_script;
+use crate::timeline::{self, RenderOptions, Timeline};
 use crate::vad;
 
 #[derive(Debug)]
@@ -351,10 +347,6 @@ fn clean_asr_text(raw: &str) -> String {
         }
     }
     text.trim_matches(['<', '>']).trim().to_string()
-}
-
-fn round_millis(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
 }
 
 /// One non-empty ASR segment; times are on the global timeline (seconds).
@@ -805,11 +797,7 @@ impl<'a> Pipeline<'a> {
                 ));
                 let word = seg.text.trim();
                 if !word.is_empty() {
-                    segment_words.push(WordToken {
-                        start: round_millis(seg.start_sec),
-                        end: round_millis(seg.end_sec.max(seg.start_sec)),
-                        word: word.to_string(),
-                    });
+                    segment_words.push(timeline::place_whole(word, seg.start_sec, seg.end_sec));
                 }
             } else {
                 let chunk_tmp = conv.chunk_tmp();
@@ -854,16 +842,22 @@ impl<'a> Pipeline<'a> {
                     if word.is_empty() {
                         continue;
                     }
-                    segment_words.push(WordToken {
-                        start: round_millis(seg.start_sec + start_sec.max(0.0)),
-                        end: round_millis(seg.start_sec + end_sec.max(start_sec)),
-                        word: word.to_string(),
-                    });
+                    segment_words.push(timeline::place_aligned(
+                        word,
+                        seg.start_sec,
+                        start_sec,
+                        end_sec,
+                    ));
                 }
             }
 
-            // Qwen aligner strips punctuation — restore from ASR transcript.
-            let restored = attach_transcript_punctuation(&seg.text, &segment_words);
+            // Qwen 对齐器剥离标点 —— 从 ASR 转写把标点贴回词上；CTC 对齐器的
+            // token 原生携带标点（零时长搭在前一字符上），直通即可。
+            let restored = if self.settings.aligner_strips_punctuation() {
+                attach_transcript_punctuation(&seg.text, &segment_words)
+            } else {
+                segment_words
+            };
             all_words.extend(restored);
         }
 
@@ -872,7 +866,14 @@ impl<'a> Pipeline<'a> {
 
     // ── Stage 5: sentence boundary + SRT write + side exports ────────────
 
-    /// Normalize tokens, run sentence boundary detection, write SRT + JSON.
+    /// Normalize tokens, hand the measured timeline to the presentation phase,
+    /// write the subtitle and the timeline it came from.
+    ///
+    /// The two phases meet here and nowhere else: everything before this point
+    /// *measured* (two models, once), everything [`timeline::render`] does after
+    /// it *presents* (pure, re-runnable). Writing the timeline next to the
+    /// subtitle is what makes that split usable — without the file, the split
+    /// is only a comment.
     fn stage_export(
         &self,
         input: &Path,
@@ -889,42 +890,37 @@ impl<'a> Pipeline<'a> {
             return Err(AsrError::EmptyAlignment);
         }
 
-        let word_dtos: Vec<WordTokenDto> = words
-            .iter()
-            .map(|w| WordTokenDto {
-                start: w.start,
-                end: w.end,
-                word: w.word.clone(),
-            })
-            .collect();
-
         let source_lang_key = to_lang_key(&self.settings.language);
-        let mut step2 = build_source_sentences_from_words(SentenceBoundaryRequest {
-            task_id: stem.clone(),
-            media_path: media_name.to_string(),
-            source_lang: source_lang_key.clone(),
-            subtitle_length_preset: self.settings.subtitle_length_preset.clone(),
-            words: word_dtos,
-            vad_speech_segments: speech_segments,
-        })
+        let measured = Timeline::from_words(
+            media_name,
+            source_lang_key.clone(),
+            self.settings.subtitle_length_preset.clone(),
+            speech_segments,
+            words.clone(),
+        );
+        let rendered = timeline::render(
+            &measured,
+            &RenderOptions {
+                preset: None,
+                // Chinese output script (zh / yue only). Timing fields are
+                // untouched: conversion rewrites cue text only, after alignment
+                // and segmentation.
+                script: self
+                    .settings
+                    .text_script_for(&source_lang_key)
+                    .unwrap_or(crate::text_script::TextScript::Original),
+                srt: self.settings.output_srt,
+                txt: self.settings.output_txt,
+                ass: self.settings.output_ass,
+            },
+        )
         .map_err(AsrError::Other)?;
-
-        // Chinese output script (zh / yue only). Timing fields are untouched:
-        // conversion rewrites cue text only, after alignment and segmentation.
-        if let Some(script) = self.settings.text_script_for(&source_lang_key) {
-            text_script::convert_sentences(&mut step2, script);
-        }
-
-        let srt_body = self
-            .settings
-            .output_srt
-            .then(|| source_sentences_to_srt(&step2));
-        let txt_body = self
-            .settings
-            .output_txt
-            .then(|| source_sentences_to_txt(&step2));
+        let srt_body = rendered.srt;
+        let txt_body = rendered.txt;
+        let ass_body = rendered.ass;
         if srt_body.as_deref().is_some_and(|b| b.trim().is_empty())
             || txt_body.as_deref().is_some_and(|b| b.trim().is_empty())
+            || ass_body.as_deref().is_some_and(|b| b.trim().is_empty())
         {
             return Err(AsrError::EmptySentenceBoundary);
         }
@@ -951,8 +947,32 @@ impl<'a> Pipeline<'a> {
                 primary = Some(path);
             }
         }
+        if let Some(body) = ass_body.as_deref() {
+            let path = write_export_file(&target_dir, &fallback_dir, &stem, "ass", body)?;
+            if primary.is_none() {
+                primary = Some(path);
+            }
+        }
         let primary =
             primary.ok_or_else(|| AsrError::Other(t(i18n::ERR_NO_OUTPUT_FORMAT).into()))?;
+
+        // The measured timeline, beside the subtitle it produced. Best-effort
+        // like the words dump: a timeline that could not be written must not
+        // fail a run whose subtitle is already on disk.
+        match serde_json::to_string_pretty(&measured) {
+            Ok(body) => {
+                match write_export_file(&target_dir, &fallback_dir, &stem, "timeline.json", &body) {
+                    Ok(path) => trace_log(format!("timeline={}", path.display())),
+                    Err(e) => {
+                        eprintln!("warning: timeline write failed (SRT still OK): {e}");
+                        trace_log(format!("timeline write failed (non-fatal): {e}"));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: timeline serialize failed (SRT still OK): {e}");
+            }
+        }
 
         if let Some(words_path) = export.words_json.as_ref() {
             match write_words_json(words_path, &stem, media_name, &source_lang_key, &words) {

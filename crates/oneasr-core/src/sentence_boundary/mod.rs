@@ -46,6 +46,16 @@ pub use types::{
     BoundaryDecisionKind, SentenceBoundaryRequest, SourceSentence,
     SourceSentenceStep2 as SourceSentences,
 };
+// The karaoke renderer has to place a hard space exactly where the cue text has
+// a space, so it reads the same decision `join_words` is made of. Exposed
+// crate-wide rather than public: it is an answer about *these* words, not a
+// promise to anyone outside.
+pub(crate) use util::spacing_pieces;
+// Test-only: the karaoke renderer's fixture builds the token list the aligners
+// would hand over, which means asking the same question about the same scripts
+// that the joiner asks. Nothing outside a test needs the answer.
+#[cfg(test)]
+pub(crate) use util::is_no_space_script;
 
 /// Word token with timestamps (same shape as VoxTrans `WordTokenDto`).
 #[derive(Debug, Clone, Deserialize, Serialize)]

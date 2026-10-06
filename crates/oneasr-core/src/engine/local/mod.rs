@@ -10,7 +10,9 @@
 
 mod aligner;
 mod backend;
+mod ctc_aligner;
 mod demucs;
+mod device;
 mod provider;
 mod qwen_asr;
 #[cfg(test)]

@@ -1,14 +1,20 @@
 //! Adapter and backend-policy tests.
 
 use super::backend::{ComputeBackend, is_forced_gpu};
-use super::demucs::{DemucsSeparatorAdapter, separator_backend};
+use super::demucs::DemucsSeparatorAdapter;
 use super::provider::LocalEngineProvider;
 use crate::settings::Settings;
+use demucs_core::Backend;
+use demucs_core::gpu::DeviceSelector;
 
 #[test]
-fn separator_backend_follows_compute() {
-    assert_eq!(separator_backend(ComputeBackend::Cpu).tag(), "cpu");
-    assert_eq!(separator_backend(ComputeBackend::Gpu).tag(), "gpu:auto");
+fn demucs_backend_tag_follows_compute_and_selector() {
+    assert_eq!(Backend::Cpu.tag(), "cpu");
+    assert_eq!(Backend::Gpu(DeviceSelector::Auto).tag(), "gpu:auto");
+    assert_eq!(
+        Backend::Gpu(DeviceSelector::Name("nvidia".into())).tag(),
+        "gpu:named"
+    );
     assert!(is_forced_gpu("gpu"));
     assert!(is_forced_gpu(" GPU "));
     assert!(!is_forced_gpu("auto"));

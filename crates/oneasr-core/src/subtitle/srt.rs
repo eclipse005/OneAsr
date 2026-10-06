@@ -1,15 +1,21 @@
-//! The SRT cue model: overlap normalization and serialization to `.srt`.
+//! `.srt` serialization.
+//!
+//! The cue type and every rule about a cue's time live in [`crate::timeline`] —
+//! this module is only the text cleanup an SRT block needs and the file's
+//! syntax.
 
-#[derive(Debug, Clone)]
-pub struct SrtCue {
-    pub index: usize,
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub text: String,
-}
+use crate::timeline::{Cue, enforce_monotonic};
 
-pub fn normalize_cues(cues: &[SrtCue]) -> Vec<SrtCue> {
-    let mut normalized: Vec<SrtCue> = cues
+pub use crate::timeline::Cue as SrtCue;
+
+/// Tidy the text of each cue for an SRT block, then put the list in the order
+/// the file needs and make it monotonic.
+///
+/// Only the text is this module's business: line endings, blank lines (one
+/// would terminate the cue early), trimmed line ends, and a trimmed block. The
+/// times are sorted and then handed to [`enforce_monotonic`], which owns them.
+pub fn normalize_cues(cues: &[Cue]) -> Vec<Cue> {
+    let mut normalized: Vec<Cue> = cues
         .iter()
         .map(|cue| {
             let text = cue.text.replace("\r\n", "\n");
@@ -23,7 +29,7 @@ pub fn normalize_cues(cues: &[SrtCue]) -> Vec<SrtCue> {
                 .join("\n");
             let start_ms = cue.start_ms;
             let end_ms = cue.end_ms.max(start_ms);
-            SrtCue {
+            Cue {
                 index: cue.index,
                 start_ms,
                 end_ms,
@@ -36,24 +42,12 @@ pub fn normalize_cues(cues: &[SrtCue]) -> Vec<SrtCue> {
     for (idx, cue) in normalized.iter_mut().enumerate() {
         cue.index = idx + 1;
     }
-    // Keep the timeline monotonic: give zero-length cues a 1ms minimum, then
-    // clamp each cue's end to the next cue's start (aligner jitter can overlap).
-    for i in 0..normalized.len() {
-        if normalized[i].end_ms <= normalized[i].start_ms {
-            normalized[i].end_ms = normalized[i].start_ms.saturating_add(1);
-        }
-        if i + 1 < normalized.len() {
-            let next_start = normalized[i + 1].start_ms;
-            if normalized[i].end_ms > next_start {
-                normalized[i].end_ms = next_start.max(normalized[i].start_ms);
-            }
-        }
-    }
+    enforce_monotonic(&mut normalized);
 
     normalized
 }
 
-pub fn to_srt_from_cues(cues: &[SrtCue]) -> String {
+pub fn to_srt_from_cues(cues: &[Cue]) -> String {
     let normalized = normalize_cues(cues);
     if normalized.is_empty() {
         return String::new();
@@ -125,9 +119,12 @@ mod tests {
     }
 
     #[test]
-    fn normalize_gives_zero_length_cues_a_minimum() {
+    fn normalize_leaves_a_collapsed_cue_collapsed() {
+        // No minimum-duration floor: 1 ms is not showable either, so padding a
+        // zero-length cue would only put a number in the file that the audio
+        // does not support.
         let out = normalize_cues(&[cue(1, 1000, 1000, "a")]);
-        assert_eq!(out[0].end_ms, 1001);
+        assert_eq!(out[0].end_ms, 1000);
     }
 
     #[test]
