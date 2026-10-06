@@ -430,10 +430,27 @@ fn cmd_render(args: &[String]) -> Result<(), i32> {
         Some(raw) => oneasr_core::TextScript::from_id(&raw),
         None => oneasr_core::TextScript::Original,
     };
+    // `--transcript` switches the boundary source: the transcript's own lines
+    // become the cues. Re-presenting an aligned transcript therefore needs no
+    // audio, no model and no re-alignment.
+    let transcript = match arg(args, "--transcript") {
+        None => None,
+        Some(path) => {
+            let path = PathBuf::from(path);
+            match oneasr_core::transcript::read_transcript(&path) {
+                Ok(t) => Some(t.text),
+                Err(e) => {
+                    eprintln!("{}", i18n::cli_transcript_read_failed(&e));
+                    return Err(1);
+                }
+            }
+        }
+    };
     let rendered = oneasr_core::timeline::render(
         &measured,
         &oneasr_core::RenderOptions {
             preset,
+            transcript,
             script,
             srt: want_srt,
             txt: want_txt,

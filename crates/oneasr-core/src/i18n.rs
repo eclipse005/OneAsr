@@ -591,6 +591,8 @@ asr-chunk options:
 render options:
   --timeline <path>        Measured timeline written by transcribe (required)
   --output <dir>           Where to write  (default: the timeline's own directory)
+  --transcript <path>      Re-present with THIS transcript's line breaks instead of
+                           the layout DP's. Reads a .txt / .srt, ignores its timings
   --preset <id>            Segment length: short|standard|loose
                            (default: the one the timeline was measured with)
   --script <simplified|traditional>
@@ -654,6 +656,8 @@ asr-chunk 选项：
 render 选项：
   --timeline <路径>        transcribe 写出的已测时间轴（必填）
   --output <目录>          输出目录（默认与时间轴同目录）
+  --transcript <路径>      改用这份文稿自己的分行，而不是排版 DP 的结果。
+                           读 .txt / .srt，忽略它原有的时间轴
   --preset <id>            分段时长：short|standard|loose
                            （默认沿用测量时的那个）
   --script <simplified|traditional>
@@ -711,6 +715,14 @@ pub fn cli_preset_unknown(raw: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("未知的分段时长：{raw}（可选 short | standard | loose）"),
         UiLang::En => format!("Unknown segment length: {raw} (choose short | standard | loose)"),
+    }
+}
+
+/// `读不了文稿: {e}` / `cannot read transcript: {e}`。
+pub fn cli_transcript_read_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("读不了文稿: {e}"),
+        UiLang::En => format!("cannot read transcript: {e}"),
     }
 }
 

@@ -44,8 +44,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::sentence_boundary::{
-    SentenceBoundaryRequest, SourceSentences, WordTokenDto, build_source_sentences_from_words,
-    source_sentences_to_srt, source_sentences_to_txt,
+    SentenceBoundaryRequest, SourceSentences, WordTokenDto, build_sentences_from_transcript,
+    build_source_sentences_from_words, source_sentences_to_srt, source_sentences_to_txt,
 };
 use crate::subtitle::ass::KaraokeStyle;
 use crate::subtitle::segmenter::WordToken;
@@ -243,7 +243,14 @@ pub struct RenderOptions {
     /// Overrides the timeline's own preset when set.
     pub preset: Option<String>,
     /// Chinese output script. `Original` leaves the recognised glyphs alone.
+    ///
+    /// Ignored when `transcript` is set — see [`Self::transcript`].
     pub script: TextScript,
+    /// The transcript, when this subtitle was aligned to one instead of
+    /// transcribed. Its **line breaks are the cue boundaries**; the layout DP
+    /// does not run, because re-deriving the breaks would undo a decision the
+    /// author just made on purpose.
+    pub transcript: Option<String>,
     /// `None` = do not produce this format.
     pub srt: bool,
     pub txt: bool,
@@ -262,10 +269,15 @@ pub struct Rendered {
 /// Phase B: the measured timeline plus a choice of presentation, and nothing
 /// else. No clock, no settings file, no model, no disk — so the same call twice
 /// gives the same bytes, and a caller can re-present without re-measuring.
+///
+/// A `transcript` switches the boundary source: the transcript's own lines
+/// become the cues, and `script` is ignored. That second half is deliberate
+/// rather than a convention — "机器不碰你的字" has to hold even for a caller
+/// that forgets, so it is enforced here instead of trusted.
 pub fn render(timeline: &Timeline, opts: &RenderOptions) -> Result<Rendered, String> {
     timeline.ensure_supported()?;
     let stem = crate::paths::media_stem(std::path::Path::new(&timeline.media));
-    let mut sentences = build_source_sentences_from_words(SentenceBoundaryRequest {
+    let request = SentenceBoundaryRequest {
         task_id: stem,
         media_path: timeline.media.clone(),
         source_lang: timeline.lang.clone(),
@@ -283,11 +295,17 @@ pub fn render(timeline: &Timeline, opts: &RenderOptions) -> Result<Rendered, Str
             })
             .collect(),
         vad_speech_segments: timeline.vad_speech_segments.clone(),
-    })?;
-
-    // Chinese script conversion rewrites cue text only, after alignment and
-    // segmentation, and only when asked for.
-    text_script::convert_sentences(&mut sentences, opts.script);
+    };
+    let sentences = match opts.transcript.as_deref() {
+        Some(text) => build_sentences_from_transcript(request, text)?,
+        None => {
+            let mut s = build_source_sentences_from_words(request)?;
+            // Script conversion rewrites cue text only, after alignment and
+            // segmentation, and only for a transcript the models produced.
+            text_script::convert_sentences(&mut s, opts.script);
+            s
+        }
+    };
 
     Ok(Rendered {
         srt: opts.srt.then(|| source_sentences_to_srt(&sentences)),
@@ -327,6 +345,7 @@ mod tests {
     fn all_options() -> RenderOptions {
         RenderOptions {
             preset: None,
+            transcript: None,
             script: TextScript::Original,
             srt: true,
             txt: true,
