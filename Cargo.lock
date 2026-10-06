@@ -1595,7 +1595,7 @@ dependencies = [
 [[package]]
 name = "ctc-forced-aligner-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=290d87651144037ff8819eb5cfb6bf2aaccbee9d#290d87651144037ff8819eb5cfb6bf2aaccbee9d"
+source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=c174c6a0de7f1d9b6662cfae219ae14cf02c5079#c174c6a0de7f1d9b6662cfae219ae14cf02c5079"
 dependencies = [
  "anyhow",
  "bytemuck",
