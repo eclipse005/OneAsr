@@ -1734,3 +1734,182 @@ fn has_split_digit_counter(text: &str) -> bool {
         w[0].is_ascii_digit() && w[1] == ' ' && w[2].is_ascii_digit() && COUNTERS.contains(&w[3])
     })
 }
+
+// ── 文稿分行：文稿的边界就是字幕的边界 ─────────────────────────────
+
+/// 对齐器给出的 token 列表：不带空格的书写系统逐字，带空格的按词，标点零时长
+/// 搭在前一单元上。这和两个对齐器实际交出来的东西是同一件事，所以这个夹具必须
+/// 照实构造——把一整句中文做成一个 token，会让「一行 = 一条」看起来对、其实没测。
+fn tokens_of(text: &str) -> Vec<WordTokenDto> {
+    use super::is_no_space_script;
+    let mut out: Vec<WordTokenDto> = Vec::new();
+    let mut latin = String::new();
+    let flush_latin = |out: &mut Vec<WordTokenDto>, latin: &mut String| {
+        if !latin.is_empty() {
+            out.push(w(out.len(), latin));
+            latin.clear();
+        }
+    };
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            flush_latin(&mut out, &mut latin);
+        } else if is_no_space_script(ch) {
+            flush_latin(&mut out, &mut latin);
+            out.push(w(out.len(), &ch.to_string()));
+        } else if ch.is_ascii_punctuation() {
+            // 标点零时长搭在前一单元上。词还在缓冲里就跟着词走，否则会挂到上一个
+            // 已经落地的词上——`here.` 会变成 `line.`，测试就在骗自己。
+            if latin.is_empty() {
+                if let Some(last) = out.last_mut() {
+                    last.word.push(ch);
+                    last.end = last.start;
+                }
+            } else {
+                latin.push(ch);
+            }
+        } else {
+            latin.push(ch);
+        }
+    }
+    flush_latin(&mut out, &mut latin);
+    out
+}
+
+fn transcript_request(words: Vec<WordTokenDto>, lang: &str) -> super::SentenceBoundaryRequest {
+    super::SentenceBoundaryRequest {
+        task_id: "t".into(),
+        media_path: "clip.mp4".into(),
+        source_lang: lang.into(),
+        subtitle_length_preset: "standard".into(),
+        words,
+        // 文稿模式不跑排版 DP，VAD 只用来填 micro chunk 的间隔字段。
+        vad_speech_segments: vec![(0.0, 600.0)],
+    }
+}
+
+fn letters(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+fn words_of(out: &super::SourceSentences, s: &super::SourceSentence) -> Vec<String> {
+    out.words[s.word_start..=s.word_end]
+        .iter()
+        .map(|w| w.word.clone())
+        .collect()
+}
+
+#[test]
+fn one_transcript_line_becomes_one_cue() {
+    let text = "第一行在这里。\n第二行在那里。";
+    let out =
+        super::build_sentences_from_transcript(transcript_request(tokens_of(text), "zh"), text)
+            .expect("sentences");
+    let cues: Vec<&str> = out
+        .translation_sentences
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(cues, ["第一行在这里。", "第二行在那里。"], "一行 = 一条");
+}
+
+#[test]
+fn cue_text_keeps_every_character_the_user_typed() {
+    // 空格由 `join_words` 按书写系统决定（那是渲染 cue 时同一份规则），但**一个字
+    // 都不能少或多**——这条是这个功能存在的理由。
+    let text = "最近看到一些关于AI与语音识别的负面评价。\n尤其是原版Whisper，表现并不像可靠。";
+    let out =
+        super::build_sentences_from_transcript(transcript_request(tokens_of(text), "zh"), text)
+            .expect("sentences");
+    let shown: String = out
+        .translation_sentences
+        .iter()
+        .flat_map(|s| s.text.chars())
+        .collect();
+    assert_eq!(letters(&shown), letters(text));
+}
+
+#[test]
+fn every_token_lands_in_exactly_one_cue_in_order() {
+    // 这条是整段的地基断言：词既不能重（同一个字出现两次）也不能漏（无声少字）。
+    for text in [
+        "第一行。\n第二行。\n第三行。",
+        "用 Whisper 做对齐，\n第二行有 Cap V。",
+        "没有空行的超长一行，但下面还有一行。",
+    ] {
+        let words = tokens_of(text);
+        let out =
+            super::build_sentences_from_transcript(transcript_request(words.clone(), "zh"), text)
+                .expect("sentences");
+        let covered: Vec<usize> = out
+            .translation_sentences
+            .iter()
+            .flat_map(|s| s.word_start..=s.word_end)
+            .collect();
+        assert_eq!(
+            covered,
+            (0..words.len()).collect::<Vec<_>>(),
+            "token 必须不重不漏：{text:?}"
+        );
+    }
+}
+
+#[test]
+fn a_token_straddling_a_line_end_goes_to_the_earlier_line() {
+    // 一个词跨过了行尾预算，就整个算给前一行：劈成两半会得到两个半截时间戳。
+    // 「Whisper」有 7 个字符，前一行只剩 2 个字的预算 —— 整词跟过去，那一行变 9 字。
+    let text = "甲甲Whisper在这里。\n乙乙乙。";
+    let out =
+        super::build_sentences_from_transcript(transcript_request(tokens_of(text), "zh"), text)
+            .expect("sentences");
+    let first = &out.translation_sentences[0];
+    assert!(
+        words_of(&out, first).iter().any(|w| w == "Whisper"),
+        "跨界的那半个词必须跟着前一行走，实际 {:?}",
+        words_of(&out, first)
+    );
+    assert_eq!(first.text, "甲甲Whisper在这里。", "文字不受影响");
+}
+
+#[test]
+fn words_the_transcript_does_not_cover_are_not_dropped() {
+    // 文稿被改短、或标点被规范化掉时，多出来的词并进最后一条——丢掉不会报错，
+    // 只会让字幕无声少几个字。
+    let words = tokens_of("第一行。第二行。第三行。");
+    let out = super::build_sentences_from_transcript(
+        transcript_request(words, "zh"),
+        "第一行。\n第二行。",
+    )
+    .expect("sentences");
+    let last = out.translation_sentences.last().unwrap();
+    assert_eq!(last.word_end, out.words.len() - 1, "剩下的词并进最后一条");
+}
+
+#[test]
+fn cue_times_come_from_the_words_at_each_end() {
+    // 契约的另一半：cue 的时间是首末词的时间，不是自己算的。
+    let text = "甲甲甲。\n乙乙乙。";
+    let words = tokens_of(text);
+    let out = super::build_sentences_from_transcript(transcript_request(words.clone(), "zh"), text)
+        .expect("sentences");
+    for s in &out.translation_sentences {
+        assert_eq!(
+            s.start_ms,
+            (words[s.word_start].start * 1000.0).round() as u64
+        );
+        assert_eq!(s.end_ms, (words[s.word_end].end * 1000.0).round() as u64);
+    }
+}
+
+#[test]
+fn latin_transcript_lines_keep_their_word_spacing() {
+    let text = "First line here.\nSecond line there.";
+    let out =
+        super::build_sentences_from_transcript(transcript_request(tokens_of(text), "en"), text)
+            .expect("sentences");
+    let cues: Vec<&str> = out
+        .translation_sentences
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(cues, ["First line here.", "Second line there."]);
+}

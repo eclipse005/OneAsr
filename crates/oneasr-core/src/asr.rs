@@ -902,6 +902,9 @@ impl<'a> Pipeline<'a> {
             &measured,
             &RenderOptions {
                 preset: None,
+                // A transcription run has no transcript: the models produced the
+                // text, so the layout DP owns the line breaks.
+                transcript: None,
                 // Chinese output script (zh / yue only). Timing fields are
                 // untouched: conversion rewrites cue text only, after alignment
                 // and segmentation.
