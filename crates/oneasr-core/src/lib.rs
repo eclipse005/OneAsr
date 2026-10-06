@@ -26,10 +26,11 @@ pub mod vad;
 
 pub use asr::{
     AsrStage, ProcessExportOptions, StageClock, StageTiming, StageUpdate, TaskTiming,
-    check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir, format_process_ms,
-    invalidate_all_model_checks, invalidate_model_check, is_model_ready,
+    TranscriptInput, check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir,
+    format_process_ms, invalidate_all_model_checks, invalidate_model_check, is_model_ready,
     process_media_file_with_export, process_media_file_with_progress,
-    process_media_file_with_provider,
+    process_media_file_with_provider, process_media_file_with_transcript,
+    process_media_file_with_transcript_export,
 };
 pub use engine::{
     AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider, SeparateRequest,
