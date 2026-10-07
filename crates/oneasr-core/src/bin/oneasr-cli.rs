@@ -203,6 +203,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let t0 = Instant::now();
     let export = ProcessExportOptions {
         words_json: words_json.clone(),
+        timeline_json: true,
     };
     let result = process_media_file_with_export(
         &input_path,
@@ -691,7 +692,10 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
             }
             eprintln!("{}", i18n::cli_stage(&update.label(i18n::ui_lang())));
         },
-        ProcessExportOptions { words_json: None },
+        ProcessExportOptions {
+            words_json: None,
+            timeline_json: true,
+        },
     );
     let timing = clock.finish();
     match result {

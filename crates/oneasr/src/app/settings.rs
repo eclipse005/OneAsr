@@ -205,8 +205,8 @@ impl OneAsrApp {
     }
 
     pub(crate) fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        // 文稿按文件名配给同名的媒体：音视频建任务，文本挂上去。配不上的**要
-        // 报出来**——用户挑了一堆文件，最后靠数行数才知道哪份稿子没生效。
+        // 单媒体 + 单文稿直接配对；多文件时文稿按文件名配给同名媒体。配不上的
+        // **要报出来**——用户挑了一堆文件，最后靠数行数才知道哪份稿子没生效。
         let pairing = crate::app::transcript::pair_picked(&paths);
         let default_lang = self.settings.language.clone();
         let default_sep = self.settings.vocal_separation;
@@ -274,24 +274,13 @@ impl OneAsrApp {
         if self.tasks.len() > before {
             self.play_ui(sfx::Sfx::Click);
         }
-        // 配对结果**一条说两件事**：成了几个、谁没配上。没配上的那份文稿不会
-        // 建出任务，名字必须出现在提示里，否则它就凭空消失了。
+        // 已配对的文稿只提示数量；未配对的文稿不会建出任务，名字必须保留，
+        // 否则用户不知道哪份文件没有匹配成功。
         if !transcripts.is_empty() {
-            let names: Vec<String> = transcripts
-                .iter()
-                .map(|(text, _)| {
-                    text.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| text.display().to_string())
-                })
-                .collect();
             self.flash_hint(
                 expand(
                     t(L::TRANSCRIPT_PAIRED),
-                    &[
-                        ("n", &transcripts.len().to_string()),
-                        ("files", &names.join("、")),
-                    ],
+                    &[("n", &transcripts.len().to_string())],
                 ),
                 cx,
             );

@@ -77,6 +77,18 @@ impl OneAsrApp {
     }
 
     pub(crate) fn start_all(&mut self, cx: &mut Context<Self>) {
+        if self.tasks.iter().any(|task| {
+            !self.exiting.contains_key(&task.id)
+                && matches!(task.status, TaskStatus::Pending | TaskStatus::Error)
+                && transcript_requires_timed_output(
+                    task.transcript.is_some(),
+                    self.settings.output_srt,
+                    self.settings.output_ass,
+                )
+        }) {
+            self.flash_hint(t(L::TRANSCRIPT_REQUIRES_TIMED_OUTPUT), cx);
+            return;
+        }
         if !self.ensure_can_start(cx) {
             return;
         }
@@ -108,18 +120,26 @@ impl OneAsrApp {
     }
 
     pub(crate) fn start_one(&mut self, id: &str, cx: &mut Context<Self>) {
-        if !self.ensure_can_start(cx) {
-            return;
-        }
         if self.is_exiting(id) {
             return;
         }
-        let status = match self.tasks.iter().find(|t| t.id == id) {
-            Some(t) => t.status,
+        let (status, has_transcript) = match self.tasks.iter().find(|t| t.id == id) {
+            Some(t) => (t.status, t.transcript.is_some()),
             None => return,
         };
         if let Some(msg) = single_start_blocker(status, ui_lang()) {
             self.flash_hint(msg, cx);
+            return;
+        }
+        if transcript_requires_timed_output(
+            has_transcript,
+            self.settings.output_srt,
+            self.settings.output_ass,
+        ) {
+            self.flash_hint(t(L::TRANSCRIPT_REQUIRES_TIMED_OUTPUT), cx);
+            return;
+        }
+        if !self.ensure_can_start(cx) {
             return;
         }
         let slot_free = !self.busy
@@ -185,6 +205,26 @@ impl OneAsrApp {
                 text: st.text.clone(),
                 path: st.path.clone(),
             });
+
+        // Settings can change while a row waits in the queue. Recheck before
+        // marking it Processing so transcript matches can never fall through
+        // to a text-only deliverable.
+        if transcript_requires_timed_output(
+            task_transcript.is_some(),
+            self.settings.output_srt,
+            self.settings.output_ass,
+        ) {
+            let message = t(L::TRANSCRIPT_REQUIRES_TIMED_OUTPUT).to_string();
+            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+                task.status = TaskStatus::Error;
+                task.queue_seq = None;
+                task.error = Some(message.clone());
+            }
+            self.flash_hint(message, cx);
+            self.try_start_next(cx);
+            cx.notify();
+            return;
+        }
 
         // Effective settings for **this row**: per-task language + separation
         // override the settings defaults. Built before anything is marked
@@ -424,6 +464,16 @@ pub(crate) fn single_start_blocker(status: TaskStatus, lang: UiLang) -> Option<&
     }
 }
 
+/// A transcript match needs timestamps in its deliverable; plain TXT cannot
+/// represent them. Ordinary ASR is still allowed to produce TXT only.
+pub(crate) fn transcript_requires_timed_output(
+    has_transcript: bool,
+    output_srt: bool,
+    output_ass: bool,
+) -> bool {
+    has_transcript && !output_srt && !output_ass
+}
+
 /// The next job to run: the queued row with the lowest sequence, skipping rows
 /// that are fading out.
 ///
@@ -507,6 +557,14 @@ mod tests {
             single_start_blocker(TaskStatus::Queued, UiLang::En),
             Some("This task is already queued")
         );
+    }
+
+    #[test]
+    fn transcript_matches_require_a_timed_subtitle_format() {
+        assert!(transcript_requires_timed_output(true, false, false));
+        assert!(!transcript_requires_timed_output(true, true, false));
+        assert!(!transcript_requires_timed_output(true, false, true));
+        assert!(!transcript_requires_timed_output(false, false, false));
     }
 
     #[test]

@@ -3,6 +3,10 @@
 
 use crate::app::prelude::*;
 
+fn transcript_card_matches_task(active_id: Option<&str>, task_id: &str) -> bool {
+    active_id == Some(task_id)
+}
+
 /// 悬停满 `delay`、且当前没开着这张卡片 → 该打开它（返回卡片 id）。
 ///
 /// 「用时」和「文稿」两张卡片是照着彼此写的，所以判据只留这一份：它们曾经各写
@@ -229,6 +233,12 @@ impl OneAsrApp {
     /// 遮挡层（带 `occlude()` 时尤其致命）。这正是「用时」卡片一直在做的事。
     pub(crate) fn transcript_card_visible(&self) -> bool {
         self.transcript_card_progress() > 0.01
+    }
+
+    /// The card state is global, but it must only render in the owning task row.
+    pub(crate) fn transcript_card_visible_for(&self, task_id: &str) -> bool {
+        transcript_card_matches_task(self.transcript_card.as_deref(), task_id)
+            && self.transcript_card_visible()
     }
 
     /// Hover entered the timing chip / card for `id`.
@@ -494,7 +504,7 @@ impl OneAsrApp {
 
 #[cfg(test)]
 mod tests {
-    use super::hover_promotes;
+    use super::{hover_promotes, transcript_card_matches_task};
     use std::time::{Duration, Instant};
 
     const D: Duration = Duration::from_millis(300);
@@ -539,5 +549,12 @@ mod tests {
     #[test]
     fn no_hover_opens_nothing() {
         assert_eq!(hover_promotes(None, None, Instant::now(), D), None);
+    }
+
+    #[test]
+    fn transcript_card_belongs_to_only_one_task_row() {
+        assert!(transcript_card_matches_task(Some("lower"), "lower"));
+        assert!(!transcript_card_matches_task(Some("lower"), "upper"));
+        assert!(!transcript_card_matches_task(None, "upper"));
     }
 }

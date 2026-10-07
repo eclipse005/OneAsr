@@ -222,6 +222,10 @@ pub mod L {
     pub const TRANSCRIPT_BTN_BREAK: Str = Str::new("智能断句", "Smart break");
     pub const TRANSCRIPT_BTN_REREAD: Str = Str::new("重新读取", "Re-read");
     pub const TRANSCRIPT_BTN_REMOVE: Str = Str::new("移除", "Remove");
+    pub const TRANSCRIPT_ACTIONS_LOCKED: Str = Str::new(
+        "任务已排队或正在处理中，文稿操作暂不可用",
+        "Transcript actions are unavailable while this task is queued or processing",
+    );
     pub const TRANSCRIPT_BREAK_TIP: Str = Str::new(
         "只拆过长的行、不动一个字；原文件不会被改动",
         "Splits only over-long lines, changes no character; your file is never written",
@@ -248,10 +252,7 @@ pub mod L {
     pub const TRANSCRIPT_UNREADABLE: Str =
         Str::new("读不了文稿: {e}", "cannot read transcript: {e}");
     /// 配对结果提示，成对说。
-    pub const TRANSCRIPT_PAIRED: Str = Str::new(
-        "已配对 {n} 份文稿（{files}）",
-        "{n} transcript(s) attached ({files})",
-    );
+    pub const TRANSCRIPT_PAIRED: Str = Str::new("已配对 {n} 份文稿", "{n} transcript(s) attached");
     pub const TRANSCRIPT_UNPAIRED: Str = Str::new(
         "{n} 份文稿没有同名音视频：{files}",
         "{n} transcript(s) had no matching media: {files}",
@@ -286,6 +287,11 @@ pub mod L {
     pub const STATS_OUTPUT: Str = Str::new("输出文本", "Output text");
     pub const STATS_LANGS: Str = Str::new("语种", "Languages");
     pub const STATS_SEPARATION: Str = Str::new("人声分离", "Vocal separation");
+    pub const STATS_TRANSCRIPT_MATCH: Str = Str::new("文稿匹配", "Transcript matches");
+    pub const TRANSCRIPT_REQUIRES_TIMED_OUTPUT: Str = Str::new(
+        "文稿匹配需要至少启用 SRT 或 ASS 输出",
+        "Transcript matching requires SRT or ASS output",
+    );
     pub const STATS_LONGEST: Str = Str::new("最长一次", "Longest run");
     pub const STATS_FASTEST: Str = Str::new("最快一次", "Fastest run");
     pub const LEGEND_LESS: Str = Str::new("少", "Less");

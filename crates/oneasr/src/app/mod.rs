@@ -427,7 +427,10 @@ pub(crate) fn run_task(
             settings,
             &data_root,
             on_stage,
-            oneasr_core::ProcessExportOptions { words_json: None },
+            oneasr_core::ProcessExportOptions {
+                words_json: None,
+                timeline_json: false,
+            },
         ),
         None => process_media_file_with_progress(path, name, settings, &data_root, on_stage),
     };

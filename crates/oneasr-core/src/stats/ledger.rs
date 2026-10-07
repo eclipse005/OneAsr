@@ -129,6 +129,9 @@ pub fn summarize(records: &[StatsRecord]) -> StatsSummary {
         if r.sep {
             s.sep_tasks += 1;
         }
+        if r.transcript {
+            s.transcript_tasks += 1;
+        }
         *lang_counts.entry(r.lang.clone()).or_insert(0) += 1;
         *s.per_day_tasks.entry(r.day.clone()).or_insert(0) += 1;
 
@@ -169,6 +172,7 @@ mod tests {
             process_ms: ms,
             lang: "zh".into(),
             sep: false,
+            transcript: false,
             ok,
             cues: 0,
         }
@@ -210,6 +214,24 @@ mod tests {
         let s = summarize(&[a, b]);
         assert_eq!(s.cues, 120, "failed task produced no deliverable lines");
         assert_eq!(s.first_day.as_deref(), Some("2026-09-10"));
+    }
+
+    #[test]
+    fn transcript_matches_count_only_when_the_task_succeeds() {
+        let mut matched = rec("2026-09-12", Some(600.0), 60_000, true);
+        matched.transcript = true;
+        let mut failed = rec("2026-09-13", Some(600.0), 60_000, false);
+        failed.transcript = true;
+        assert_eq!(summarize(&[matched, failed]).transcript_tasks, 1);
+    }
+
+    #[test]
+    fn old_records_without_transcript_flag_remain_readable() {
+        let record: StatsRecord =
+            serde_json::from_str(r#"{"day":"2026-09-12","process_ms":1000,"lang":"zh","ok":true}"#)
+                .unwrap();
+        assert!(!record.transcript);
+        assert_eq!(summarize(&[record]).transcript_tasks, 0);
     }
 
     #[test]

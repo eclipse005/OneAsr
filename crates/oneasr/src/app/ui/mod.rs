@@ -33,7 +33,10 @@ impl Render for OneAsrApp {
         }
 
         let drawer_p = self.settings_progress();
-        let menu_open = self.any_menu_open() || self.transcript_card_visible();
+        // Hover cards must not activate the full-window dismiss scrim. The scrim
+        // occludes the chip under the pointer, which fires hover(false), closes
+        // the card, removes the scrim, and starts the same cycle again.
+        let menu_open = self.any_menu_open();
         let stats_open = self.stats_open;
 
         div()
