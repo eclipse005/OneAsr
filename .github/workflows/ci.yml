@@ -1,4 +1,4 @@
-# 提交 / PR 门禁：格式、lint、测试、版本一致性、供应链。
+# 提交 / PR 门禁：格式、lint、测试、跨平台编译、版本一致性、供应链。
 #
 # 与 release.yml 的分工：
 #   本文件 —— 每次提交都验证，只读权限，不做任何发布动作。
@@ -138,3 +138,29 @@ jobs:
           # 不用 --locked：cargo-deny 的 --locked 是全局参数、不能跟在 check 后面；
           # 锁文件的一致性由上面的 clippy / test（都带 --locked）负责把关。
           "/tmp/cargo-deny-${VER}-${TRIPLE}/cargo-deny" check advisories sources
+
+  # ── 5. 跨平台编译：lint 与测试只在 ubuntu 跑，Windows 靠本地开发覆盖，
+  #      macOS 得等到发版打包才第一次编译 —— v1.2.0 的 GPU/CTC 依赖雷正是
+  #      从这个空档里过去的。这里一个 cargo check 把「发版才炸」提前到
+  #      「提交即红」。不做 clippy、不跑测试：拦编译失败就够，那两样 ubuntu
+  #      已经全量跑过，别让矩阵翻倍烧 runner。
+  cross-check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: toolchain
+        name: Read pinned toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo check
+        run: cargo check --locked --workspace --all-targets
