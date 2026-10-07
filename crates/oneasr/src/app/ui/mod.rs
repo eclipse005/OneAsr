@@ -19,6 +19,7 @@ pub(crate) mod task_row;
 pub(crate) mod text;
 pub(crate) mod transcript_card;
 pub(crate) mod util;
+pub(crate) mod welcome;
 
 impl Render for OneAsrApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -38,6 +39,7 @@ impl Render for OneAsrApp {
         // the card, removes the scrim, and starts the same cycle again.
         let menu_open = self.any_menu_open();
         let stats_open = self.stats_open;
+        let welcome_open = self.welcome_open;
 
         div()
             .id("oneasr-root")
@@ -127,7 +129,9 @@ impl Render for OneAsrApp {
             )
             .child(self.render_status_bar(cx))
             .when(stats_open, |el| el.child(self.render_stats_panel(cx)))
-            .when(menu_open || stats_open, |el| {
+            // 指南面板与统计面板同一套浮层（MENU_Z + dismiss 层），两者互斥。
+            .when(welcome_open, |el| el.child(self.render_welcome_panel(cx)))
+            .when(menu_open || stats_open || welcome_open, |el| {
                 el.child(popover_dismiss_layer(cx))
             })
     }

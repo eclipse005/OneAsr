@@ -296,6 +296,48 @@ pub mod L {
     pub const STATS_FASTEST: Str = Str::new("最快一次", "Fastest run");
     pub const LEGEND_LESS: Str = Str::new("少", "Less");
     pub const LEGEND_MORE: Str = Str::new("多", "More");
+
+    // ---- 首次启动欢迎卡 / 指南 ----
+    /// 状态栏 chip：欢迎卡的常驻入口（首启自动弹过一次，之后随时从这里重看）。
+    pub const GUIDE: Str = Str::new("指南", "Guide");
+    pub const WELCOME_TITLE: Str = Str::new("欢迎使用 OneAsr", "Welcome to OneAsr");
+    pub const WELCOME_SUBTITLE: Str =
+        Str::new("三步跑出第一份字幕", "Three steps to your first subtitles");
+    pub const WELCOME_STEP1: Str = Str::new(
+        "在设置中下载「语音识别」和「对齐」两个模型",
+        "Download the ASR and aligner models in Settings",
+    );
+    pub const WELCOME_STEP2: Str = Str::new(
+        "把音视频拖进窗口，或点「添加」",
+        "Drop audio or video into the window, or click Add",
+    );
+    pub const WELCOME_STEP3: Str = Str::new(
+        "完成后字幕自动保存到视频同目录",
+        "Subtitles are saved next to your video when done",
+    );
+    pub const WELCOME_LOCAL: Str = Str::new(
+        "识别全程在本机完成，文件不会离开你的电脑",
+        "Everything runs locally — your files never leave this machine",
+    );
+    /// 面板收起按钮。
+    pub const WELCOME_OK: Str = Str::new("知道了", "Got it");
+    /// 面板底部「进阶」小节：只挑不看不会知道的功能，控件名即功能的不进面板。
+    pub const WELCOME_EXTRAS: Str = Str::new("进阶", "Good to know");
+    pub const WELCOME_FEAT_TRANSCRIPT: Str = Str::new("文稿匹配", "Transcript");
+    pub const WELCOME_FEAT_TRANSCRIPT_DESC: Str = Str::new(
+        "任务行点「+ 文稿」挂上 txt / srt：跳过识别，按文稿直接打轴",
+        "Click “+ transcript” on a task: skip recognition, align your own text",
+    );
+    pub const WELCOME_FEAT_SEPARATION: Str = Str::new("人声分离", "Separation");
+    pub const WELCOME_FEAT_SEPARATION_DESC: Str = Str::new(
+        "任务行可开「分离」：嘈杂环境更准；模型需在设置里另下",
+        "Toggle “Sep” on a task: better on noisy audio; download its model in Settings",
+    );
+    pub const WELCOME_FEAT_MODEL_SIZE: Str = Str::new("模型大小", "Model size");
+    pub const WELCOME_FEAT_MODEL_SIZE_DESC: Str = Str::new(
+        "1.7B 更准、量化更省显存，设置里随时切换",
+        "1.7B is more accurate; quantized uses less VRAM — switch in Settings",
+    );
 }
 
 /// `{sec} 秒 · {min}–{max}` / `{sec} s · {min}–{max}`（分段时长档位说明）。

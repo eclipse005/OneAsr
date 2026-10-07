@@ -43,6 +43,10 @@ impl OneAsrApp {
             self.stats_hover_day = None;
             self.close_lang_selects();
             self.close_timing_popover();
+            // 指南面板与统计占同一块位置，互斥：开统计先收指南（顺带记账）。
+            if self.welcome_open {
+                self.close_welcome(cx);
+            }
             // Navigation, same rule as the gear: one tap on open.
             self.play_ui(sfx::Sfx::Click);
             self.stats_open = true;

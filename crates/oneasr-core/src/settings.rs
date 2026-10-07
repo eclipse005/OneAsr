@@ -136,6 +136,14 @@ pub struct Settings {
     /// reminder together.
     #[serde(default = "default_sound")]
     pub sound: bool,
+    /// 首次启动欢迎卡是否已经看过（看过 = 永不再弹）。
+    ///
+    /// serde 字段默认是 `true`：老配置里没有这个字段，升级用户不该再看一遍
+    /// 欢迎卡。`false` 只会出现在 [`Self::default`] —— 也就是连 settings.json
+    /// 都不存在的全新安装上。首次关闭时由 GUI 立刻落盘，见 `oneasr` 的
+    /// `dismiss_welcome`。
+    #[serde(default = "default_welcome_done")]
+    pub welcome_done: bool,
     /// Pre-0.2.0 switch, read-only and never written back: `ui_sound` merged
     /// into [`Self::sound`], and an install that had muted either family must
     /// not get sound back just because the field it turned off disappeared from
@@ -203,6 +211,12 @@ fn default_sound() -> bool {
     true
 }
 
+// 欢迎卡只该出现在全新安装上：settings.json 缺这个字段（老配置）落 `true`
+// 不弹，[`Settings::default`]（全新安装的落点）才显式给 `false`。
+fn default_welcome_done() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -231,6 +245,8 @@ impl Default for Settings {
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
             sound: default_sound(),
+            // 全新安装要弹欢迎卡；serde 字段默认（老配置）是 true 不弹。
+            welcome_done: false,
             legacy_ui_sound: None,
             legacy_task_notify: None,
         }
@@ -1678,5 +1694,26 @@ mod tests {
             .expect("0.2.0 config parses");
         off.normalize();
         assert!(!off.sound);
+    }
+
+    #[test]
+    fn welcome_card_shows_only_on_fresh_installs() {
+        // 全新安装：连 settings.json 都没有，落 Settings::default() —— 要弹欢迎卡。
+        assert!(!Settings::default().welcome_done);
+        // 升级用户：旧配置没有这个字段，serde 字段默认必须落 true —— 别让人
+        // 升个级再看一遍欢迎卡。
+        let legacy: Settings =
+            serde_json::from_str(r#"{"language":"zh"}"#).expect("legacy config parses");
+        assert!(legacy.welcome_done);
+        // 看过一次就永远不再弹：显式写进配置的值要原样往返（save/load 不改它）。
+        let mut seen = Settings::default();
+        seen.welcome_done = true;
+        let text = serde_json::to_string(&seen).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        assert!(back.welcome_done);
+        // normalize 不掺和：它只修「非法」值，看没看过欢迎卡没有非法态。
+        let mut kept = back;
+        kept.normalize();
+        assert!(kept.welcome_done);
     }
 }

@@ -141,6 +141,10 @@ pub(crate) struct OneAsrApp {
     demucs_dl_handle: Option<DownloadHandle>,
     /// Stats panel open (floats above the status bar; shares MENU_Z with menus).
     stats_open: bool,
+    /// 指南面板（首启欢迎卡）开着吗。全新安装的首启为 `true`（settings 还没有
+    /// `welcome_done` 记账），之后由「指南」chip 与各关闭入口维护，与统计面板
+    /// 同一套浮层语义、互斥展开。
+    welcome_open: bool,
     /// Day cell under the pointer in the year grid, `YYYY-MM-DD`.
     stats_hover_day: Option<String>,
     /// Cached ledger aggregation. Recomputed on load and after every finished
@@ -162,6 +166,10 @@ impl OneAsrApp {
         oneasr_core::i18n::set_ui_lang(settings.resolved_ui_language());
         let app_root = resolve_app_root_dir();
         log_environment_snapshot(&settings, &app_root);
+
+        // 只有全新安装（连 settings.json 都不存在）才自动弹欢迎卡：老配置里
+        // 没有这个字段，serde 字段默认 true —— 升级用户不该再看一遍欢迎卡。
+        let welcome_open = !settings.welcome_done;
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
@@ -224,6 +232,7 @@ impl OneAsrApp {
             align_dl_handle: None,
             demucs_dl_handle: None,
             stats_open: false,
+            welcome_open,
             stats_hover_day: None,
             // Read the ledger once at startup; refreshed on every finished task.
             stats: oneasr_core::stats::summarize(&oneasr_core::stats::load(
