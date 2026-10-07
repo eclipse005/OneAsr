@@ -404,6 +404,12 @@ impl OneAsrApp {
 
     /// Close language selects (Escape / click-outside scrim). Timing is hover-only.
     pub(crate) fn dismiss_menus(&mut self, cx: &mut Context<Self>) {
+        // Escape / 点击空白也收起指南面板——它与统计面板共用同一套浮层语义
+        // （MENU_Z + dismiss 层），收起的同时完成「看过」的落盘。
+        let closed_welcome = self.welcome_open;
+        if closed_welcome {
+            self.close_welcome(cx);
+        }
         // Escape closes the stats panel too. It lives on MENU_Z with the menus,
         // so it must honour the same key — even though its own dismiss layer,
         // not a key, is what normally closes it. Behaviour when it is closed is
@@ -414,7 +420,7 @@ impl OneAsrApp {
             self.stats_hover_day = None;
         }
         if self.lang_menu.is_none() && !self.settings_lang_open {
-            if closed_stats {
+            if closed_stats || closed_welcome {
                 cx.notify();
             }
             return;
@@ -426,6 +432,54 @@ impl OneAsrApp {
     /// Whether a language panel is live (scrim / Escape target).
     pub(crate) fn any_menu_open(&self) -> bool {
         self.task_lang_menu_active() || self.settings_lang_open
+    }
+
+    // ── 指南面板（首启欢迎卡 / 状态栏「指南」chip）──────────────────────
+    //
+    // 与统计面板同一套浮层语义：MENU_Z + 全窗 dismiss 层，非模态。首启自动
+    // 展开一次（`settings.welcome_done` 记账），chip 随时开关。
+
+    /// 「指南」chip：开 / 关指南面板（与统计 chip 同一 toggle 语义）。
+    pub(crate) fn toggle_welcome(&mut self, cx: &mut Context<Self>) {
+        if self.welcome_open {
+            self.close_welcome(cx);
+            return;
+        }
+        // 一次只浮一个面板：指南与统计占同一块位置（共用 MENU_Z）。
+        self.stats_open = false;
+        self.stats_hover_day = None;
+        self.close_lang_selects();
+        self.close_timing_popover();
+        self.play_ui(sfx::Sfx::Click);
+        self.welcome_open = true;
+        cx.notify();
+    }
+
+    /// 收起指南面板。**首次**收起时把 `welcome_done` 落进 settings.json ——
+    /// 这是「只自动展开一次」的记账；之后从 chip 打开的不再写盘。
+    ///
+    /// 立刻落盘，不依赖用户之后是否点「保存设置」。写失败（只读盘等）只记
+    /// 日志：本次会话不再弹，下次启动可能再弹一次，可接受。
+    pub(crate) fn close_welcome(&mut self, cx: &mut Context<Self>) {
+        if !self.welcome_open {
+            return;
+        }
+        self.welcome_open = false;
+        if !self.settings.welcome_done {
+            self.settings.welcome_done = true;
+            if let Err(e) = self.settings.save() {
+                crashlog::log_warn(format!("welcome closed but settings save failed: {e}"));
+            }
+        }
+        cx.notify();
+    }
+
+    /// 面板上的「打开设置」：收起 + 开抽屉一步到位。
+    pub(crate) fn close_welcome_open_settings(&mut self, cx: &mut Context<Self>) {
+        self.close_welcome(cx);
+        if !self.settings_open {
+            self.toggle_settings(cx);
+        }
     }
 
     pub(crate) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
@@ -455,6 +509,10 @@ impl OneAsrApp {
         // The stats panel shares MENU_Z with those overlays; the drawer wins.
         self.stats_open = false;
         self.stats_hover_day = None;
+        // 指南面板同理：抽屉一开就收起（顺带完成首启「看过」的记账）。
+        if self.welcome_open {
+            self.close_welcome(cx);
+        }
         if open {
             self.play_ui(sfx::Sfx::Click);
         }

@@ -67,3 +67,9 @@ pub(crate) const TIMING_POP_W: f32 = 220.;
 // visibility follows that derived state, never a stale flag alone.
 pub(crate) const MENU_DISMISS_Z: usize = 5;
 pub(crate) const MENU_Z: usize = 10;
+
+// ── 指南面板（首启欢迎卡 / 状态栏「指南」chip）──────────────────────────────
+// 与统计面板同一套浮层：MENU_Z + 全窗 dismiss 层，点击面板外 / Escape 收起，
+// 非模态、不挡下面的界面。与统计面板互斥展开（同一块位置）。
+/// 面板宽：中文三步文案一行放得下（380 − 内边距 32 − 序号徽 26 ≈ 322px）。
+pub(crate) const WELCOME_PANEL_W: f32 = 380.;

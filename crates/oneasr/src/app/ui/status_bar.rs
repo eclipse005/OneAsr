@@ -8,7 +8,7 @@ use crate::app::{ModelStatus, OneAsrApp};
 
 impl OneAsrApp {
     /// Bottom status bar: queue/batch progress on the left with the persistent
-    /// stats chip, model/hint indicator on the right.
+    /// stats and guide chips, model/hint indicator on the right.
     pub(super) fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let tally = tally_tasks(&self.tasks, &self.exiting);
         let batch = self.batch_mode;
@@ -109,7 +109,7 @@ pub(super) fn tally_tasks(tasks: &[Task], exiting: &HashMap<String, Instant>) ->
 
 // ── Painting ────────────────────────────────────────────────────────────────
 
-/// Progress text plus the persistent stats chip.
+/// Progress text plus the persistent stats and guide chips.
 fn status_bar_left(
     left: SharedString,
     batch: bool,
@@ -147,6 +147,21 @@ fn status_bar_left(
                 .hover(|s| s.bg(ACCENT_MIST))
                 .child(stats_label)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_stats(cx))),
+        )
+        // 常驻「指南」chip：指南面板的开关入口（首启自动展开一次，之后随时
+        // 从这里重看）。词不用图标——受众恰恰是不认识图标的人。
+        .child(
+            div()
+                .id("guide-chip")
+                .flex_shrink_0()
+                .px_2()
+                .py_0p5()
+                .rounded_full()
+                .cursor_pointer()
+                .text_color(MUTED)
+                .hover(|s| s.bg(ACCENT_MIST))
+                .child(t(L::GUIDE))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_welcome(cx))),
         )
 }
 

@@ -45,7 +45,10 @@ impl OneAsrApp {
     /// like a manual edit. Model paths fall back to the install layout, which
     /// is what a factory reset means here.
     pub(crate) fn reset_settings(&mut self, cx: &mut Context<Self>) {
+        // 欢迎卡不算「设置」：恢复出厂不该让下次启动再自动弹一遍欢迎卡。
+        let welcome_done = self.settings.welcome_done;
         self.settings = Settings::default();
+        self.settings.welcome_done = welcome_done;
         self.mark_settings_dirty(cx);
         // Paths moved — re-probe so the status dots follow the reset.
         self.refresh_model_probe();
