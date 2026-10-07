@@ -1,15 +1,14 @@
 //! GPU 设备选择：`ONEASR_DEVICE` 环境变量 → 各 wgpu 引擎的 `DeviceSelector`。
 //!
-//! 三个引擎（Qwen ASR / ForcedAligner / HTDemucs）各自的 crate 暴露同构的
-//! `DeviceSelector::parse`，但默认加载路径写死 `Auto`（取枚举序第一个适配器），
-//! 双 GPU 机器上会固定选中核显、闲置独显。本模块把用户指定的 spec 透传给引擎；
-//! 未设置或 `auto` 时保持原行为。
+//! 未设置、空白或 `auto` 时不钉卡。引擎自己先试独显，再试集显，虚拟 GPU 排在
+//! 后面；CPU 适配器（例如 Microsoft Basic Render Driver）不算显卡。
+//! 写了具体 spec（`vulkan:0`、`nvidia`、`#1`）就只开那一张，失败不改去另一张。
 //!
-//! spec 语法（三家一致）：`auto` | `cpu` | `<runtime>[:<index>]`（vulkan/dx12/…）
-//! | `#<n>` / `<n>` | 适配器名子串（大小写不敏感，如 `nvidia`）。
+//! spec 语法：`<runtime>[:<index>]`（vulkan/dx12/…）| `#<n>` / `<n>` | 适配器名子串
+//! （大小写不敏感，如 `nvidia`）。`gpu` 和 `cpu` 是后端档，不是卡名。
 //!
-//! 显式指定的 spec 解析失败是用户输入错误：**报错退出，不静默回退 Auto**——
-//! 否则拼错卡名会变成"看起来生效了实际还在核显上跑"。
+//! 显式指定的 spec 解析失败是用户输入错误：**报错退出，不静默改走别的卡**——
+//! 否则拼错卡名会落在集显上。
 
 use crate::diagnostics::trace_log;
 use crate::engine::EngineError;
@@ -27,6 +26,11 @@ fn normalize_device_spec(raw: Option<&str>) -> Option<String> {
 /// 读 `ONEASR_DEVICE`。调用方在 backend 为 CPU 时应忽略返回值。
 fn oneasr_device_spec() -> Option<String> {
     normalize_device_spec(std::env::var("ONEASR_DEVICE").ok().as_deref())
+}
+
+/// 用户钉了一张卡。未设置 / `auto` 不是钉卡，引擎可以先独显再集显。
+pub(super) fn device_pinned() -> bool {
+    oneasr_device_spec().is_some()
 }
 
 /// Qwen3-ASR（wgpu）的设备选择；命中环境变量时打一条 trace 便于核对选中的卡。
@@ -102,5 +106,11 @@ mod tests {
             Some("vulkan:1")
         );
         assert_eq!(normalize_device_spec(Some("#1")).as_deref(), Some("#1"));
+    }
+
+    #[test]
+    fn gpu_and_cpu_words_stay_pins_so_parse_can_reject_them() {
+        assert_eq!(normalize_device_spec(Some("gpu")).as_deref(), Some("gpu"));
+        assert_eq!(normalize_device_spec(Some("cpu")).as_deref(), Some("cpu"));
     }
 }

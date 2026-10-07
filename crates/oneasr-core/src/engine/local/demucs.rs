@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use super::backend::ComputeBackend;
-use super::device::demucs_selector_from_env;
+use super::device::{demucs_selector_from_env, device_pinned};
 use crate::engine::{EngineError, SeparateRequest, SeparationEvent, Separator};
 
 /// Weights file expected inside the configured Demucs model directory.
@@ -38,16 +38,31 @@ impl DemucsSeparatorAdapter {
             variant: ModelVariant::FourStem,
             stems: StemSelection::Some(vec![StemId::Vocals]),
         };
-        // GPU + `ONEASR_DEVICE` → 用户指定的适配器；spec 非法直接报错，不静默回退。
+        // 未钉卡的 auto 交给 crate：先独显再集显，都失败才走 CPU（`backend_tag` 变成 cpu）。
+        // 钉了卡就只开那一张。`gpu` 打不开直接报错。spec 解析失败在 `?` 处退出，不退 CPU。
+        let pinned = device_pinned();
         let attempt = match backend {
             ComputeBackend::Cpu => demucs_core::Backend::Cpu,
             ComputeBackend::Gpu => demucs_core::Backend::Gpu(demucs_selector_from_env()?),
+            ComputeBackend::Auto if pinned => {
+                demucs_core::Backend::Gpu(demucs_selector_from_env()?)
+            }
+            ComputeBackend::Auto => demucs_core::Backend::Auto,
         };
         log(format!("vocal-separation backend {}", attempt.tag()));
 
         let (inner, fell_back) = match Demucs::load(&weights, opts.clone(), attempt.clone()) {
-            Ok(inner) => (inner, false),
-            Err(e) if backend == ComputeBackend::Gpu && !forced_gpu => {
+            Ok(inner) => {
+                let fell_back = matches!(backend, ComputeBackend::Auto)
+                    && !pinned
+                    && inner.backend_tag() == "cpu";
+                (inner, fell_back)
+            }
+            Err(e)
+                if !forced_gpu
+                    && !matches!(backend, ComputeBackend::Cpu)
+                    && (pinned || matches!(backend, ComputeBackend::Gpu)) =>
+            {
                 log(crate::i18n::sep_gpu_load_failed_cpu(&e.to_string()));
                 let inner =
                     Demucs::load(&weights, opts, demucs_core::Backend::Cpu).map_err(|cpu_e| {

@@ -22,16 +22,16 @@ punkt = { git = "https://github.com/eclipse005/rust-punkt.git", rev = "ca9187276
 # 四个 git 依赖全部钉到具体提交（rev）。`git` 依赖不写 rev/tag 时，Cargo 会在
 # 需要重新解析锁文件的时候（新 clone、CI 缓存未命中、`cargo update -p ...`）
 # 取默认分支当时的最新提交 —— 同样一份源码能构建出两套不同的引擎代码，
-# 出了问题也无法复现。rev 取自 Cargo.lock 当前实际锁定的提交，行为不变。
-qwen3-asr-wgpu = { git = "https://github.com/eclipse005/qwen3-asr-wgpu.git", rev = "c099a5eff11ba712e04c51c83a500b22afb806f5" }
-qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.git", rev = "5c4d62a4d7e515dbd38a3a3881e4f1cf6fb46e64" }
+# 出了问题也无法复现。rev 钉死在一次提交上，不跟默认分支漂。
+qwen3-asr-wgpu = { git = "https://github.com/eclipse005/qwen3-asr-wgpu.git", rev = "28d4ec7510a057d50273af340de228a145d34e23" }
+qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.git", rev = "d50f2554a3b222fccb049c93700f5c787e6d9525" }
 # CTC 强制对齐（omniASR-CTC-300M-v2），与 Qwen 对齐器并存可选 —— 见
 # docs/ctc-aligner-adoption-analysis.md。`AlignOutput::words` 已是成品对齐单元
 # （CJK 逐字、空格语言逐词），上层不再自己做分组。
-ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "c174c6a0de7f1d9b6662cfae219ae14cf02c5079" }
+ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "280a77dcff3c94779bf48b265dc6f595e132a48d" }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
 # HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
-demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "ac088c66980c4ea55255acfb54e6c6a4d067e0b0" }
+demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "ca8359aca0b890fcf71dd1a475f8c2675261a51b" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
 
 [[bin]]

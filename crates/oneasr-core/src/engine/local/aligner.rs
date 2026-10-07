@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use super::backend::ComputeBackend;
 
 use qwen3_aligner_wgpu::align_inference::Aligner as WgpuAligner;
-use qwen3_aligner_wgpu::gpu::DeviceSelector;
+use qwen3_aligner_wgpu::gpu::Backend as AlignerBackend;
 
 use crate::engine::{AlignProgress, AlignRequest, AlignedToken, Aligner, EngineError};
 
@@ -17,16 +17,35 @@ pub(super) struct QwenAlignerAdapter {
 
 impl QwenAlignerAdapter {
     pub(super) fn load(model_dir: &Path, backend: ComputeBackend) -> Result<Self, EngineError> {
-        let selector = match backend {
-            ComputeBackend::Cpu => DeviceSelector::Cpu,
-            // GPU + `ONEASR_DEVICE` → 用户指定的适配器；未设置保持 Auto。
-            ComputeBackend::Gpu => super::device::aligner_selector_from_env()?,
+        // `load(Auto)` 会退 CPU。要求显卡时必须走 `Backend::Gpu`，未钉卡的
+        // `Auto` 才把独显→集显→CPU 交给 crate。
+        let policy = match backend {
+            ComputeBackend::Cpu => AlignerBackend::Cpu,
+            ComputeBackend::Gpu => AlignerBackend::Gpu(super::device::aligner_selector_from_env()?),
+            ComputeBackend::Auto if super::device::device_pinned() => {
+                AlignerBackend::Gpu(super::device::aligner_selector_from_env()?)
+            }
+            ComputeBackend::Auto => AlignerBackend::Auto,
         };
-        WgpuAligner::load(selector, model_dir)
+        WgpuAligner::load_backend(policy, model_dir)
             .map(|inner| Self {
                 inner: Mutex::new(inner),
             })
             .map_err(|e| EngineError::new(format!("{e:#}")))
+    }
+
+    pub(super) fn backend_name(&self) -> &'static str {
+        self.inner
+            .lock()
+            .map(|inner| inner.backend_name())
+            .unwrap_or("unknown")
+    }
+
+    pub(super) fn device_desc(&self) -> String {
+        self.inner
+            .lock()
+            .map(|inner| inner.describe())
+            .unwrap_or_else(|_| "unavailable".into())
     }
 }
 

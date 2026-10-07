@@ -1,6 +1,6 @@
 //! Adapter and backend-policy tests.
 
-use super::backend::{ComputeBackend, is_forced_gpu};
+use super::backend::{ComputeBackend, is_forced_gpu, resolve_compute_backend};
 use super::demucs::DemucsSeparatorAdapter;
 use super::provider::LocalEngineProvider;
 use crate::settings::Settings;
@@ -35,6 +35,22 @@ fn missing_weights_is_a_clear_error() {
             },
         );
     assert!(err.contains("人声分离模型不存在"), "{err}");
+}
+
+#[test]
+fn auto_is_not_collapsed_before_the_engine_opens() {
+    assert_eq!(
+        resolve_compute_backend("auto").unwrap(),
+        ComputeBackend::Auto
+    );
+    assert_eq!(
+        resolve_compute_backend(" AUTO ").unwrap(),
+        ComputeBackend::Auto
+    );
+    assert_eq!(resolve_compute_backend("").unwrap(), ComputeBackend::Auto);
+    assert_eq!(resolve_compute_backend("cpu").unwrap(), ComputeBackend::Cpu);
+    assert_eq!(ComputeBackend::Auto.label(), "auto");
+    assert_eq!(ComputeBackend::Gpu.label(), "gpu");
 }
 
 #[test]

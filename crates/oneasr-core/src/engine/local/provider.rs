@@ -69,14 +69,62 @@ impl LocalEngineProvider {
     }
 }
 
+impl LocalEngineProvider {
+    /// A pinned `ONEASR_DEVICE` that does not parse is a user error. Check it
+    /// before any CPU retry, so a typo cannot land on another GPU or on CPU.
+    fn reject_bad_device_pin(&self, check: Result<(), EngineError>) -> Result<(), EngineError> {
+        if self.resolved.get() == ComputeBackend::Cpu || !super::device::device_pinned() {
+            return Ok(());
+        }
+        check
+    }
+
+    fn open_aligner(&self, backend: ComputeBackend) -> Result<Box<dyn Aligner>, EngineError> {
+        match self.aligner {
+            ModelId::OmniAsrCtc300M => CtcAlignerAdapter::load(&self.aligner_model_dir, backend)
+                .map(|engine| {
+                    let summary = format!(
+                        "aligner backend={} device={}",
+                        engine.backend_name(),
+                        engine.device_desc()
+                    );
+                    trace_log(summary.clone());
+                    #[cfg(debug_assertions)]
+                    if !pipeline_trace() {
+                        eprintln!("[{summary}]");
+                    }
+                    Box::new(engine) as Box<dyn Aligner>
+                }),
+            _ => QwenAlignerAdapter::load(&self.aligner_model_dir, backend).map(|engine| {
+                let summary = format!(
+                    "aligner backend={} device={}",
+                    engine.backend_name(),
+                    engine.device_desc()
+                );
+                trace_log(summary.clone());
+                #[cfg(debug_assertions)]
+                if !pipeline_trace() {
+                    eprintln!("[{summary}]");
+                }
+                Box::new(engine) as Box<dyn Aligner>
+            }),
+        }
+    }
+}
+
 impl EngineProvider for LocalEngineProvider {
     fn load_asr(&self) -> Result<Box<dyn AsrEngine>, EngineError> {
         let dir = &self.asr_model_dir;
         let first = self.resolved.get();
+        self.reject_bad_device_pin(super::device::asr_selector_from_env().map(|_| ()))?;
         match QwenAsrAdapter::load(dir, first) {
-            Ok(engine) => Ok(Box::new(engine)),
-            Err(e) if first == ComputeBackend::Gpu && !self.forced_gpu() => {
-                trace_log(format!("gpu load failed, falling back to cpu: {e}"));
+            Ok(engine) => {
+                trace_log(format!("asr device={}", engine.device_description()));
+                Ok(Box::new(engine))
+            }
+            // Pinned auto: that card failed. Retry CPU, not a different GPU.
+            Err(e) if first == ComputeBackend::Auto && super::device::device_pinned() => {
+                trace_log(format!("pinned gpu load failed, falling back to cpu: {e}"));
                 self.resolved.set(ComputeBackend::Cpu);
                 QwenAsrAdapter::load(dir, ComputeBackend::Cpu)
                     .map(|engine| Box::new(engine) as Box<dyn AsrEngine>)
@@ -89,13 +137,25 @@ impl EngineProvider for LocalEngineProvider {
     }
 
     fn load_aligner(&self) -> Result<Box<dyn Aligner>, EngineError> {
-        match self.aligner {
-            ModelId::OmniAsrCtc300M => {
-                CtcAlignerAdapter::load(&self.aligner_model_dir, self.resolved.get())
-                    .map(|engine| Box::new(engine) as Box<dyn Aligner>)
+        let backend = self.resolved.get();
+        let pin_ok = match self.aligner {
+            ModelId::OmniAsrCtc300M => super::device::ctc_selector_from_env().map(|_| ()),
+            _ => super::device::aligner_selector_from_env().map(|_| ()),
+        };
+        self.reject_bad_device_pin(pin_ok)?;
+        match self.open_aligner(backend) {
+            Ok(engine) => Ok(engine),
+            Err(e) if backend == ComputeBackend::Auto && super::device::device_pinned() => {
+                trace_log(format!(
+                    "pinned aligner gpu failed, falling back to cpu: {e}"
+                ));
+                self.resolved.set(ComputeBackend::Cpu);
+                self.open_aligner(ComputeBackend::Cpu)
             }
-            _ => QwenAlignerAdapter::load(&self.aligner_model_dir, self.resolved.get())
-                .map(|engine| Box::new(engine) as Box<dyn Aligner>),
+            Err(e) if backend == ComputeBackend::Gpu => {
+                Err(EngineError::new(gpu_load_failure_msg(&e)))
+            }
+            Err(e) => Err(e),
         }
     }
 

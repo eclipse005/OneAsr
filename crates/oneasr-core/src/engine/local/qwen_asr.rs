@@ -13,19 +13,25 @@ pub(super) struct QwenAsrAdapter {
 
 impl QwenAsrAdapter {
     pub(super) fn load(model_dir: &Path, backend: ComputeBackend) -> Result<Self, EngineError> {
-        let backend = match backend {
-            ComputeBackend::Cpu => AsrBackend::Cpu,
-            ComputeBackend::Gpu => AsrBackend::Gpu,
-        };
-        // GPU + `ONEASR_DEVICE` → 用户指定的适配器（如独显）；spec 非法直接报错。
-        let inner = if backend == AsrBackend::Gpu {
-            AsrInference::load_on(model_dir, super::device::asr_selector_from_env()?)
-        } else {
-            AsrInference::load(model_dir, backend)
+        let pinned = super::device::device_pinned();
+        // 钉卡走 `load_on`：只开那一张，失败不改去另一张，也不在 crate 里退 CPU。
+        // 未钉卡的 `gpu` 是 `Backend::Gpu`（先独显再集显，打不开就报错）。
+        // 未钉卡的 `auto` 是 `Backend::Auto`（同一顺序，都失败才用 CPU）。
+        let inner = match (backend, pinned) {
+            (ComputeBackend::Cpu, _) => AsrInference::load(model_dir, AsrBackend::Cpu),
+            (ComputeBackend::Gpu, false) => AsrInference::load(model_dir, AsrBackend::Gpu),
+            (ComputeBackend::Auto, false) => AsrInference::load(model_dir, AsrBackend::Auto),
+            (ComputeBackend::Gpu | ComputeBackend::Auto, true) => {
+                AsrInference::load_on(model_dir, super::device::asr_selector_from_env()?)
+            }
         };
         inner
             .map(|inner| Self { inner })
             .map_err(|e| EngineError::new(format!("{e:#}")))
+    }
+
+    pub(super) fn device_description(&self) -> String {
+        self.inner.device_description()
     }
 }
 
