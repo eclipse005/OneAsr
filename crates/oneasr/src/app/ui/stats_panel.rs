@@ -290,6 +290,12 @@ fn stats_rows_section(stats: &StatsSummary, lang: UiLang) -> impl IntoElement {
             crate::i18n::tasks_split(stats.tasks_total(), stats.tasks_ok, stats.tasks_err)
         },
     ));
+    if stats.transcript_tasks > 0 {
+        rows.push(stats_row(
+            t(L::STATS_TRANSCRIPT_MATCH),
+            crate::i18n::n_tasks(lang, stats.transcript_tasks),
+        ));
+    }
     if stats.cues > 0 {
         rows.push(stats_row(
             t(L::STATS_OUTPUT),

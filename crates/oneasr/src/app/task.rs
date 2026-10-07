@@ -28,6 +28,11 @@ impl TaskStatus {
     pub fn locks_row_actions(self) -> bool {
         matches!(self, Self::Processing)
     }
+
+    /// 文稿在进入队列后已成为本次运行输入，运行中也不可修改。
+    pub fn locks_transcript_actions(self) -> bool {
+        matches!(self, Self::Queued | Self::Processing)
+    }
 }
 
 /// Duration probe lifecycle for list display.
@@ -266,6 +271,15 @@ mod tests {
         assert_eq!(DurationState::Probing.label(), "…");
         assert_eq!(DurationState::Unknown.label(), "—");
         assert_eq!(DurationState::Known(90.0).label(), "1:30");
+    }
+
+    #[test]
+    fn transcript_actions_lock_once_task_is_queued() {
+        assert!(!TaskStatus::Pending.locks_transcript_actions());
+        assert!(TaskStatus::Queued.locks_transcript_actions());
+        assert!(TaskStatus::Processing.locks_transcript_actions());
+        assert!(!TaskStatus::Done.locks_transcript_actions());
+        assert!(!TaskStatus::Error.locks_transcript_actions());
     }
 
     #[test]

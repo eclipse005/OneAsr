@@ -1,8 +1,8 @@
 //! 挑出来的文件怎么变成「媒体 + 挂好的文稿」。
 //!
-//! 添加对话框和拖拽共用这一份配对规则：音视频按选中顺序建任务，文本按**文件名**
-//! 找同名的媒体并挂上去。配不上的**不静默忽略**——用户挑了一堆文件，最后靠数行数
-//! 才知道哪份稿子没生效，那是最容易出岔子的地方。
+//! 添加对话框和拖拽共用这一份配对规则：只选一个媒体和一个文稿时直接配对；
+//! 多文件时文本按**文件名**找同名媒体。配不上的**不静默忽略**——用户挑了一堆
+//! 文件，最后靠数行数才知道哪份稿子没生效，那是最容易出岔子的地方。
 //!
 //! 纯函数，好测；不碰文件系统，所以「某个路径存不存在」不在它的判断里。
 
@@ -64,10 +64,16 @@ pub fn pair_picked(picked: &[PathBuf]) -> Pairing {
             out.media.push(path.clone());
         }
     }
+    let texts: Vec<&PathBuf> = picked.iter().filter(|p| is_transcript(p)).collect();
+    if out.media.len() == 1 && texts.len() == 1 {
+        out.transcripts
+            .push((texts[0].clone(), out.media[0].clone()));
+        return out;
+    }
     // 记录**哪条媒体**已经被接走了，而不是哪个 stem——两个同 stem 的媒体
     // (a.mp4 / a.wav) 各自该有自己的文稿，按 stem 去重会把第二份挤成「没配上」。
     let mut claimed: Vec<usize> = Vec::new();
-    for text in picked.iter().filter(|p| is_transcript(p)) {
+    for text in texts {
         let key = stem_of(text);
         match out
             .media
@@ -110,6 +116,14 @@ mod tests {
         assert_eq!(got.transcripts, vec![(p("a.txt"), p("a.mp4"))]);
     }
 
+    #[test]
+    fn one_media_and_one_transcript_pair_even_when_their_names_differ() {
+        let got = pair_picked(&[p("meeting.mp4"), p("notes.txt")]);
+        assert_eq!(got.media, vec![p("meeting.mp4")]);
+        assert_eq!(got.transcripts, vec![(p("notes.txt"), p("meeting.mp4"))]);
+        assert!(got.unpaired_texts.is_empty());
+    }
+
     /// 大小写与扩展名：用户在 Windows 上双击得到 `A.MP4`，文稿是 `a.txt`。
     #[test]
     fn stem_comparison_ignores_case_and_extension_case() {
@@ -122,7 +136,8 @@ mod tests {
     fn a_dotted_name_matches_on_its_full_stem() {
         let got = pair_picked(&[p("a.b.mp4"), p("a.b.srt")]);
         assert_eq!(got.transcripts, vec![(p("a.b.srt"), p("a.b.mp4"))]);
-        let other = pair_picked(&[p("a.b.mp4"), p("a.txt")]);
+        // With multiple media files, a different stem must stay unmatched.
+        let other = pair_picked(&[p("a.b.mp4"), p("extra.wav"), p("a.txt")]);
         assert!(other.unpaired_texts.contains(&p("a.txt")));
     }
 

@@ -124,19 +124,12 @@ pub const ERR_IO: Str = Str::new("I/O 错误", "I/O error");
 pub const ERR_MEDIA: Str = Str::new("音频处理错误", "Audio processing error");
 pub const ERR_EMPTY_ALIGNMENT: Str =
     Str::new("对齐后词列表为空", "Word list is empty after alignment");
-/// `原字幕文件会被覆盖，输出已改名为 {stem}` / `the original subtitle would be
-/// overwritten; outputs are now named {stem}`。
-pub fn transcript_renamed(stem: &str) -> String {
-    match ui_lang() {
-        UiLang::Zh => format!("原字幕文件会被覆盖，输出已改名为 {stem}"),
-        UiLang::En => {
-            format!("the original subtitle would be overwritten; outputs are now named {stem}")
-        }
-    }
-}
-
 /// 见 [`ERR_EMPTY_ALIGNMENT`]。
 pub const ERR_EMPTY_TRANSCRIPT: Str = Str::new("文稿是空的", "Transcript is empty");
+pub const ERR_TRANSCRIPT_REQUIRES_TIMED_OUTPUT: Str = Str::new(
+    "文稿匹配需要至少启用 SRT 或 ASS 输出",
+    "Transcript matching requires SRT or ASS output",
+);
 pub const ERR_EMPTY_SENTENCE_BOUNDARY: Str = Str::new(
     "断句后字幕为空",
     "Subtitle is empty after sentence segmentation",

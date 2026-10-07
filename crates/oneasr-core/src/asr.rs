@@ -57,6 +57,8 @@ pub enum AsrError {
     EmptyAlignment,
     /// The transcript attached to the task is empty — nothing to align against.
     EmptyTranscript,
+    /// Transcript matching needs an output format that can store timecodes.
+    TranscriptRequiresTimedOutput,
     EmptySentenceBoundary,
     LoadAsr(String),
     LoadAligner(String),
@@ -92,6 +94,9 @@ impl fmt::Display for AsrError {
             Self::EmptyTranscribe(n) => write!(f, "{}", i18n::empty_transcribe(*n)),
             Self::EmptyAlignment => write!(f, "{}", t(i18n::ERR_EMPTY_ALIGNMENT)),
             Self::EmptyTranscript => write!(f, "{}", t(i18n::ERR_EMPTY_TRANSCRIPT)),
+            Self::TranscriptRequiresTimedOutput => {
+                write!(f, "{}", t(i18n::ERR_TRANSCRIPT_REQUIRES_TIMED_OUTPUT))
+            }
             Self::EmptySentenceBoundary => {
                 write!(f, "{}", t(i18n::ERR_EMPTY_SENTENCE_BOUNDARY))
             }
@@ -363,14 +368,17 @@ struct ChunkTranscript {
 
 /// Optional side exports from the pipeline (CLI / eval harness).
 ///
-/// Product GUI only needs the SRT under `settings.output_dir`. Eval harnesses
-/// may also request ForcedAligner word/char tokens with timestamps (written
-/// **after** a successful SRT; failure is non-fatal).
+/// The product GUI writes the selected subtitle formats under
+/// `settings.output_dir`. CLI/eval harnesses may also request ForcedAligner
+/// word timestamps or a reusable measured-timeline sidecar.
 #[derive(Debug, Clone, Default)]
 pub struct ProcessExportOptions {
     /// Write normalized aligner tokens as JSON (`words: [{text,start,end}, …]`).
     /// Best-effort: errors are logged and do not fail the pipeline after SRT.
     pub words_json: Option<PathBuf>,
+    /// Write the measured timeline sidecar. GUI exports omit this; CLI exports
+    /// opt in so users can render alternate subtitle layouts later.
+    pub timeline_json: bool,
 }
 
 /// Full pipeline: convert → VAD plan → ASR all → unload → align all → SRT.
@@ -515,56 +523,13 @@ fn keep_scratch() -> bool {
     std::env::var_os("ONEASR_KEEP_SCRATCH").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// 两个路径是不是同一个文件。
-///
-/// 必须先归一：输出目录来自设置（绝对），而文稿路径是用户或 CLI 给的（可能是
-/// 相对），`/out/a.srt` 与 `out/a.srt` 文本不相等但就是同一个文件——不做这一步，
-/// 撞名保护永远不触发，而它一失效就是**覆盖用户自己的字幕**。
-///
-/// 大小写按平台语义走：Windows 不区分，Linux 区分。macOS 的 APFS 默认不区分、
-/// 但可以格式化成区分，**这里按区分处理**——判断偏保守只会漏掉一次改名（用户
-/// 得到覆盖后的文件、还能从回收站拿回来），反过来误判则会白白把输出改名。
-/// 方向不对的那一边更贵。
-fn same_file(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| -> PathBuf {
-        std::fs::canonicalize(p).unwrap_or_else(|_| {
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                std::env::current_dir().unwrap_or_default().join(p)
-            }
-        })
-    };
-    // 按**分量**比，不比字符串：分隔符、斜杠方向、盘符大小写都会让字符串不等，
-    // 而它们都是同一个文件。
-    let parts = |p: &Path| -> Vec<String> {
-        norm(p)
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect()
-    };
-    let (pa, pb) = (parts(a), parts(b));
-    if cfg!(windows) {
-        pa.len() == pb.len() && pa.iter().zip(&pb).all(|(a, b)| a.eq_ignore_ascii_case(b))
+/// 视频转录使用原文件名；文稿匹配固定加 `.aligned`，与文稿路径无关。
+fn output_stem(media_stem: &str, transcript: Option<&TranscriptInput>) -> String {
+    if transcript.is_some() {
+        format!("{media_stem}.aligned")
     } else {
-        pa == pb
+        media_stem.to_string()
     }
-}
-
-/// 文稿的原始文件路径会不会被这一轮的输出覆盖。
-///
-/// 纯函数，好测：只在「文稿就在输出目录里、且文件名正好是 `{stem}.{ext}`」时
-/// 为真——也就是用户把旧字幕放在源视频旁边、而输出默认也写在那里的那种情形。
-fn transcript_would_be_overwritten(
-    transcript: &Path,
-    dirs: &[&Path],
-    stem: &str,
-    exts: &[&str],
-) -> bool {
-    dirs.iter().any(|dir| {
-        exts.iter()
-            .any(|ext| same_file(&dir.join(format!("{stem}.{ext}")), transcript))
-    })
 }
 struct VadPlan {
     chunks: Vec<vad::Chunk>,
@@ -636,6 +601,9 @@ impl<'a> Pipeline<'a> {
         transcript: &TranscriptInput,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
+        if !self.settings.output_srt && !self.settings.output_ass {
+            return Err(AsrError::TranscriptRequiresTimedOutput);
+        }
         if transcript.text.trim().is_empty() {
             return Err(AsrError::EmptyTranscript);
         }
@@ -1071,13 +1039,13 @@ impl<'a> Pipeline<'a> {
     // ── Stage 5: sentence boundary + SRT write + side exports ────────────
 
     /// Normalize tokens, hand the measured timeline to the presentation phase,
-    /// write the subtitle and the timeline it came from.
+    /// and write the selected subtitle formats plus requested side exports.
     ///
     /// The two phases meet here and nowhere else: everything before this point
     /// *measured* (two models, once), everything [`timeline::render`] does after
     /// it *presents* (pure, re-runnable). Writing the timeline next to the
-    /// subtitle is what makes that split usable — without the file, the split
-    /// is only a comment.
+    /// subtitle is what makes that split usable for CLI re-rendering; GUI runs
+    /// keep the timeline in memory and do not leave a sidecar behind.
     fn stage_export(
         &self,
         input: &Path,
@@ -1140,25 +1108,7 @@ impl<'a> Pipeline<'a> {
         let fallback_dir = self.settings.resolved_output_dir();
         let target_dir = self.settings.srt_target_dir(input);
 
-        // 撞名保护：文稿常常就放在源文件旁边，而输出默认也写在那里——
-        // `杂谈.mp4` + `杂谈.srt` 会让输出**覆盖用户自己的字幕**。撞上了就整体
-        // 换名，三种格式一起挪，免得 SRT 避开了而 ASS 撞上。
-        let mut stem = stem;
-        if let Some(path) = transcript.and_then(|t| t.path.as_deref())
-            && transcript_would_be_overwritten(
-                path,
-                &[target_dir.as_path(), fallback_dir.as_path()],
-                &stem,
-                &["srt", "txt", "ass"],
-            )
-        {
-            stem = format!("{stem}.aligned");
-            eprintln!("{}", i18n::transcript_renamed(&stem));
-            trace_log(format!(
-                "transcript at {:?} would be overwritten; outputs renamed to {stem}",
-                path
-            ));
-        }
+        let stem = output_stem(&stem, transcript);
 
         // SRT first: it stays the primary output (task row “打开” target).
         let mut primary: Option<PathBuf> = None;
@@ -1186,21 +1136,28 @@ impl<'a> Pipeline<'a> {
         let primary =
             primary.ok_or_else(|| AsrError::Other(t(i18n::ERR_NO_OUTPUT_FORMAT).into()))?;
 
-        // The measured timeline, beside the subtitle it produced. Best-effort
-        // like the words dump: a timeline that could not be written must not
-        // fail a run whose subtitle is already on disk.
-        match serde_json::to_string_pretty(&measured) {
-            Ok(body) => {
-                match write_export_file(&target_dir, &fallback_dir, &stem, "timeline.json", &body) {
-                    Ok(path) => trace_log(format!("timeline={}", path.display())),
-                    Err(e) => {
-                        eprintln!("warning: timeline write failed (SRT still OK): {e}");
-                        trace_log(format!("timeline write failed (non-fatal): {e}"));
+        if export.timeline_json {
+            // Optional CLI sidecar for re-rendering measured timestamps with
+            // another presentation preset. It is never needed by GUI users.
+            match serde_json::to_string_pretty(&measured) {
+                Ok(body) => {
+                    match write_export_file(
+                        &target_dir,
+                        &fallback_dir,
+                        &stem,
+                        "timeline.json",
+                        &body,
+                    ) {
+                        Ok(path) => trace_log(format!("timeline={}", path.display())),
+                        Err(e) => {
+                            eprintln!("warning: timeline write failed (subtitle still OK): {e}");
+                            trace_log(format!("timeline write failed (non-fatal): {e}"));
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                eprintln!("warning: timeline serialize failed (SRT still OK): {e}");
+                Err(e) => {
+                    eprintln!("warning: timeline serialize failed (subtitle still OK): {e}");
+                }
             }
         }
 
@@ -1229,63 +1186,12 @@ mod tests {
     use super::*;
     use crate::paths::output_srt_path;
 
-    /// 文稿就放在源视频旁边时，输出**不能**覆盖它——那是用户自己的字幕。撞上了
-    /// 就整体换成 `{stem}.aligned`，三种格式一起挪，免得 SRT 避开了而 ASS 撞上。
-    ///
-    /// 跨平台：用 `join` 拼路径，不写死 `D:\`——写死的话这条断言在 Linux 上
-    /// 比的是分隔符，不是被测的规则。相对 vs 绝对那一格是真实踩到的坑：输出
-    /// 目录来自设置（绝对），文稿路径是用户给的（可能是相对），文本不相等但
-    /// 就是同一个文件，不归一的话这道保护永远不触发。
+    /// 普通转录保留视频文件名，文稿匹配固定加 `.aligned`。
     #[test]
-    fn a_transcript_sitting_on_an_output_path_is_renamed_not_overwritten() {
-        let dir = std::path::PathBuf::from("/videos");
-        let exts = ["srt", "txt", "ass"];
-
-        // 用户把自己的旧字幕放在源视频旁边 —— 最容易踩的那一种。
-        assert!(super::transcript_would_be_overwritten(
-            &dir.join("clip.srt"),
-            &[dir.as_path()],
-            "clip",
-            &exts
-        ));
-        // 输出目录里那份也撞。
-        assert!(super::transcript_would_be_overwritten(
-            &dir.join("clip.ass"),
-            &[dir.as_path()],
-            "clip",
-            &exts
-        ));
-        // 相对 vs 绝对：输出目录来自设置（绝对），文稿路径是用户/CLI 给的
-        // （可能是相对），文本不相等但就是同一个文件。真实踩到的就是这一格。
-        let dir = std::env::current_dir().unwrap().join("output");
-        assert!(super::transcript_would_be_overwritten(
-            &Path::new("output").join("clip.srt"),
-            &[dir.as_path()],
-            "clip",
-            &exts
-        ));
-
-        // 文稿在别处：不改名，输出照常用 `{stem}`。
-        assert!(!super::transcript_would_be_overwritten(
-            Path::new("/scripts/clip.txt"),
-            &[dir.as_path()],
-            "clip",
-            &exts
-        ));
-        // 没开 ASS 就不会因为 ASS 撞名而改名。
-        assert!(!super::transcript_would_be_overwritten(
-            &dir.join("clip.ass"),
-            &[dir.as_path()],
-            "clip",
-            &["srt", "txt"]
-        ));
-        // 同名不同扩展名不算撞。
-        assert!(!super::transcript_would_be_overwritten(
-            &dir.join("clip.vtt"),
-            &[dir.as_path()],
-            "clip",
-            &exts
-        ));
+    fn subtitle_output_stem_distinguishes_transcription_from_matching() {
+        let transcript = TranscriptInput::default();
+        assert_eq!(output_stem("clip", None), "clip");
+        assert_eq!(output_stem("clip", Some(&transcript)), "clip.aligned");
     }
     #[test]
     fn output_path_uses_stem() {

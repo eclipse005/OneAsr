@@ -28,7 +28,8 @@
 //! # The two phases
 //!
 //! **Phase A — measure.** ASR + alignment + token normalization produce a
-//! [`Timeline`]. It is written to `{stem}.timeline.json` next to the subtitle.
+//! [`Timeline`]. CLI runs can opt to write it to `{stem}.timeline.json` next to
+//! the subtitle; the GUI keeps it in memory and writes only selected formats.
 //! Every number in it is evidence: the aligner's own numbers, rounded once.
 //! This phase is expensive and non-deterministic, so it runs once.
 //!

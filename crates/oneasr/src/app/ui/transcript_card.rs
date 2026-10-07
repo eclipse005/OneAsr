@@ -28,6 +28,8 @@ pub(crate) struct TranscriptCardView {
     pub audio_label: String,
     pub from_file: bool,
     pub note: Option<String>,
+    /// 排队或处理中时，文稿操作按钮置灰并禁用。
+    pub actions_enabled: bool,
 }
 
 pub(crate) fn transcript_card(
@@ -155,7 +157,12 @@ pub(crate) fn transcript_card(
                             div()
                                 .id(SharedString::from(format!("tr-break-{id}")))
                                 .tooltip({
-                                    let tip = t(L::TRANSCRIPT_BREAK_TIP).to_string();
+                                    let tip = if view.actions_enabled {
+                                        t(L::TRANSCRIPT_BREAK_TIP)
+                                    } else {
+                                        t(L::TRANSCRIPT_ACTIONS_LOCKED)
+                                    }
+                                    .to_string();
                                     move |_, cx| {
                                         cx.new(|_| NameTooltip {
                                             text: tip.clone().into(),
@@ -166,7 +173,7 @@ pub(crate) fn transcript_card(
                                 .child(btn(
                                     t(L::TRANSCRIPT_BTN_BREAK),
                                     BtnKind::Secondary,
-                                    true,
+                                    view.actions_enabled,
                                     cx.listener(move |this, _, _, cx| {
                                         this.smart_break_transcript(cx)
                                     }),
@@ -180,7 +187,12 @@ pub(crate) fn transcript_card(
                                 div()
                                     .id(SharedString::from(format!("tr-reread-{id}")))
                                     .tooltip({
-                                        let tip = t(L::TRANSCRIPT_REREAD_TIP).to_string();
+                                        let tip = if view.actions_enabled {
+                                            t(L::TRANSCRIPT_REREAD_TIP)
+                                        } else {
+                                            t(L::TRANSCRIPT_ACTIONS_LOCKED)
+                                        }
+                                        .to_string();
                                         move |_, cx| {
                                             cx.new(|_| NameTooltip {
                                                 text: tip.clone().into(),
@@ -191,7 +203,7 @@ pub(crate) fn transcript_card(
                                     .child(btn(
                                         t(L::TRANSCRIPT_BTN_REREAD),
                                         BtnKind::Secondary,
-                                        true,
+                                        view.actions_enabled,
                                         cx.listener(move |this, _, _, cx| {
                                             this.reread_transcript(cx)
                                         }),
@@ -202,7 +214,12 @@ pub(crate) fn transcript_card(
                             div()
                                 .id(SharedString::from(format!("tr-remove-{id}")))
                                 .tooltip({
-                                    let tip = t(L::TRANSCRIPT_REMOVE_TIP).to_string();
+                                    let tip = if view.actions_enabled {
+                                        t(L::TRANSCRIPT_REMOVE_TIP)
+                                    } else {
+                                        t(L::TRANSCRIPT_ACTIONS_LOCKED)
+                                    }
+                                    .to_string();
                                     move |_, cx| {
                                         cx.new(|_| NameTooltip {
                                             text: tip.clone().into(),
@@ -213,7 +230,7 @@ pub(crate) fn transcript_card(
                                 .child(btn(
                                     t(L::TRANSCRIPT_BTN_REMOVE),
                                     BtnKind::Secondary,
-                                    true,
+                                    view.actions_enabled,
                                     cx.listener(move |this, _, _, cx| this.remove_transcript(cx)),
                                 )),
                         ),

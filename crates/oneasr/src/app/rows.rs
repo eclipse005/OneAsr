@@ -66,7 +66,7 @@ impl OneAsrApp {
                     queue_rank: ranks.get(t.id.as_str()).copied(),
                     // 芯片上不再写字数（「3.4k」对这一行没有可操作的意义），只留一个「挂没挂」。
                     has_transcript: t.transcript.is_some(),
-                    transcript_card_visible: self.transcript_card_visible(),
+                    transcript_card_visible: self.transcript_card_visible_for(&t.id),
                     transcript_card_progress: self.transcript_card_progress(),
                     // 视图**始终**给一份，哪怕还没挂文稿：「+ 文稿」悬停出的那张卡片
                     // 只讲「挂一份会怎样」，那也是悬停的一部分。
@@ -83,6 +83,7 @@ impl OneAsrApp {
                             };
                             TranscriptCardView {
                                 has_transcript: true,
+                                actions_enabled: !t.status.locks_transcript_actions(),
                                 file: st
                                     .path
                                     .as_ref()

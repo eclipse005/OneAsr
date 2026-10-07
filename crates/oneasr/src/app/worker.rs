@@ -308,6 +308,7 @@ impl OneAsrApp {
             };
             let lang = t.language.clone();
             let sep = t.vocal_separation;
+            let transcript = t.transcript.is_some();
             t.timing = timing.has_breakdown().then_some(timing);
             let ok = match result {
                 Ok(srt) => {
@@ -335,6 +336,7 @@ impl OneAsrApp {
                 process_ms,
                 lang,
                 sep,
+                transcript,
                 ok,
                 cues,
             });

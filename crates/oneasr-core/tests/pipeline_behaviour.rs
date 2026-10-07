@@ -108,6 +108,14 @@ impl Run {
     }
 
     fn run(&self, provider: &FakeProvider) -> (Vec<StageUpdate>, Result<PathBuf, String>) {
+        self.run_with_export(provider, ProcessExportOptions::default())
+    }
+
+    fn run_with_export(
+        &self,
+        provider: &FakeProvider,
+        export: ProcessExportOptions,
+    ) -> (Vec<StageUpdate>, Result<PathBuf, String>) {
         let mut stages = Vec::new();
         let result = process_media_file_with_provider(
             &self.input,
@@ -116,7 +124,7 @@ impl Run {
             &self.app_root,
             provider,
             |update: StageUpdate| stages.push(update),
-            ProcessExportOptions::default(),
+            export,
         )
         .map_err(|e| e.to_string());
         (stages, result)
@@ -174,6 +182,13 @@ fn engines_are_used_one_at_a_time() {
     assert!(srt.ends_with("sample.srt"), "got {}", srt.display());
     let body = std::fs::read_to_string(&srt).unwrap();
     assert!(body.contains("你好世界。"), "SRT body: {body}");
+    assert!(
+        !run.settings
+            .output_dir
+            .join("sample.timeline.json")
+            .exists(),
+        "GUI-style default exports must not leave an internal timeline sidecar"
+    );
 
     // The rule that used to be checked by grepping the source: ASR is dropped
     // before the aligner is created, so only one model is ever resident.
@@ -202,6 +217,48 @@ fn engines_are_used_one_at_a_time() {
     assert!(labels.iter().any(|l| l == "转码音频"));
     assert!(labels.iter().any(|l| l == "加载识别模型"));
     assert!(labels.iter().any(|l| l == "加载对齐模型"));
+}
+
+#[test]
+fn timeline_sidecar_is_written_only_when_explicitly_requested() {
+    let run = Run::new("timeline_opt_in", false);
+    let provider = FakeProvider::new("你好世界。", tokens());
+    let (_, result) = run.run_with_export(
+        &provider,
+        ProcessExportOptions {
+            words_json: None,
+            timeline_json: true,
+        },
+    );
+    result.expect("pipeline should succeed");
+    assert!(
+        run.settings
+            .output_dir
+            .join("sample.timeline.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn transcript_matching_rejects_txt_only_before_touching_the_pipeline() {
+    let mut run = Run::new("transcript_txt_only", false);
+    run.settings.output_srt = false;
+    run.settings.output_ass = false;
+    run.settings.output_txt = true;
+    let provider = FakeProvider::new("unused", tokens());
+    let (stages, result) = run.run_with_transcript(&provider, "你好世界。");
+    assert!(
+        result.is_err(),
+        "a TXT-only match has no timestamped deliverable"
+    );
+    assert!(
+        stages.is_empty(),
+        "reject before conversion or model loading"
+    );
+    assert!(
+        provider.log().entries().is_empty(),
+        "no engine should be touched"
+    );
 }
 
 #[test]
@@ -311,7 +368,12 @@ fn transcript_alignment_surfaces_the_aligners_own_progress() {
     )
     .with_align_progress(4);
     let (stages, result) = run.run_with_transcript(&provider, "你好世界。");
-    result.expect("transcript pipeline should succeed");
+    let output = result.expect("transcript pipeline should succeed");
+    assert!(
+        output.ends_with("sample.aligned.srt"),
+        "got {}",
+        output.display()
+    );
 
     let align_chunks: Vec<(usize, usize)> = stages
         .iter()

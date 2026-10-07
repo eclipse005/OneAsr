@@ -58,6 +58,9 @@ pub struct StatsRecord {
     /// Whether vocal separation ran for this task.
     #[serde(default)]
     pub sep: bool,
+    /// Whether this task aligned a user-supplied transcript.
+    #[serde(default)]
+    pub transcript: bool,
     pub ok: bool,
     /// Sentence count of the exported subtitle. SRT cues and TXT lines both
     /// derive from the same sentence list, so one number covers either format
@@ -81,6 +84,8 @@ pub struct StatsSummary {
     pub langs: Vec<(String, usize)>,
     /// Tasks that ran vocal separation.
     pub sep_tasks: usize,
+    /// Successful tasks that matched a user-supplied transcript.
+    pub transcript_tasks: usize,
     /// Media seconds per local day (successful tasks), for the year grid.
     pub per_day: BTreeMap<String, f64>,
     /// Successful task count per local day, for the grid's hover card.
