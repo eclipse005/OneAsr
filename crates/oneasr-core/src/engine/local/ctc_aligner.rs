@@ -18,7 +18,7 @@
 use std::path::Path;
 
 use super::backend::ComputeBackend;
-use ctc_forced_aligner_wgpu::{Aligner as CtcAligner, DeviceSelector as CtcDeviceSelector};
+use ctc_forced_aligner_wgpu::{Aligner as CtcAligner, Backend as CtcBackend};
 
 use crate::engine::{AlignProgress, AlignRequest, AlignedToken, Aligner, EngineError};
 
@@ -28,13 +28,26 @@ pub(super) struct CtcAlignerAdapter {
 
 impl CtcAlignerAdapter {
     pub(super) fn load(model_dir: &Path, backend: ComputeBackend) -> Result<Self, EngineError> {
-        let selector = match backend {
-            ComputeBackend::Cpu => CtcDeviceSelector::Cpu,
-            ComputeBackend::Gpu => super::device::ctc_selector_from_env()?,
+        // `load_on(Auto)` 仍会在没有卡时退 CPU。要求显卡用 `Backend::Gpu`。
+        let policy = match backend {
+            ComputeBackend::Cpu => CtcBackend::Cpu,
+            ComputeBackend::Gpu => CtcBackend::Gpu(super::device::ctc_selector_from_env()?),
+            ComputeBackend::Auto if super::device::device_pinned() => {
+                CtcBackend::Gpu(super::device::ctc_selector_from_env()?)
+            }
+            ComputeBackend::Auto => CtcBackend::Auto,
         };
-        CtcAligner::load_on(model_dir, selector)
+        CtcAligner::load_with(model_dir, policy)
             .map(|inner| Self { inner })
             .map_err(|e| EngineError::new(format!("{e:#}")))
+    }
+
+    pub(super) fn backend_name(&self) -> &'static str {
+        self.inner.backend_name()
+    }
+
+    pub(super) fn device_desc(&self) -> String {
+        self.inner.device_desc()
     }
 }
 

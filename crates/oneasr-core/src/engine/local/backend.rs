@@ -1,12 +1,15 @@
 //! Backend resolution: CPU vs wgpu GPU, device probing, fallback policy.
 
-use crate::diagnostics::trace_log;
 use crate::engine::EngineError;
 
 /// Resolved compute target for both ASR and Aligner (one policy).
+///
+/// `Gpu` means the user required a GPU. `Auto` lets the engine walk a discrete
+/// GPU, then an integrated one, and use CPU only when that walk fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComputeBackend {
     Cpu,
+    Auto,
     Gpu,
 }
 
@@ -14,6 +17,7 @@ impl ComputeBackend {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Cpu => "cpu",
+            Self::Auto => "auto",
             Self::Gpu => "gpu",
         }
     }
@@ -32,10 +36,11 @@ pub(crate) struct GpuProbe {
 /// 回落 CPU —— 调用方下一次会重新探测，成功后才写进缓存。
 ///
 /// 报的是 `device_targets()` 里 `is_default` 的那一个，也就是 `DeviceSelector::Auto`
-/// **真的会选中**的那张卡。不要用 `devices()`（`list_devices()`）自己 `find`：那是
-/// wgpu 的**原始枚举序**，没有「独显优先」，在这台双显卡机器上它把 Intel 核显排在
-/// NVIDIA 前面，于是日志报核显、引擎却跑独显——看着像核显在扛 22 秒的活。选卡策略
-/// 只该有一个出处，就是引擎 crate 自己那份排序。
+/// **先尝试**的那张卡（独显优先于集显）。不要用 `devices()`（`list_devices()`）自己
+/// `find`：那是 wgpu 的**原始枚举序**，没有「独显优先」，在这台双显卡机器上它把
+/// Intel 核显排在 NVIDIA 前面，于是日志报核显、引擎却跑独显。选卡策略只该有一个
+/// 出处，就是引擎 crate 自己那份排序。探测失败只说明「现在没看到卡」，`Auto`
+/// 仍交给引擎再走一遍，不在这里改判成 CPU。
 pub(super) fn probe_gpu_device() -> Result<&'static GpuProbe, String> {
     static PROBE: std::sync::OnceLock<GpuProbe> = std::sync::OnceLock::new();
     if let Some(probe) = PROBE.get() {
@@ -61,8 +66,10 @@ pub(super) fn probe_gpu_device() -> Result<&'static GpuProbe, String> {
 ///
 /// Product rule (one binary, driver-only GPU):
 /// - **cpu** → always CPU
-/// - **gpu** → require a live wgpu adapter; error otherwise
-/// - **auto** → GPU when an adapter exists, otherwise CPU (never hard-fail auto)
+/// - **gpu** → require a live wgpu adapter; error otherwise. The engine then
+///   tries a discrete GPU before an integrated one, and does not fall back.
+/// - **auto** → [`ComputeBackend::Auto`]. The engine walks discrete, then
+///   integrated, then CPU. A probe miss must not collapse this to CPU first.
 pub(super) fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, EngineError> {
     match backend.trim().to_ascii_lowercase().as_str() {
         "cpu" => Ok(ComputeBackend::Cpu),
@@ -72,17 +79,7 @@ pub(super) fn resolve_compute_backend(backend: &str) -> Result<ComputeBackend, E
                 &e,
             ))),
         },
-        // auto
-        _ => match probe_gpu_device() {
-            Ok(p) => {
-                trace_log(format!("auto backend → gpu: {}", p.description));
-                Ok(ComputeBackend::Gpu)
-            }
-            Err(e) => {
-                trace_log(format!("auto backend → cpu: {e}"));
-                Ok(ComputeBackend::Cpu)
-            }
-        },
+        _ => Ok(ComputeBackend::Auto),
     }
 }
 
