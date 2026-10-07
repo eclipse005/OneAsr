@@ -1706,8 +1706,10 @@ mod tests {
             serde_json::from_str(r#"{"language":"zh"}"#).expect("legacy config parses");
         assert!(legacy.welcome_done);
         // 看过一次就永远不再弹：显式写进配置的值要原样往返（save/load 不改它）。
-        let mut seen = Settings::default();
-        seen.welcome_done = true;
+        let seen = Settings {
+            welcome_done: true,
+            ..Settings::default()
+        };
         let text = serde_json::to_string(&seen).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert!(back.welcome_done);
