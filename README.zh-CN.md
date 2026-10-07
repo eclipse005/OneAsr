@@ -1,6 +1,6 @@
 <div align="center">
   <h1>OneAsr</h1>
-  <p>本地 · 离线 · 批量音视频 → SRT / TXT 字幕</p>
+  <p>本地 · 离线 · 批量音视频 → SRT / ASS / TXT 字幕</p>
   <p>Windows / Linux / macOS · 基于 Qwen3-ASR + ForcedAligner · 不上传云端</p>
 
   [下载安装](#下载安装) · [快速上手](#快速上手) · [界面预览](#界面预览) · [CLI 命令行](#cli-命令行) · [Release](https://github.com/eclipse005/OneAsr/releases)
@@ -9,25 +9,27 @@
 </div>
 
 ```text
-音视频 → [人声分离] → VAD 分段 → 转写 → 对齐打轴 → 智能断句 → *.srt / *.txt
+音视频 → [人声分离] → VAD 分段 → 转写 → 对齐打轴 → 智能断句 → *.srt / *.ass / *.txt
+文稿 → [人声分离] → 强制对齐打轴（跳过识别）→ *.srt / *.ass
 ```
 
 ## 下载安装
 
-当前版本 **[v1.1.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.1.0)**（点文件名即下载）：
+当前版本 **[v1.2.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.0)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.1.0/OneAsr_1.1.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.1.0/OneAsr_1.1.0_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.1.0/OneAsr_1.1.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.1.0/OneAsr_1.1.0_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.1.0/OneAsr_1.1.0_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.0/OneAsr_1.2.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.0/OneAsr_1.2.0_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.0/OneAsr_1.2.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.0/OneAsr_1.2.0_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.2.0/OneAsr_1.2.0_macos.dmg) |
 
 ## 快速上手
 
 1. 运行主程序（Windows `oneasr.exe`，Linux / macOS `oneasr`）
-2. **设置** → 下载 **ASR**（建议先 0.6B）+ **ForcedAligner**（必需）
+2. **设置** → 下载 **ASR**（建议先 0.6B）+ **对齐模型**（必需）
 3. 选好源语言 → 添加音视频 → 开始
 4. 输出目录拿同名 `.srt`
+5. 已有校对好的文稿？添加文件时把它和视频一起选中再点开始——跳过识别直接打轴（输出 `视频名.aligned.srt`；先在设置里勾选 SRT 或 ASS）
 
 ## 界面预览
 
@@ -42,9 +44,12 @@
 - **完全本地**：转写与对齐都在本机，下完模型可断网用
 - **批量队列**：一次丢多个文件，进度与阶段一目了然
 - **时间轴可靠**：ForcedAligner 词级对齐 + 智能断句，不是整段估时间
+- **文稿匹配**：已有校对好的文稿？挂上去就完全跳过识别，每一行都拿到真实时间轴——识别错的字不用再猜，写什么上什么
+- **ASS 卡拉OK输出**：中日韩逐字（空格语言逐词）各带时间戳，播放器可做逐字高亮
+- **对齐器可选**：omniASR-CTC-300M-v2 与 Qwen ForcedAligner 并存，设置里切换
 - **11 种语言**：中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский（需手动指定，不自动检测）
 - **双规格 ASR**：0.6B（更快 / 省显存）· 1.7B（更准 / 更吃资源）
-- **输出可选**：SRT / TXT 可同时选，默认与视频同目录
+- **输出可选**：SRT / ASS / TXT 任意组合，默认与视频同目录
 - **简繁可选**：原文 / 简体 / 繁体（仅中文、粤语生效，不影响时间轴）
 - **人声分离（可选）**：内置 HTDemucs v4，带 BGM / 噪声时先压掉背景音
 - **GPU 加速**：NVIDIA / AMD / Intel / Mac M 芯片；无独显自动走 CPU
@@ -70,7 +75,7 @@
 oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --output "out.srt"
 ```
 
-`--txt` 额外出 txt、`--script original|simplified|traditional` 切中文字形、`--vocal-separation` 先做人声分离。`--help` 看完整参数。
+`align` 挂文稿（`--text 文稿.txt`）打轴、不跑识别；`render` 从落盘的 `timeline.json` 免加载模型重渲染其它预设。`--txt` 额外出 txt、`--script original|simplified|traditional` 切中文字形、`--vocal-separation` 先做人声分离。`--help` 看完整参数。
 
 ## 配置要求
 
