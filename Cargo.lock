@@ -1601,7 +1601,7 @@ dependencies = [
 [[package]]
 name = "ctc-forced-aligner-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=0128f244e094531a9f62b4a2a656adb9c5c14d1f#0128f244e094531a9f62b4a2a656adb9c5c14d1f"
+source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=0de349c4655f7e6931193e1bd912a85248b324ee#0de349c4655f7e6931193e1bd912a85248b324ee"
 dependencies = [
  "anyhow",
  "ash",
