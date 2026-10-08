@@ -1277,7 +1277,7 @@ fn vad_sustains_segmentation_when_punctuation_stripped() {
     // semantic.rs: no terminal punctuation → no hard split (correct).
     let en_profile = super::profile::profile_for_lang("en");
     let splits_semantic =
-        super::semantic::build_split_points_from_hard_boundaries(&words_stripped, &*en_profile);
+        super::semantic::build_split_points_from_hard_boundaries(&words_stripped[..], &*en_profile);
     assert!(
         splits_semantic.is_empty(),
         "no punctuation → no semantic hard split"

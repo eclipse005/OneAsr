@@ -946,14 +946,6 @@ pub(super) fn is_connector_like(token: &str, connectors: &[&str]) -> bool {
     false
 }
 
-/// Inter-word gap in seconds from ASR timestamps (negative → 0).
-pub(super) fn token_gap_sec(left_end: Option<f64>, right_start: Option<f64>) -> Option<f64> {
-    match (left_end, right_start) {
-        (Some(l), Some(r)) => Some((r - l).max(0.0)),
-        _ => None,
-    }
-}
-
 /// Time-based cost for a plain word boundary (no structure): glued pairs are
 /// the worst legal cut; the cost decays toward 3.2 as the gap approaches the
 /// GOOD_SILENCE threshold (silence handling lives in the caller).

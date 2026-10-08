@@ -65,6 +65,27 @@ pub struct WordTokenDto {
     pub word: String,
 }
 
+impl WordTokenDto {
+    /// A unit that carries **no** acoustic timing.
+    ///
+    /// 智能断句 runs before alignment, so at that point there is no timing to
+    /// speak of. It is not the same as a zero-length span: `start == end == 0`
+    /// reads as "these two words are glued together" and would suppress nearly
+    /// every cut in a Chinese line. Non-finite is the explicit "unknown", which
+    /// the boundary rules already handle by neither rewarding nor penalizing a
+    /// cut for a pause they cannot see.
+    ///
+    /// The sentinel is private to `subtitle_layout` — nothing outside reads
+    /// these fields for gap purposes without going through its guard.
+    pub(crate) fn untimed(word: impl Into<String>) -> Self {
+        Self {
+            start: f64::NAN,
+            end: f64::NAN,
+            word: word.into(),
+        }
+    }
+}
+
 /// 归一化词序列：beautify（只删不加）、数字粘合。
 ///
 /// 两条入口（自动断句 / 文稿分行）都走它，所以「文稿模式下词是怎么被清理的」
@@ -96,7 +117,8 @@ pub fn build_source_sentences_from_words(
         return Err("failed to build micro chunks".to_string());
     }
 
-    let hard_split_points = build_split_points_from_hard_boundaries(&normalized_words, &*profile);
+    let hard_split_points =
+        build_split_points_from_hard_boundaries(&normalized_words[..], &*profile);
     let semantic_spans = split_points_to_spans(normalized_words.len(), &hard_split_points);
     let split_points = merge_split_points(
         hard_split_points,
@@ -225,6 +247,14 @@ fn spans_from_transcript_lines(words: &[WordTokenDto], text: &str) -> Vec<(usize
     spans
 }
 
+/// Union two sorted-ish split-point lists, keeping the first reason per index.
+///
+/// Plain private, and that is exactly wide enough: `line_break` is a child of
+/// this module, so 智能断句 can merge the same two lists. The semantic sentence
+/// boundaries **are** cut points on their own — the layout DP only adds cuts
+/// inside sentences that are still over budget. Dropping the first list is what
+/// made a line of three short sentences come back as one 37-char line: the DP
+/// had no reason to cut them, they were all within budget.
 fn merge_split_points(
     mut base: Vec<(usize, types::SplitReason)>,
     extra: Vec<(usize, types::SplitReason)>,
