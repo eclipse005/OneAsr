@@ -15,13 +15,13 @@
 
 ## 下载安装
 
-当前版本 **[v1.2.1](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.1)**（点文件名即下载）：
+当前版本 **[v1.2.2](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.2)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_macos.dmg) |
 
 ## 快速上手
 
@@ -106,6 +106,10 @@ oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --out
 - 本项目代码：**MIT**
 - 模型权重与协议以 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 及对应托管方为准
 - 引擎：[qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) · [ctc-forced-aligner-wgpu](https://github.com/eclipse005/ctc-forced-aligner-wgpu) · [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) · [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu)
+
+## 星标历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=eclipse005/OneAsr&type=Date)](https://star-history.com/#eclipse005/OneAsr&Date)
 
 <p align="center">
   <sub>问题反馈请附系统版本、显卡与显存、所用模型（0.6B / 1.7B）与报错信息</sub>

@@ -15,13 +15,13 @@ Transcript → [vocal separation] → forced alignment (skips recognition) → *
 
 ## Download
 
-Current version **[v1.2.1](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.1)** (click a file name to download):
+Current version **[v1.2.2](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.2)** (click a file name to download):
 
 | Platform | Download |
 |------|------|
-| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_windows_portable.zip) |
-| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_linux_x64.tar.gz) |
-| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.2.1/OneAsr_1.2.1_macos.dmg) |
+| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_windows_portable.zip) |
+| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_linux_x64.tar.gz) |
+| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_macos.dmg) |
 
 ## Quick start
 
@@ -106,6 +106,10 @@ Announced and discussed at: [LINUX DO](https://linux.do/) · [52pojie](https://w
 - This project's code: **MIT**
 - Model weights and their terms follow [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) and their hosts
 - Engines: [qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) · [ctc-forced-aligner-wgpu](https://github.com/eclipse005/ctc-forced-aligner-wgpu) · [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) · [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=eclipse005/OneAsr&type=Date)](https://star-history.com/#eclipse005/OneAsr&Date)
 
 <p align="center">
   <sub>When reporting an issue, please include your OS version, GPU & VRAM, the model used (0.6B / 1.7B) and the error message</sub>
