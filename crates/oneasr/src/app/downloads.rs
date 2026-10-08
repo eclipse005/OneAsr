@@ -46,18 +46,13 @@ impl OneAsrApp {
 
         let handle = DownloadHandle::new(id, model_dir);
         let model_dir = handle.model_dir.clone();
-        // Environment snapshot before the thread starts: when a download later
-        // fails with a bare OS error (e.g. 拒绝访问 / os error 5), this pins the
-        // target dir and whether it accepted writes at all.
-        let writable = match probe_writable(&model_dir) {
-            Ok(()) => "yes".to_string(),
-            Err(e) => format!("NO ({e})"),
-        };
-        crashlog::log_info(format!(
-            "download start: {}\n  dir: {}\n  writable: {writable}",
-            id.label(ui_lang()),
-            model_dir.display(),
-        ));
+        if let Err(error) = probe_writable(&model_dir) {
+            crashlog::log_warn(format!(
+                "download target directory is not writable\n  model: {}\n  dir: {}\n  error: {error}",
+                id.label(ui_lang()),
+                model_dir.display(),
+            ));
+        }
         match id.kind() {
             ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),

@@ -246,7 +246,7 @@ impl OneAsrApp {
             if !accept_input_path(&path) {
                 // Silent skip in the UI is intentional ("no reaction"), but a
                 // dropped file that never appears must be explainable later.
-                crashlog::log_info(format!("input rejected (unsupported): {}", path.display()));
+                crashlog::log_warn(format!("input rejected (unsupported): {}", path.display()));
                 continue;
             }
             if self.tasks.iter().any(|t| t.path == path) {

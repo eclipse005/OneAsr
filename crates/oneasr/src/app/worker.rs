@@ -252,11 +252,6 @@ impl OneAsrApp {
             self.clear_download_handle(id);
         }
         if progress.state == DownloadState::Completed {
-            crashlog::log_info(format!(
-                "download completed: {} → {}",
-                id.label(ui_lang()),
-                progress.model_dir.display()
-            ));
             // Install layout already has files. Bind active selection only
             // when this download is for the currently selected ASR (or Align).
             match id.kind() {
@@ -297,12 +292,6 @@ impl OneAsrApp {
             ));
             self.flash_hint(fail, cx);
         } else if progress.state == DownloadState::Cancelled {
-            crashlog::log_info(format!(
-                "download cancelled: {} at {}/{} bytes",
-                id.label(ui_lang()),
-                progress.downloaded_bytes,
-                progress.total_bytes
-            ));
             self.flash_hint(crate::i18n::model_cancelled(id.label(ui_lang())), cx);
         }
         // Hide another size's terminal snapshot when viewing this size.
@@ -376,7 +365,6 @@ impl OneAsrApp {
                     true
                 }
                 Err(e) => {
-                    crashlog::log_error(format!("task {id} failed: {e}"));
                     t.status = TaskStatus::Error;
                     t.queue_seq = None;
                     t.error = Some(e);
