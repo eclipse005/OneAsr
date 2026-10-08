@@ -29,14 +29,52 @@ use super::util::join_words;
 /// by the DP cost function in `subtitle_layout.rs`, which only splits when a
 /// span exceeds the length budget — preventing mid-sentence fragmentation on
 /// short sentences that merely contain a breath pause.
-pub(super) fn build_split_points_from_hard_boundaries(
-    words: &[WordTokenDto],
+///
+/// A run of unit text that can be read by index.
+///
+/// The sentence layer is **pure text** — it never reads a timestamp — but its
+/// two callers hold different containers: the transcription path has
+/// `&[WordTokenDto]` (which carries timing this layer happens not to need) and
+/// 智能断句 has a plain `&[&str]`. This trait is what lets both call the *same*
+/// code, rather than one caller building a throwaway `Vec<&str>` for every
+/// boundary it asks about (which would be quadratic on a long transcript).
+pub(super) trait UnitText {
+    /// Text of unit `i`, or `None` past the end.
+    fn unit(&self, i: usize) -> Option<&str>;
+    /// How many units there are.
+    fn unit_count(&self) -> usize;
+}
+
+impl UnitText for [WordTokenDto] {
+    fn unit(&self, i: usize) -> Option<&str> {
+        self.get(i).map(|w| w.word.as_str())
+    }
+    fn unit_count(&self) -> usize {
+        self.len()
+    }
+}
+
+impl UnitText for [&str] {
+    fn unit(&self, i: usize) -> Option<&str> {
+        self.get(i).copied()
+    }
+    fn unit_count(&self) -> usize {
+        self.len()
+    }
+}
+
+/// The input is **unit text**, not timed tokens: nothing in this module reads a
+/// timestamp (it never did — it only ever used `WordTokenDto` as a container).
+/// Keeping it that way is what lets 智能断句 call it directly, before alignment
+/// has produced any timing to speak of.
+pub(super) fn build_split_points_from_hard_boundaries<U: UnitText + ?Sized>(
+    units: &U,
     profile: &dyn LanguageProfile,
 ) -> Vec<(usize, SplitReason)> {
     if profile.uses_punkt_sentence_boundary() {
-        build_split_points_with_punkt(words, profile)
+        build_split_points_with_punkt(units, profile)
     } else {
-        build_split_points_with_rules(words, profile)
+        build_split_points_with_rules(units, profile)
     }
 }
 
@@ -49,8 +87,8 @@ pub(super) fn build_split_points_from_hard_boundaries(
 ///
 /// Punkt 已经切了的 `?`/`!` 也要再看一眼：闭引号后若不是句首（小写延续），
 /// 仍然不切。
-fn build_split_points_with_punkt(
-    words: &[WordTokenDto],
+fn build_split_points_with_punkt<U: UnitText + ?Sized>(
+    units: &U,
     _profile: &dyn LanguageProfile,
 ) -> Vec<(usize, SplitReason)> {
     use punkt::params::Standard;
@@ -58,12 +96,13 @@ fn build_split_points_with_punkt(
     use std::collections::HashSet;
     use std::sync::OnceLock;
 
-    if words.is_empty() {
+    let n = units.unit_count();
+    if n == 0 {
         return Vec::new();
     }
 
     // 拼接完整文本（join_words 处理标点前空格等）
-    let text = join_words(words.iter().map(|w| w.word.as_str()));
+    let text = join_words((0..n).filter_map(|i| units.unit(i)));
     if text.trim().is_empty() {
         return Vec::new();
     }
@@ -78,22 +117,19 @@ fn build_split_points_with_punkt(
 
     // 映射回 word 索引
     let punkt_splits: HashSet<usize> =
-        map_sentence_boundaries_to_word_indices(&text, &sentences, words)
+        map_sentence_boundaries_to_word_indices(&text, &sentences, units)
             .into_iter()
             .collect();
 
     // 规则兜底：Punkt 没切的句末标点位置也切
     // （但排除单字母缩写链 J. K. 的内部）
     let mut out = Vec::new();
-    for index in 0..words.len() {
+    for index in 0..n {
         // Punkt 已经识别为切分点
         if punkt_splits.contains(&index) {
             // 单字母缩写链特判
-            if is_single_letter_dotted(&words[index].word) {
-                let continues = words
-                    .get(index + 1)
-                    .map(|next| is_single_letter_dotted(&next.word))
-                    .unwrap_or(false);
+            if is_single_letter_dotted(units.unit(index).unwrap_or_default()) {
+                let continues = units.unit(index + 1).is_some_and(is_single_letter_dotted);
                 if continues {
                     continue;
                 }
@@ -101,7 +137,7 @@ fn build_split_points_with_punkt(
             // Punkt 切了，但 `?`/`!` 未必真的是句末：引号标题（`a "What Do
             // You See?" post`）里 Punkt 正确切了，可紧接着的中心语说明它是
             // 引用内部，仍要并回来。`Really? she asked` 同理（下一词非句首）。
-            if should_suppress_question_bang_split(words, index) {
+            if should_suppress_question_bang_split(units, index) {
                 continue;
             }
             push_split_point(&mut out, index, SplitReason::TerminalPunctuation);
@@ -112,21 +148,18 @@ fn build_split_points_with_punkt(
         // 漏掉一个句子边界会把两句并成一行。真正需要防的不是"补切"，而是
         // "在引号内部补切"，那由下面的 suppress 负责。
         // 只对最后一个 word 跳过（它是真正的文本末尾，不需要切）
-        if index == words.len() - 1 {
+        if index == n - 1 {
             continue;
         }
-        if is_terminal_end_rule_fallback(&words[index].word) {
+        if is_terminal_end_rule_fallback(units.unit(index).unwrap_or_default()) {
             // 单字母缩写链特判
-            if is_single_letter_dotted(&words[index].word) {
-                let continues = words
-                    .get(index + 1)
-                    .map(|next| is_single_letter_dotted(&next.word))
-                    .unwrap_or(false);
+            if is_single_letter_dotted(units.unit(index).unwrap_or_default()) {
+                let continues = units.unit(index + 1).is_some_and(is_single_letter_dotted);
                 if continues {
                     continue;
                 }
             }
-            if should_suppress_question_bang_split(words, index) {
+            if should_suppress_question_bang_split(units, index) {
                 continue;
             }
             push_split_point(&mut out, index, SplitReason::TerminalPunctuation);
@@ -152,14 +185,17 @@ fn build_split_points_with_punkt(
 ///
 /// English-only by construction — it keys off capitalisation, so callers must
 /// gate it on [`LanguageProfile::uses_punkt_sentence_boundary`].
-pub(super) fn should_suppress_question_bang_split(words: &[WordTokenDto], index: usize) -> bool {
-    let Some(token) = words.get(index) else {
+pub(super) fn should_suppress_question_bang_split<U: UnitText + ?Sized>(
+    units: &U,
+    index: usize,
+) -> bool {
+    let Some(token) = units.unit(index) else {
         return false;
     };
-    if !is_question_bang_terminal(&token.word) {
+    if !is_question_bang_terminal(token) {
         return false;
     }
-    let Some(next) = next_content_word(words, index) else {
+    let Some(next) = next_content_word(units, index) else {
         return false;
     };
     !looks_like_english_sentence_start(next)
@@ -178,11 +214,12 @@ fn is_closer_only_token(token: &str) -> bool {
     !trimmed.is_empty() && strip_trailing_closers(trimmed).is_empty()
 }
 
-fn next_content_word(words: &[WordTokenDto], index: usize) -> Option<&str> {
-    words[(index + 1)..]
-        .iter()
-        .map(|word| word.word.as_str())
-        .find(|token| !is_closer_only_token(token))
+fn next_content_word<U: UnitText + ?Sized>(units: &U, index: usize) -> Option<&str> {
+    // `find_map(..).filter(..)` would stop at the first *existing* unit and then
+    // reject it — it would never look past a closer-only token. The filter has
+    // to sit inside the search for "next word that isn't a stray quote mark".
+    ((index + 1)..units.unit_count())
+        .find_map(|i| units.unit(i).filter(|token| !is_closer_only_token(token)))
 }
 
 fn looks_like_english_sentence_start(token: &str) -> bool {
@@ -253,27 +290,28 @@ fn is_dotted_abbreviation(lower: &str) -> bool {
 }
 
 /// 其他语言路径：规则 + 缩写表。
-fn build_split_points_with_rules(
-    words: &[WordTokenDto],
+fn build_split_points_with_rules<U: UnitText + ?Sized>(
+    units: &U,
     profile: &dyn LanguageProfile,
 ) -> Vec<(usize, SplitReason)> {
     let mut out = Vec::<(usize, SplitReason)>::new();
     let abbrs = profile.abbreviations();
-    for index in 0..words.len() {
-        let punct_end = is_terminal_end(&words[index].word, abbrs);
-        let spoken_end = words.get(index + 1).is_some_and(|next| {
-            let next2 = words.get(index + 2).map(|w| w.word.as_str()).unwrap_or("");
+    for index in 0..units.unit_count() {
+        let here = units.unit(index).unwrap_or_default();
+        let punct_end = is_terminal_end(here, abbrs);
+        let spoken_end = units.unit(index + 1).is_some_and(|next| {
+            let next2 = units.unit(index + 2).unwrap_or_default();
             let prev = if index == 0 {
                 ""
             } else {
-                words[index - 1].word.as_str()
+                units.unit(index - 1).unwrap_or_default()
             };
-            is_japanese_spoken_end(prev, &words[index].word, &next.word, next2)
+            is_japanese_spoken_end(prev, here, next, next2)
         });
         // はい / 皆さん start a new move even when the current line is short.
-        let turn_before = words.get(index + 1).is_some_and(|next| {
-            let next2 = words.get(index + 2).map(|w| w.word.as_str()).unwrap_or("");
-            is_ja_turn_start_after(&words[index].word, &next.word, next2)
+        let turn_before = units.unit(index + 1).is_some_and(|next| {
+            let next2 = units.unit(index + 2).unwrap_or_default();
+            is_ja_turn_start_after(here, next, next2)
         });
         if !punct_end && !spoken_end && !turn_before {
             continue;
@@ -281,11 +319,8 @@ fn build_split_points_with_rules(
         // Single-letter dotted token (B./A./J.): only suppress the split when
         // it forms an initial chain with the next token. An isolated single-
         // letter token is a real sentence end (e.g. "step one B.").
-        if punct_end && is_single_letter_dotted(&words[index].word) {
-            let continues = words
-                .get(index + 1)
-                .map(|next| is_single_letter_dotted(&next.word))
-                .unwrap_or(false);
+        if punct_end && is_single_letter_dotted(here) {
+            let continues = units.unit(index + 1).is_some_and(is_single_letter_dotted);
             if continues {
                 continue;
             }
@@ -317,7 +352,8 @@ pub(super) fn build_deterministic_split_points(
     words: &[WordTokenDto],
 ) -> Vec<(usize, SplitReason)> {
     use super::profile::profile_for_lang;
-    build_split_points_from_hard_boundaries(words, &*profile_for_lang("en"))
+    let units: Vec<&str> = words.iter().map(|w| w.word.as_str()).collect();
+    build_split_points_from_hard_boundaries(&units[..], &*profile_for_lang("en"))
 }
 
 fn push_split_point(

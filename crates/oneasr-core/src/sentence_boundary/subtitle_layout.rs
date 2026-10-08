@@ -30,7 +30,7 @@ use super::boundary_rules::{
     is_japanese_orthographic_bind, is_japanese_spoken_end, is_line_start_bound_particle,
     is_numeric_continuation, is_open_genitive_link, is_opening_punctuation,
     is_phrase_close_particle, is_soft_punctuation, is_split_connector_pair, is_split_hai,
-    is_time_glued_content, is_to_binding_left, lexical_cut_cost, strip_token, token_gap_sec,
+    is_time_glued_content, is_to_binding_left, lexical_cut_cost, strip_token,
 };
 use super::profile::{Advisor, LanguageProfile};
 use super::types::SplitReason;
@@ -44,6 +44,41 @@ const LENGTH_PENALTY_WEIGHT: f64 = 0.3;
 /// A VAD silence at least this wide (seconds) counts as a linguistically good
 /// cut point (a real pause, not a breath).
 const VAD_QUALITY_SILENCE_SEC: f64 = 0.5;
+
+/// One unit's acoustic timing, or `None` when the caller has none.
+///
+/// `None` means **"no acoustic information"**, not "zero gap" — and the
+/// boundary rules already read it that way: `lexical_cut_cost(None)` is the
+/// neutral [`WORD_COST`], `is_time_glued_content(.., None)` is `false` so an
+/// unseen pause never suppresses a cut, and the VAD branches simply do not
+/// fire. That is what lets 智能断句 share this code with the transcription
+/// path instead of re-implementing a weaker splitter: before alignment there
+/// is no timing, so every gap reads as unknown and the DP degrades to a pure
+/// text + length optimiser. Nothing else about the policy changes.
+///
+/// Non-finite `start`/`end` is how "untimed" is carried. It is written only by
+/// [`WordTokenDto::untimed`] and never escapes this module, so a caller cannot
+/// fabricate timing — and, more importantly, cannot pass a zero-length span,
+/// which would read as "glued" and suppress every cut in a Chinese line.
+#[inline]
+fn timing(w: &WordTokenDto) -> Option<(f64, f64)> {
+    (w.start.is_finite() && w.end.is_finite()).then_some((w.start, w.end))
+}
+
+/// `(left_end, right_start)` for the cut **after** unit `i`, or `None` when
+/// either side is untimed. This is the pair the VAD and word-gap branches want.
+#[inline]
+fn boundary_at(words: &[WordTokenDto], i: usize) -> Option<(f64, f64)> {
+    let (_, left_end) = timing(words.get(i)?)?;
+    let (right_start, _) = timing(words.get(i + 1)?)?;
+    Some((left_end, right_start))
+}
+
+/// Gap between unit `i` and unit `i + 1`, or `None` when either is untimed.
+#[inline]
+fn gap_at(words: &[WordTokenDto], i: usize) -> Option<f64> {
+    boundary_at(words, i).map(|(l_end, r_start)| (r_start - l_end).max(0.0))
+}
 
 /// Cost of cutting after word `i` (between `words[i]` and `words[i+1]`).
 /// Lower = better place to cut.
@@ -147,22 +182,20 @@ fn boundary_base_cost(
 
     // Time-glued content is a poor cut, not an illegal one — aligner
     // collapse can glue a whole breath group to 0ms, and forbidding
-    // those cuts would produce 50-char cues.
-    if is_time_glued_content(
-        &left.word,
-        &right.word,
-        token_gap_sec(Some(left.end), Some(right.start)),
-    ) {
+    // those cuts would produce 50-char cues. `None` (untimed) is not glued.
+    if is_time_glued_content(&left.word, &right.word, gap_at(words, i)) {
         return GLUED_WORD_COST;
     }
 
     // VAD silence crossing — acoustic boundary, cost scales with pause width.
-    if vad_index.crosses_silence(left.end, right.start) {
-        let sil = vad_index.silence_duration_sec(left.end, right.start);
+    if let Some((l_end, r_start)) = boundary_at(words, i)
+        && vad_index.crosses_silence(l_end, r_start)
+    {
+        let sil = vad_index.silence_duration_sec(l_end, r_start);
         return 2.0 - super::vad_align::vad_strength(sil);
     }
     // Word-gap pause fallback (when VAD data is missing or misses the gap).
-    if let Some(gap) = token_gap_sec(Some(left.end), Some(right.start))
+    if let Some(gap) = gap_at(words, i)
         && gap >= GOOD_SILENCE_SEC
     {
         return 2.0 - 0.5 * (gap - GOOD_SILENCE_SEC).min(0.9) / 0.9;
@@ -171,7 +204,7 @@ fn boundary_base_cost(
     // advisor (jieba for zh) forbids gaps inside a segmented word.
     match advisor.is_word_boundary(byte_offset) {
         Some(false) => FORBIDDEN_COST,
-        _ => lexical_cut_cost(token_gap_sec(Some(left.end), Some(right.start))),
+        _ => lexical_cut_cost(gap_at(words, i)),
     }
 }
 
@@ -242,21 +275,19 @@ fn is_quality_cut_boundary(
     {
         return true;
     }
-    if is_time_glued_content(
-        &left.word,
-        &right.word,
-        token_gap_sec(Some(left.end), Some(right.start)),
-    ) {
+    if is_time_glued_content(&left.word, &right.word, gap_at(words, i)) {
         return false;
     }
     // A real acoustic pause is a good cut: VAD crossing (≥0.5s silence) or a
-    // word-gap pause (≥0.35s) when VAD has no data for it.
-    if vad_index.crosses_silence(left.end, right.start)
-        && vad_index.silence_duration_sec(left.end, right.start) >= VAD_QUALITY_SILENCE_SEC
+    // word-gap pause (≥0.35s) when VAD has no data for it. Untimed input has
+    // neither, so it simply never gets a bonus here.
+    if let Some((l_end, r_start)) = boundary_at(words, i)
+        && vad_index.crosses_silence(l_end, r_start)
+        && vad_index.silence_duration_sec(l_end, r_start) >= VAD_QUALITY_SILENCE_SEC
     {
         return true;
     }
-    if let Some(gap) = token_gap_sec(Some(left.end), Some(right.start))
+    if let Some(gap) = gap_at(words, i)
         && gap >= GOOD_SILENCE_SEC
     {
         return true;
@@ -293,6 +324,34 @@ pub(super) fn build_subtitle_layout_split_points(
         }
     }
     out
+}
+
+/// Text-only entry: the same segmentation, with every gap reported as unknown.
+///
+/// This is 智能断句's path. It runs before alignment, so there is no timing and
+/// no VAD — but the policy is otherwise **the same code**: the same
+/// [`SpanBudget`], the same [`is_quality_cut_boundary`] grammar guards, the same
+/// DP. Only the two acoustic inputs are absent, and the boundary rules already
+/// degrade gracefully when they are (see [`timing`]).
+///
+/// The previous implementation was a separate greedy first-fit splitter that
+/// implemented only the DP's force tier — it cut at the budget regardless of
+/// punctuation, which put ~92% of Chinese cuts mid-sentence.
+pub(super) fn build_subtitle_layout_split_points_text_only(
+    units: &[&str],
+    semantic_spans: &[(usize, usize)],
+    profile: &dyn LanguageProfile,
+    preset: SubtitleLengthPreset,
+) -> Vec<(usize, SplitReason)> {
+    if units.len() < 2 {
+        return Vec::new();
+    }
+    let words: Vec<WordTokenDto> = units.iter().map(|u| WordTokenDto::untimed(*u)).collect();
+    // No VAD data at this stage. An empty index answers `crosses_silence`
+    // with `false` (it needs ≥2 segments), which is the honest "no acoustic
+    // information" answer rather than "no silence here".
+    let no_vad = SpeechSegmentIndex::new(Vec::new());
+    build_subtitle_layout_split_points(&words, semantic_spans, profile, preset, &no_vad)
 }
 
 /// One DP-chosen cut: absolute word index + the dominant boundary reason.
@@ -703,8 +762,7 @@ fn greedy_cuts_by_hard_limit(
         // Overflow: keep bunsetsu / kinsoku attachments on this line.
         let overflow_left = words[start + i - 1].word.as_str();
         let overflow_right = words[start + i].word.as_str();
-        let overflow_gap =
-            token_gap_sec(Some(words[start + i - 1].end), Some(words[start + i].start));
+        let overflow_gap = gap_at(words, start + i - 1);
         let overflow_next2 = peek_word(words, start + i + 1);
         let emergency = units > hard.max_unit + 8.0;
         let structural_hold = (is_line_start_bound_particle(overflow_right)
@@ -737,12 +795,9 @@ fn greedy_cuts_by_hard_limit(
             }
             let glued = is_single_cjk_char_token(left)
                 && is_single_cjk_char_token(right)
-                && token_gap_sec(
-                    Some(words[start + cut - 1].end),
-                    Some(words[start + cut].start),
-                )
-                .map(|g| g <= GLUE_GAP_SEC)
-                .unwrap_or(false);
+                && gap_at(words, start + cut - 1)
+                    .map(|g| g <= GLUE_GAP_SEC)
+                    .unwrap_or(false);
             if glued && glue_steps < 2 {
                 cut -= 1;
                 glue_steps += 1;
