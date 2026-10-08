@@ -20,6 +20,20 @@ pub(super) struct RowCtx {
     pub(super) timing_progress: f32,
 }
 
+/// 把一行的悬停事件落到全局悬停标记上，返回「状态有没有真的变」。
+///
+/// 纯函数（`task_row_view` 是自由函数，这里同样不碰 GPUI）。存在的理由：
+/// 指针从 A 行直接移到 B 行时，A 的 `hover(false)` 也会来一次，而那时标记
+/// 已经是 B 了——值没变就不该 `cx.notify()`，重画出来也是同样的像素。
+/// 进 B 行、或把当前标记所在的行清空，都是变。
+fn hover_row_changed(row_id: &str, hovered: bool, current: Option<&str>) -> bool {
+    if hovered {
+        current != Some(row_id)
+    } else {
+        current == Some(row_id)
+    }
+}
+
 pub(super) fn task_row_view(
     ix: usize,
     row: &TaskRowView,
@@ -139,12 +153,15 @@ pub(super) fn task_row_view(
             if !interactive {
                 return;
             }
-            if *hovered {
-                this.hover_row = Some(row_id_hover.clone());
-            } else if this.hover_row.as_ref() == Some(&row_id_hover) {
-                this.hover_row = None;
+            let changed = hover_row_changed(&row_id_hover, *hovered, this.hover_row.as_deref());
+            if changed {
+                if *hovered {
+                    this.hover_row = Some(row_id_hover.clone());
+                } else {
+                    this.hover_row = None;
+                }
+                cx.notify();
             }
-            cx.notify();
         }))
         .child(
             div()
@@ -666,4 +683,26 @@ pub(super) fn task_row_view(
                     ),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hover_row_changed;
+
+    #[test]
+    fn entering_a_row_is_a_change() {
+        assert!(hover_row_changed("a", true, None));
+        // 已经在这一行上（gpui 的重复 hover(true)）——不是变化。
+        assert!(!hover_row_changed("a", true, Some("a")));
+        // 指针从别的行移过来。
+        assert!(hover_row_changed("b", true, Some("a")));
+    }
+
+    #[test]
+    fn leaving_the_hovered_row_is_a_change_and_leaving_another_is_not() {
+        assert!(hover_row_changed("a", false, Some("a")));
+        // 指针从 A 直接走到 B：A 的 hover(false) 到达时标记已经是 B，别再要一帧。
+        assert!(!hover_row_changed("a", false, Some("b")));
+        assert!(!hover_row_changed("a", false, None));
+    }
 }

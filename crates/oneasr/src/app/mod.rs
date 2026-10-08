@@ -7,6 +7,7 @@
 //! module do that without widening anything to `pub(crate)`.
 
 use crate::app::prelude::*;
+use crate::app::ui::status_bar::StatusBarTextCache;
 use crate::app::ui::transcript_card::TranscriptCardView;
 
 pub(crate) mod downloads;
@@ -78,6 +79,16 @@ pub(crate) struct OneAsrApp {
     transcript_card_anim_t0: Instant,
     /// One-shot result of the last card action (断句行数 / 重新读取的结果).
     transcript_card_note: Option<String>,
+    /// Rows with a 智能断句 run in flight (task id → nothing else).
+    ///
+    /// The break used to run on the UI thread, so the frozen window made a
+    /// double click impossible. Now it is a background thread and the button
+    /// stays live, so a second click would spawn a *second* full jieba +
+    /// layout-DP pass over the same text — `OnceLock<Jieba>` only guards the
+    /// dictionary build, not the tokenize, so they really would run in
+    /// parallel. The result is still correct (idempotent + CAS), it just burns
+    /// N times the CPU on a machine that may be running ASR at the same time.
+    transcript_breaking: HashSet<String>,
     /// Task id whose language dropdown is open (`None` = closed).
     lang_menu: Option<String>,
     /// Settings panel: default-language dropdown open.
@@ -147,6 +158,9 @@ pub(crate) struct OneAsrApp {
     welcome_open: bool,
     /// Day cell under the pointer in the year grid, `YYYY-MM-DD`.
     stats_hover_day: Option<String>,
+    /// 状态栏两处文案的缓存。键就是格式化函数本身的入参（见
+    /// `status_bar.rs::StatusBarKey`），所以**不需要在别处失效**——命中即等价。
+    status_bar_text: StatusBarTextCache,
     /// Cached ledger aggregation. Recomputed on load and after every finished
     /// task — **never per frame**, since the panel repaints on each cell hover.
     stats: StatsSummary,
@@ -193,6 +207,7 @@ impl OneAsrApp {
             transcript_card_to: 0.0,
             transcript_card_anim_t0: Instant::now(),
             transcript_card_note: None,
+            transcript_breaking: HashSet::new(),
             timing_leave_since: None,
             timing_pop_from: 0.0,
             timing_pop_to: 0.0,
@@ -234,6 +249,7 @@ impl OneAsrApp {
             stats_open: false,
             welcome_open,
             stats_hover_day: None,
+            status_bar_text: StatusBarTextCache::default(),
             // Read the ledger once at startup; refreshed on every finished task.
             stats: oneasr_core::stats::summarize(&oneasr_core::stats::load(
                 &oneasr_core::paths::data_dir(),
@@ -256,7 +272,14 @@ impl OneAsrApp {
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(Duration::from_millis(80)).await;
-                this.update(cx, |app, cx| app.poll_worker(cx)).ok();
+                // `WeakEntity::update` 的失败只有两种可能：实体已释放，或 app 已
+                // 释放（见 vendor/gpui `entity_map.rs` 的 `"entity released"` 和
+                // `async_context.rs` 的 `"app was released"`）。两者都意味着没有
+                // 可轮询的对象了——窗口关掉后继续 12.5Hz 空转到进程结束只是白烧
+                // CPU，所以这一处是全仓库唯一该 `break` 而不是 `.ok()` 的地方。
+                if this.update(cx, |app, cx| app.poll_worker(cx)).is_err() {
+                    break;
+                }
             }
         })
         .detach();

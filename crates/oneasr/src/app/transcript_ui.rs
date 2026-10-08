@@ -82,6 +82,11 @@ impl OneAsrApp {
     /// 智能断句：只拆过长的行、一个字都不动，结果只落在暂存的那一份上。
     ///
     /// 断完之后**不预览**——切出来的行数当场变，字幕文件里就是结果。
+    ///
+    /// `break_long_lines` 第一次调用要建 jieba 词典，之后每行还要分词再跑一遍排版
+    /// DP；整篇文稿下来是秒级。这段不能在 UI 线程上：gpui 的事件循环被占住就是
+    /// 窗口无响应、动画停摆。送去后台线程，回来时比对输入再落盘
+    /// （见 [`OneAsrApp::handle_transcript_broken`]）。
     pub(crate) fn smart_break_transcript(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.transcript_card.clone() else {
             return;
@@ -93,16 +98,32 @@ impl OneAsrApp {
             .map(|t| t.language.clone())
             .unwrap_or_else(|| self.settings.language.clone());
         let preset = self.settings.subtitle_length_preset.clone();
-        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+        let Some(input) = self
+            .tasks
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.transcript.as_ref())
+            .map(|st| st.text().to_string())
+        else {
             return;
         };
-        let Some(st) = task.transcript.as_mut() else {
+        let tx = self.tx.clone();
+        let job_id = id.clone();
+        // 同一次断句还在跑就忽略这一次点击。断句是秒级的，而按钮一直是活的，
+        // 用户看不到任何反馈，很容易连点——每次点击都会新开一个线程，对整篇文稿
+        // 重跑一遍分词 + 排版 DP。原来的同步实现靠窗口冻结天然挡住了这件事，
+        // 搬到后台之后必须显式挡住。
+        if !self.transcript_breaking.insert(id) {
             return;
-        };
-        st.text = oneasr_core::sentence_boundary::break_long_lines(&st.text, &lang, &preset);
-        let lines = st.line_count();
-        self.transcript_card_note =
-            Some(expand(t(L::TRANSCRIPT_BROKE), &[("n", &lines.to_string())]));
+        }
+        thread::spawn(move || {
+            let text = oneasr_core::sentence_boundary::break_long_lines(&input, &lang, &preset);
+            let _ = tx.send(WorkerMsg::TranscriptBroken {
+                id: job_id,
+                input,
+                text,
+            });
+        });
         cx.notify();
     }
 

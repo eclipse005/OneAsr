@@ -202,7 +202,7 @@ impl OneAsrApp {
             .transcript
             .as_ref()
             .map(|st| oneasr_core::TranscriptInput {
-                text: st.text.clone(),
+                text: st.text().to_string(),
                 path: st.path.clone(),
             });
 
