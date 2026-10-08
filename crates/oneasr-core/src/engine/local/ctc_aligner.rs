@@ -16,9 +16,12 @@
 //! `language` 参数 CTC 不需要（脚本判定逐段做，不查语言表），忽略。
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use super::backend::ComputeBackend;
-use ctc_forced_aligner_wgpu::{Aligner as CtcAligner, Backend as CtcBackend};
+use ctc_forced_aligner_wgpu::{
+    AlignOutput, Aligner as CtcAligner, Backend as CtcBackend, Progress,
+};
 
 use crate::engine::{AlignProgress, AlignRequest, AlignedToken, Aligner, EngineError};
 
@@ -52,28 +55,39 @@ impl CtcAlignerAdapter {
 }
 
 impl Aligner for CtcAlignerAdapter {
-    /// 把 crate 的窗口进度原样交给上层：一小时音频按 30 s 窗口是 120 个刻度，
-    /// 足够画一条不跳的条。分母由 crate 数出来（`div_ceil`），这里不重算——
-    /// 上面猜的秒数没有下面数出来的窗口准。
+    /// 把上游的「整条 run 进度」搬进我们自己的单线程 `FnMut` 契约。
+    ///
+    /// 上游现在把 `Progress`（阶段 + 整条 run 的 done/total）交给一个
+    /// `Fn(Progress) + Send + Sync` 的 sink，而且**可能在自己的编码线程或 DP
+    /// worker 上触发**——不再保证在调用方线程上。契约要的是「单线程的
+    /// `&mut FnMut`」，所以把回调放进一个锁后面：上游拿到的那个闭包只做
+    /// 「加锁 → 调一次 → 解锁」，于是并发调用自动串行，调用方的独占语义不变。
+    ///
+    /// 上游明确说它在回调期间持有自己的进度锁，并要求回调「不要回头等调用方」，
+    /// 所以这里绝不能反调 align、也不能阻塞——一次 `Mutex::lock` 之后直接调用。
+    /// 顺带的好处：回调被串行化之后，`done` 到达我们的顺序就是上游发出它们的
+    /// 顺序，界面上不会看到进度条往回跳。
     fn align(
         &self,
         req: AlignRequest<'_>,
         on_progress: Option<AlignProgress<'_>>,
     ) -> Result<Vec<AlignedToken>, EngineError> {
-        // window 30s + context 2s：crate 实测的内存/吞吐旋钮，跨合法区间
-        // 不移动任何时间戳指标（见其 README）；None 才是整文件一次前向。
-        const WINDOW_SEC: f64 = 30.0;
-        const CONTEXT_SEC: f64 = 2.0;
-        let out = self
-            .inner
-            .align(
-                req.wav,
-                req.text,
-                Some(WINDOW_SEC),
-                CONTEXT_SEC,
-                on_progress,
-            )
-            .map_err(|e| EngineError::new(format!("{e:#}")))?;
+        let out = match on_progress {
+            None => self.align_inner(req, None)?,
+            Some(sink) => {
+                // 引擎可能从别的线程回调它，所以它必须能过去。
+                let guarded: Mutex<&mut (dyn FnMut(usize, usize) + Send)> = Mutex::new(sink);
+                self.align_inner(
+                    req,
+                    Some(&|tick: Progress| {
+                        // 毒化的锁说明上一次回调 panic 过；把守卫取回来继续，
+                        // 而不是让整次打轴死在别人的 panic 上。
+                        let mut guard = guarded.lock().unwrap_or_else(|e| e.into_inner());
+                        guard(tick.done, tick.total);
+                    }),
+                )?
+            }
+        };
         Ok(out
             .words
             .into_iter()
@@ -83,5 +97,27 @@ impl Aligner for CtcAlignerAdapter {
                 end_sec: w.end,
             })
             .collect())
+    }
+}
+
+impl CtcAlignerAdapter {
+    fn align_inner(
+        &self,
+        req: AlignRequest<'_>,
+        on_progress: Option<&(dyn Fn(Progress) + Send + Sync)>,
+    ) -> Result<AlignOutput, EngineError> {
+        // window 30s + context 2s：crate 实测的内存/吞吐旋钮，跨合法区间
+        // 不移动任何时间戳指标（见其 README）；None 才是整文件一次前向。
+        const WINDOW_SEC: f64 = 30.0;
+        const CONTEXT_SEC: f64 = 2.0;
+        self.inner
+            .align(
+                req.wav,
+                req.text,
+                Some(WINDOW_SEC),
+                CONTEXT_SEC,
+                on_progress,
+            )
+            .map_err(|e| EngineError::new(format!("{e:#}")))
     }
 }

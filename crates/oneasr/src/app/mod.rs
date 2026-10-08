@@ -442,7 +442,7 @@ pub(crate) fn run_task(
     name: &str,
     settings: &Settings,
     transcript: Option<&oneasr_core::TranscriptInput>,
-    on_stage: impl FnMut(StageUpdate),
+    on_stage: impl FnMut(StageUpdate) + Send,
 ) -> Result<PathBuf, String> {
     // `bin/ffmpeg` is the usual app-root marker, but a system ffmpeg on PATH
     // leaves the install dir without one — fall back to the exe directory.

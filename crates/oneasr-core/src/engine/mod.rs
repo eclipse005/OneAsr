@@ -90,7 +90,16 @@ pub struct AlignRequest<'a> {
 /// 分母是引擎的工作单元（CTC 是编码窗口），不是秒：秒只能估，单元是数出来的。
 /// 引擎整段一次算完的路径（Qwen 对齐器按 ASR 段调用）传 `None`——上层据此
 /// 显示「没有分母」，而不是一个假的一跳到底。
-pub type AlignProgress<'a> = &'a mut dyn FnMut(usize, usize);
+/// `(done, total)` 自然回调**只在打轴的那条线程上**。
+///
+/// 分母来自引擎自己的工作单元：CTC 现在报的是**整条 run**（编码窗口、Viterbi、
+/// 回溯、分数回放、时间线）的刻度，Qwen 不报进度（`None`，像以前一样）。所以显示
+/// 上的 `done / total` 是「一次打轴的百分比」，不是「现在到第几秒」。
+///
+/// `Send` 是为了让这个 sink 能被移进一条转发线程：CTC 的引擎会从它自己的编码线程
+/// 或 DP worker 上触发回调，而契约要的是单线程 `FnMut`。`Sync` **不要求**——转发
+/// 线程是唯一的调用方，独占语义一字不改。
+pub type AlignProgress<'a> = &'a mut (dyn FnMut(usize, usize) + Send);
 
 /// One aligned token with seconds relative to the request's audio.
 #[derive(Debug, Clone, PartialEq)]

@@ -31,7 +31,6 @@ pub use model_check::{
     invalidate_all_model_checks, invalidate_model_check, is_model_ready,
 };
 
-use std::cell::RefCell;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -390,7 +389,7 @@ pub fn process_media_file_with_progress<'a>(
     media_name: &str,
     settings: &Settings,
     data_root: &Path,
-    on_stage: impl FnMut(StageUpdate) + 'a,
+    on_stage: impl FnMut(StageUpdate) + Send + 'a,
 ) -> Result<PathBuf, AsrError> {
     process_media_file_with_export(
         input,
@@ -408,7 +407,7 @@ pub fn process_media_file_with_export<'a>(
     media_name: &str,
     settings: &Settings,
     data_root: &Path,
-    on_stage: impl FnMut(StageUpdate) + 'a,
+    on_stage: impl FnMut(StageUpdate) + Send + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
     let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
@@ -431,7 +430,7 @@ pub fn process_media_file_with_provider<'a>(
     settings: &Settings,
     data_root: &Path,
     provider: &dyn crate::engine::EngineProvider,
-    on_stage: impl FnMut(StageUpdate) + 'a,
+    on_stage: impl FnMut(StageUpdate) + Send + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
     Pipeline::new(settings, provider, on_stage).run(input, media_name, data_root, export)
@@ -463,7 +462,7 @@ pub fn process_media_file_with_transcript_export<'a>(
     transcript: &TranscriptInput,
     settings: &Settings,
     data_root: &Path,
-    on_stage: impl FnMut(StageUpdate) + 'a,
+    on_stage: impl FnMut(StageUpdate) + Send + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
     let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
@@ -485,7 +484,7 @@ pub fn process_media_file_with_transcript<'a>(
     settings: &Settings,
     data_root: &Path,
     provider: &dyn crate::engine::EngineProvider,
-    on_stage: impl FnMut(StageUpdate) + 'a,
+    on_stage: impl FnMut(StageUpdate) + Send + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
     Pipeline::new(settings, provider, on_stage)
@@ -547,28 +546,56 @@ struct AlignOutput {
     words: Vec<WordToken>,
 }
 
+/// 线程安全的进度出口。
+///
+/// 不是 `RefCell`：引擎**可能从它自己的线程**回调打轴进度（CTC 的编码线程 /
+/// DP worker 就是这样），所以出口必须是 `Send + Sync`，否则连"把进度转发出去"
+///这件事都做不到。
+///
+/// 有了它，打轴阶段的 sink 闭包只需要捕获 `&self.on_stage` 一个字段——那是
+/// `Sync` 的，于是闭包本身是 `Send`，可以被引擎从任何线程调用；`Pipeline`
+/// 其余部分（`provider` 是 `!Sync` 的 trait object）完全不必变成 `Sync`。
+///
+/// 锁中毒时把守卫取回来继续，而不是让别人的 panic 带走整次运行。
+struct ProgressSink<'a> {
+    inner: std::sync::Mutex<Box<dyn FnMut(StageUpdate) + Send + 'a>>,
+}
+
+impl<'a> ProgressSink<'a> {
+    fn new(f: impl FnMut(StageUpdate) + Send + 'a) -> Self {
+        Self {
+            inner: std::sync::Mutex::new(Box::new(f)),
+        }
+    }
+
+    fn send(&self, update: StageUpdate) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard(update);
+    }
+}
+
 /// Convert → VAD → ASR → align → SRT. ASR is dropped before the aligner loads.
 struct Pipeline<'a> {
     settings: &'a Settings,
     provider: &'a dyn EngineProvider,
-    on_stage: RefCell<Box<dyn FnMut(StageUpdate) + 'a>>,
+    on_stage: ProgressSink<'a>,
 }
 
 impl<'a> Pipeline<'a> {
     fn new(
         settings: &'a Settings,
         provider: &'a dyn EngineProvider,
-        on_stage: impl FnMut(StageUpdate) + 'a,
+        on_stage: impl FnMut(StageUpdate) + Send + 'a,
     ) -> Self {
         Self {
             settings,
             provider,
-            on_stage: RefCell::new(Box::new(on_stage)),
+            on_stage: ProgressSink::new(on_stage),
         }
     }
 
     fn emit(&self, update: StageUpdate) {
-        (self.on_stage.borrow_mut())(update);
+        self.on_stage.send(update);
     }
 
     fn run(
@@ -996,11 +1023,18 @@ impl<'a> Pipeline<'a> {
             .map_err(|e| AsrError::LoadAligner(e.message().to_string()))?;
 
         self.emit(StageUpdate::new(AsrStage::Aligning));
-        // 进度是真的：分母由 CTC 对齐器自己数（编码窗口），不是这里估的秒数。
+        // 进度是真的：分母由对齐器自己数——CTC 现在报的是**整条 run** 的刻度
+        // （编码窗口 + Viterbi + 回溯 + 分数回放 + 时间线），所以 100% 意味着
+        // 最后一步也做完了，而不是"窗口都提交上去了"（那会儿活还挂在设备上）。
         // 用户给一份 21 分钟的文稿要对着一个不动的「打轴中」等二十几秒，
         // 那二十几秒里唯一能告诉他「还在动」的东西就是这条进度。
+        //
+        // 只捕获 `self.on_stage` 这一个字段：它是 `Sync` 的，所以这个闭包是
+        // `Send` 的，能被对齐器从它自己的线程调用；`Pipeline` 其余部分
+        // （`provider` 是 `!Sync` 的 trait object）因此不必变成 `Sync`。
+        let progress = &self.on_stage;
         let mut sink = |done: usize, total: usize| {
-            self.emit(StageUpdate::with_chunk(AsrStage::Aligning, done, total));
+            progress.send(StageUpdate::with_chunk(AsrStage::Aligning, done, total));
         };
         let result = aligner
             .align(
