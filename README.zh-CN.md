@@ -8,23 +8,18 @@
   [English](README.md) · **简体中文**
 </div>
 
-<table>
+<table width="100%">
   <tr>
     <td width="50%" valign="top">
       <p><strong>01 · 音视频转写</strong></p>
       <h3>把音视频变成字幕</h3>
       <p><strong>输入</strong> · 音频或视频</p>
       <p align="center">
-        <code>人声分离 · 可选</code><br>
+        <code>音频/视频</code> → <code>VAD 分段</code> → <code>Qwen3-ASR 转写</code><br>
         ↓<br>
-        <code>VAD 分段</code><br>
-        ↓<br>
-        <code>Qwen3-ASR 转写</code><br>
-        ↓<br>
-        <code>CTC 词级打轴</code><br>
-        ↓<br>
-        <code>智能断句</code>
+        <code>CTC 词级打轴</code> → <code>智能断句</code>
       </p>
+      <p>可选先进行人声分离，再分段和转写语音。</p>
       <p><strong>输出</strong> · SRT / ASS / TXT</p>
     </td>
     <td width="50%" valign="top">
@@ -32,11 +27,13 @@
       <h3>给现有文稿加上时间轴</h3>
       <p><strong>输入</strong> · 音视频 + 校对好的 .txt / .srt</p>
       <p align="center">
-        <code>人声分离 · 可选</code><br>
+        <code>音视频</code> + <code>文稿</code><br>
         ↓<br>
         <code>强制对齐打轴</code><br>
-        <sub>跳过语音识别</sub>
+        ↓<br>
+        <code>带时间轴的字幕行</code>
       </p>
+      <p>可选先做人声分离；跳过语音识别，原文保持不变。</p>
       <p><strong>输出</strong> · SRT / ASS</p>
     </td>
   </tr>
