@@ -12,17 +12,18 @@
 //! data-directory policy refuses to put in `%TEMP%`.
 //!
 //! **Privacy**: the user's home prefix is rewritten to `~` before writing
-//! (users paste this file into public issues); media file names are kept and
-//! the session banner says so.
+//! (users paste this file into public issues); media file names are kept.
+//! 正常启动与成功任务的过程信息不会写入错误日志。
 //!
 //! Captures:
 //! - Rust panics (process may still exit; user can open the log after restart)
 //! - Explicit app errors via [`log_error`] / [`log_warn`]
+//! - 任务临时记录只会在失败或进程中断后并入错误日志
 //!
 //! GPU driver hard-crashes may leave no Rust stack — Event Viewer still needed then.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -33,8 +34,193 @@ const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
 /// File name in both the primary and the fallback location.
 const LOG_FILE_NAME: &str = "oneasr-error.log";
+const TASK_JOURNAL_PREFIX: &str = "oneasr-task-";
+const TASK_JOURNAL_SUFFIX: &str = ".pending";
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
+static SESSION_CONTEXT: OnceLock<Mutex<SessionContext>> = OnceLock::new();
+
+#[derive(Default)]
+struct SessionContext {
+    text: String,
+    included_bytes: usize,
+}
+
+fn session_context() -> &'static Mutex<SessionContext> {
+    SESSION_CONTEXT.get_or_init(|| Mutex::new(SessionContext::default()))
+}
+
+fn lock_session_context() -> std::sync::MutexGuard<'static, SessionContext> {
+    session_context()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// 先把上下文留在内存里，等出现问题时再写入错误日志。
+pub fn set_session_context(section: &str, details: impl AsRef<str>) {
+    let mut context = lock_session_context();
+    if !context.text.is_empty() {
+        context.text.push('\n');
+    }
+    context.text.push_str(section);
+    context.text.push_str(":\n");
+    context.text.push_str(details.as_ref());
+    context.text.push('\n');
+}
+
+fn append_problem(level: &str, msg: &str) -> std::io::Result<PathBuf> {
+    let mut session = lock_session_context();
+    let context = session.text[session.included_bytes..].to_string();
+    let body = if context.is_empty() {
+        msg.to_string()
+    } else {
+        format!("diagnostic context:\n{context}\n{msg}")
+    };
+    let result = append_raw(level, &body);
+    if result.is_ok() {
+        session.included_bytes = session.text.len();
+    }
+    result
+}
+
+/// 当前 ASR 任务的临时记录。成功时删除，失败时并入错误日志；进程异常退出后，
+/// 下次启动会把未完成且已解锁的记录并入错误日志。
+pub struct TaskJournal {
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl TaskJournal {
+    pub fn begin(task_id: &str, details: &str) -> std::io::Result<Self> {
+        let dir = oneasr_core::paths::data_dir();
+        let path = dir.join(format!(
+            "{TASK_JOURNAL_PREFIX}{}{TASK_JOURNAL_SUFFIX}",
+            std::process::id()
+        ));
+        Self::begin_at(path, task_id, details)
+    }
+
+    fn begin_at(path: PathBuf, task_id: &str, details: &str) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        // PID 文件名避免进程间重名；文件锁可区分已退出的旧任务和仍在运行的实例。
+        file.try_lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+
+        let mut journal = Self {
+            path,
+            file: Some(file),
+        };
+        let header = format!(
+            "OneAsr {} task journal\n  pid: {}\n  task: {task_id}\n{details}",
+            env!("CARGO_PKG_VERSION"),
+            std::process::id()
+        );
+        if let Err(error) = journal.record(&header) {
+            journal.remove_file();
+            return Err(error);
+        }
+        Ok(journal)
+    }
+
+    pub fn record(&mut self, msg: impl AsRef<str>) -> std::io::Result<()> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("task journal is already closed"))?;
+        let msg = oneasr_core::paths::redact_home(msg.as_ref());
+        writeln!(file, "---- [{}] ----", stamp())?;
+        for line in msg.lines() {
+            writeln!(file, "{line}")?;
+        }
+        writeln!(file)?;
+        file.sync_data()
+    }
+
+    pub fn complete(mut self) {
+        // 若写入成功标记后清理被中断，恢复时只删除记录，不报成任务崩溃。
+        let _ = self.record("task completed successfully");
+        self.remove_file();
+    }
+
+    pub fn promote_failure(mut self, summary: &str) -> std::io::Result<()> {
+        self.record(summary)?;
+        let mut contents = String::new();
+        if let Some(file) = self.file.as_mut() {
+            file.flush()?;
+            file.seek(SeekFrom::Start(0))?;
+            file.read_to_string(&mut contents)?;
+        }
+        let result = append_problem(
+            "ERROR",
+            &format!("task failed; promoted task journal:\n{contents}"),
+        );
+        match result {
+            Ok(_) => {
+                self.remove_file();
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn remove_file(self) {
+        let Self { path, file } = self;
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn recover_interrupted_task_journals() {
+    let dir = oneasr_core::paths::data_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(TASK_JOURNAL_PREFIX) || !name.ends_with(TASK_JOURNAL_SUFFIX) {
+            continue;
+        }
+        let Ok(mut file) = OpenOptions::new().read(true).write(true).open(&path) else {
+            continue;
+        };
+        // 仍在运行的 OneAsr 会持有文件锁；只有已解锁的记录才按中断任务处理。
+        if file.try_lock().is_err() {
+            continue;
+        }
+        let mut contents = String::new();
+        if file.read_to_string(&mut contents).is_err() {
+            continue;
+        }
+        let completed = contents.contains("task completed successfully");
+        let recorded = contents.trim().is_empty()
+            || completed
+            || append_problem(
+                "ERROR",
+                &format!(
+                    "previous process ended while an ASR task was active\n  journal: {}\n{contents}",
+                    path.display()
+                ),
+            )
+            .is_ok();
+        drop(file);
+        if recorded {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
 
 /// `{app_root}/oneasr-error.log`.
 ///
@@ -79,21 +265,6 @@ fn primary_accepts_writes(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 下一条日志的落点：安装目录写得进去就用它，否则退 [`fallback_log_path`]
-/// （数据目录，再不行才临时目录）。
-///
-/// 会话横幅用它：安装目录只读时（本次数据目录重构的主场景）条目落在数据目录，
-/// 横幅里的 `log:` 一行就必须指向数据目录那个文件——用户正是照这一行去找日志
-/// 贴 issue 的。
-fn resolved_log_path() -> PathBuf {
-    let primary = log_path();
-    if primary_accepts_writes(&primary).is_ok() {
-        primary
-    } else {
-        fallback_log_path()
-    }
-}
-
 /// Install panic hook early in `main`. Chains the previous hook (debug console).
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
@@ -111,13 +282,18 @@ pub fn install_panic_hook() {
         };
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("<unnamed>");
-        let body = format!("PANIC thread={name}\n  location: {location}\n  message: {payload}");
-        let _ = append_raw("PANIC", &body);
+        // 强制抓取回溯，Release 下即使没有设置 `RUST_BACKTRACE` 也尽量保留调用栈。
+        // 只在 panic 时执行，额外开销不会进入正常任务路径。
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let body = format!(
+            "PANIC thread={name}\n  location: {location}\n  message: {payload}\n  backtrace:\n{backtrace}"
+        );
+        let _ = append_problem("PANIC", &body);
         previous(info);
     }));
 }
 
-/// Session banner so users know the file is live after a crash report request.
+/// 会话信息先保存在内存中，只有出现问题时才写入日志。
 pub fn log_session_start() {
     let ver = env!("CARGO_PKG_VERSION");
     let exe = std::env::current_exe()
@@ -126,32 +302,34 @@ pub fn log_session_start() {
     let root = resolve_app_root_dir();
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
-    let _ = append_raw(
-        "INFO",
-        &format!(
-            "OneAsr {ver} started\n  exe: {exe}\n  app_root: {}\n  data_root: {}\n  os: {os}/{arch}\n  log: {}\n  note: home paths are redacted to '~'; media file names remain — re-check them before pasting this log into a public issue",
+    {
+        let mut context = lock_session_context();
+        context.text.clear();
+        context.included_bytes = 0;
+    }
+    set_session_context(
+        "session",
+        format!(
+            "OneAsr {ver}\n  pid: {}\n  exe: {exe}\n  app_root: {}\n  data_root: {}\n  os: {os}/{arch}",
+            std::process::id(),
             root.display(),
-            oneasr_core::paths::data_root_log_line(),
-            resolved_log_path().display()
+            oneasr_core::paths::data_root_log_line()
         ),
     );
+    recover_interrupted_task_journals();
 }
 
 /// Font probe result (after GPUI text system is up).
 pub fn log_font_plan(report: &str) {
-    let _ = append_raw("INFO", &format!("font plan\n{report}"));
+    set_session_context("font plan", report);
 }
 
 pub fn log_error(msg: impl AsRef<str>) {
-    let _ = append_raw("ERROR", msg.as_ref());
+    let _ = append_problem("ERROR", msg.as_ref());
 }
 
 pub fn log_warn(msg: impl AsRef<str>) {
-    let _ = append_raw("WARN", msg.as_ref());
-}
-
-pub fn log_info(msg: impl AsRef<str>) {
-    let _ = append_raw("INFO", msg.as_ref());
+    let _ = append_problem("WARN", msg.as_ref());
 }
 
 /// Local wall-clock stamp formatted as `YYYY-MM-DD HH:MM:SS.mmm`.
@@ -307,7 +485,7 @@ fn rotate_if_needed(path: &std::path::Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{stamp, write_entry};
+    use super::{TaskJournal, stamp, write_entry};
     use std::fs;
 
     /// Windows uses a local calendar timestamp with millisecond precision.
@@ -387,6 +565,23 @@ mod tests {
             "a file cannot host a log directory"
         );
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 成功任务的临时过程记录应立即清理，不留在用户可见日志目录。
+    #[test]
+    fn successful_task_journal_is_removed() {
+        let dir =
+            std::env::temp_dir().join(format!("oneasr-task-journal-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("oneasr-task-test.pending");
+        let journal = TaskJournal::begin_at(path.clone(), "task-test", "file: input.wav")
+            .expect("temporary task journal should open");
+
+        assert!(path.exists(), "journal should exist while the task runs");
+        journal.complete();
+
+        assert!(!path.exists(), "successful task journal should be deleted");
         let _ = fs::remove_dir_all(&dir);
     }
 }

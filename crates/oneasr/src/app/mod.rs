@@ -317,12 +317,86 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                     } => {
                         let id_for_progress = id.clone();
                         let ptx = worker_tx.clone();
+                        let worker_started = Instant::now();
                         let mut clock = StageClock::new();
+                        let mut active_stage: Option<(AsrStage, Instant)> = None;
+                        let journal_context = format!(
+                            "  file: {}\n  asr_model: {}\n  backend: {}\n  language: {}\n  vocal_separation: {}\n  transcript_mode: {}",
+                            path.display(),
+                            settings.asr_model_dir.display(),
+                            settings.backend,
+                            settings.language,
+                            settings.vocal_separation,
+                            transcript.is_some()
+                        );
+                        let mut journal = match crashlog::TaskJournal::begin(&id, &journal_context)
+                        {
+                            Ok(journal) => Some(journal),
+                            Err(error) => {
+                                crashlog::log_warn(format!(
+                                    "task journal unavailable: {id}\n  error: {error}"
+                                ));
+                                None
+                            }
+                        };
+                        let mut journal_write_warned = false;
                         // A panic inside the pipeline must not kill the shared
                         // worker (that would strand `Processing` rows forever).
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             run_task(&path, &name, &settings, transcript.as_ref(), |update| {
                                 clock.note(&update);
+                                if active_stage.as_ref().map(|(stage, _)| *stage)
+                                    != Some(update.stage)
+                                {
+                                    if let Some((previous, started)) = active_stage.take() {
+                                        record_task_journal(
+                                            &mut journal,
+                                            &mut journal_write_warned,
+                                            &id,
+                                            &format!(
+                                            "task stage finished: {id}\n  stage: {previous:?}\n  elapsed_ms: {}",
+                                            started.elapsed().as_millis()
+                                            ),
+                                        );
+                                    }
+                                    let stage_started = Instant::now();
+                                    let chunk = update
+                                        .chunk
+                                        .map(|(current, total)| {
+                                            format!("\n  first_chunk: {current}/{total}")
+                                        })
+                                        .unwrap_or_default();
+                                    record_task_journal(
+                                        &mut journal,
+                                        &mut journal_write_warned,
+                                        &id,
+                                        &format!(
+                                            "task stage started: {id}\n  stage: {:?}\n  label: {}\n  task_elapsed_ms: {}{}",
+                                            update.stage,
+                                            update.stage.label(ui_lang()),
+                                            worker_started.elapsed().as_millis(),
+                                            chunk
+                                        ),
+                                    );
+                                    active_stage = Some((update.stage, stage_started));
+                                }
+                                if let Some(warning) = update.warning.as_deref() {
+                                    record_task_journal(
+                                        &mut journal,
+                                        &mut journal_write_warned,
+                                        &id,
+                                        &format!(
+                                            "task warning: {id}\n  stage: {:?}\n  message: {warning}",
+                                            update.stage
+                                        ),
+                                    );
+                                }
+                                if let Some(warning) = update.warning.as_deref() {
+                                    crashlog::log_warn(format!(
+                                        "task warning: {id}\n  stage: {:?}\n  message: {warning}",
+                                        update.stage
+                                    ));
+                                }
                                 let warning = update.warning.as_ref().map(SharedString::from);
                                 let _ = ptx.send(WorkerMsg::Progress {
                                     id: id_for_progress.clone(),
@@ -336,7 +410,54 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                             crashlog::log_error(format!("ASR worker panic (task {id}): {message}"));
                             Err(crate::i18n::task_thread_panic(&message))
                         });
+                        if let Some((stage, started)) = active_stage.take() {
+                            record_task_journal(
+                                &mut journal,
+                                &mut journal_write_warned,
+                                &id,
+                                &format!(
+                                    "task stage finished: {id}\n  stage: {stage:?}\n  outcome: {}\n  elapsed_ms: {}",
+                                    if result.is_ok() { "completed" } else { "failed" },
+                                    started.elapsed().as_millis()
+                                ),
+                            );
+                        }
                         let timing = clock.finish();
+                        if result.is_ok() {
+                            if let Some(journal) = journal.take() {
+                                journal.complete();
+                            }
+                        } else {
+                            let stage_summary = timing
+                                .stages
+                                .iter()
+                                .map(|stage| {
+                                    format!("{:?}={}ms", stage.stage, stage.elapsed_ms)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let error = result.as_ref().expect_err("checked task failure");
+                            let summary = format!(
+                                "task failed: {id}\n  total_ms: {}\n  stages: {}\n  error: {error}",
+                                timing.total_ms,
+                                if stage_summary.is_empty() {
+                                    "<no stage reported>"
+                                } else {
+                                    stage_summary.as_str()
+                                }
+                            );
+                            if let Some(journal) = journal.take() {
+                                if let Err(log_error) = journal.promote_failure(&summary) {
+                                    crashlog::log_error(format!(
+                                        "{summary}\n  task journal promotion failed: {log_error}\n  context:\n{journal_context}"
+                                    ));
+                                }
+                            } else {
+                                crashlog::log_error(format!(
+                                    "{summary}\n  context:\n{journal_context}"
+                                ));
+                            }
+                        }
                         let _ = worker_tx.send(WorkerMsg::Finished { id, result, timing });
                     }
                 }
@@ -411,19 +532,41 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
         )
     })
     .join(" ");
-    crashlog::log_info(format!(
-        "environment:\n  settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  data_root: {}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  models: {models_line}",
-        Settings::config_path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "<unknown>".into()),
-        app_root.display(),
-        oneasr_core::paths::data_root_log_line(),
-        ffmpeg_source()
-            .map(|source| source.to_string())
-            .unwrap_or_else(|| "MISSING".into()),
-        settings.backend,
-        settings.output_dir.display(),
-    ));
+    crashlog::set_session_context(
+        "environment",
+        format!(
+            "settings: {}\n  app_root: {}\n  app_root writable: {writable}\n  data_root: {}\n  ffmpeg: {}\n  backend: {}\n  output_dir: {}\n  models: {models_line}",
+            Settings::config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".into()),
+            app_root.display(),
+            oneasr_core::paths::data_root_log_line(),
+            ffmpeg_source()
+                .map(|source| source.to_string())
+                .unwrap_or_else(|| "MISSING".into()),
+            settings.backend,
+            settings.output_dir.display(),
+        ),
+    );
+}
+
+fn record_task_journal(
+    journal: &mut Option<crashlog::TaskJournal>,
+    write_warned: &mut bool,
+    task_id: &str,
+    message: &str,
+) {
+    let Some(journal) = journal.as_mut() else {
+        return;
+    };
+    if let Err(error) = journal.record(message)
+        && !*write_warned
+    {
+        crashlog::log_warn(format!(
+            "task journal write failed: {task_id}\n  error: {error}"
+        ));
+        *write_warned = true;
+    }
 }
 
 /// Human-readable message from a caught panic payload.

@@ -278,17 +278,6 @@ impl OneAsrApp {
         };
         self.active_stage = Some((id.clone(), SharedString::from(first_stage.label(ui_lang()))));
 
-        // Start context: failures log only `{id}` + message, so this entry is
-        // what makes a pasted log self-sufficient (which file/model/backend).
-        crashlog::log_info(format!(
-            "task start: {id}\n  file: {}\n  model: {}\n  backend: {}\n  language: {}\n  vocal_separation: {}",
-            path.display(),
-            settings.asr_model_dir.display(),
-            settings.backend,
-            settings.language,
-            settings.vocal_separation,
-        ));
-
         // Hand off to the dedicated ASR worker — never block the UI thread.
         if self
             .job_tx

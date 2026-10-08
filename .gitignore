@@ -17,6 +17,8 @@
 # Crash/error log written next to the exe (rotated to .old)
 /oneasr-error.log
 /oneasr-error.log.old
+# 活动任务临时记录：失败时并入错误日志，成功时删除
+/oneasr-task-*.pending
 # Release packaging output
 /dist
 /release

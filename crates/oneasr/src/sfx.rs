@@ -323,10 +323,7 @@ impl AudioWorker {
             Ok(output) => {
                 self.output = Some(output);
                 self.retry_after = None;
-                if self.outage_reported {
-                    crashlog::log_info("sfx audio output recovered");
-                    self.outage_reported = false;
-                }
+                self.outage_reported = false;
             }
             Err(error) => {
                 self.retry_after = Some(Instant::now() + OUTPUT_RETRY_DELAY);
