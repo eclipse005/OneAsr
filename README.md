@@ -1,7 +1,7 @@
 <div align="center">
   <h1>OneAsr</h1>
   <p>Local · Offline · Batch audio/video → SRT / ASS / TXT subtitles</p>
-  <p>Windows / Linux / macOS · Built on Qwen3-ASR + ForcedAligner · Nothing leaves your machine</p>
+  <p>Windows / Linux / macOS · Built on Qwen3-ASR · Nothing leaves your machine</p>
 
   [Download](#download) · [Quick start](#quick-start) · [Screenshots](#screenshots) · [CLI](#cli) · [Release](https://github.com/eclipse005/OneAsr/releases)
 
@@ -43,10 +43,11 @@ Main window (empty state) and the task list + settings drawer (same window size,
 
 - **Fully local**: transcription and alignment run on your machine; after the models are downloaded you can go offline
 - **Batch queue**: drop in many files at once; progress and stage are always visible
-- **Reliable timing**: ForcedAligner word-level alignment + smart sentence segmentation — not whole-segment guesses
+- **Reliable timing**: CTC word-level alignment + smart sentence segmentation — not whole-segment guesses
 - **Transcript matching**: already have a verified script? Attach it and recognition is skipped entirely — every line gets a real timestamp, so no more fixing mis-heard words you already know the answer to
 - **ASS karaoke output**: CJK characters (words in spaced languages) each carry their own timing for player highlighting
-- **Optional CTC aligner**: omniASR-CTC-300M-v2 ships alongside the Qwen ForcedAligner; pick one in Settings
+- **CTC aligner (default)**: omniASR-CTC-300M-v2 — frame-synchronous and 100% local, no language coverage limits
+- **Legacy forced aligner**: Qwen3-ForcedAligner-0.6B-hf is still selectable in Settings if you prefer it
 - **11 source languages**: 中文普通话, English, 粤语, 日本語, 한국어, Français, Deutsch, Italiano, Español, Português, Русский (set manually per task; no auto-detection)
 - **Two ASR sizes**: 0.6B (faster / less VRAM) · 1.7B (more accurate / more resources)
 - **Output options**: SRT / ASS / TXT, in any combination; saved next to the video by default
@@ -62,10 +63,11 @@ The installer ships **no** weights; models download from ModelScope on first use
 |------|--------|------|
 | Qwen3-ASR-0.6B-hf | ~1.6 GB | Default recommendation |
 | Qwen3-ASR-1.7B-hf | ~4.1 GB | Higher accuracy |
-| Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | Required, shared by all ASR sizes |
+| omniASR-CTC-300M-v2-hf | ~1.3 GB | Required, shared by all ASR sizes |
+| Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | Optional — only if you switch the aligner |
 | HTDemucs v4 vocal weights | ~84 MB | Optional |
 
-Common setups total about 3.5–6.0 GB. Only the model download needs network; transcription itself runs offline.
+Common setups total about 2.9–5.4 GB. Only the model download needs network; transcription itself runs offline.
 
 ## CLI
 
@@ -103,7 +105,7 @@ Announced and discussed at: [LINUX DO](https://linux.do/) · [52pojie](https://w
 
 - This project's code: **MIT**
 - Model weights and their terms follow [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) and their hosts
-- Engines: [qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) · [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) · [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu)
+- Engines: [qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) · [ctc-forced-aligner-wgpu](https://github.com/eclipse005/ctc-forced-aligner-wgpu) · [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) · [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu)
 
 <p align="center">
   <sub>When reporting an issue, please include your OS version, GPU & VRAM, the model used (0.6B / 1.7B) and the error message</sub>
