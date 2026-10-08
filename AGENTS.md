@@ -1,7 +1,8 @@
 # AGENTS.md
 
-OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR + ForcedAligner，Rust + gpui/wgpu），
+OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rust + gpui/wgpu），
 支持 Windows / Linux / macOS（Apple Silicon）。转写全程在本机跑，不依赖在线 API。
+对齐默认走 CTC（omniASR-CTC-300M-v2），Qwen3-ForcedAligner 仅作兼容老档保留。
 
 ## 常用命令
 

@@ -1,7 +1,7 @@
 <div align="center">
   <h1>OneAsr</h1>
   <p>本地 · 离线 · 批量音视频 → SRT / ASS / TXT 字幕</p>
-  <p>Windows / Linux / macOS · 基于 Qwen3-ASR + ForcedAligner · 不上传云端</p>
+  <p>Windows / Linux / macOS · 基于 Qwen3-ASR · 不上传云端</p>
 
   [下载安装](#下载安装) · [快速上手](#快速上手) · [界面预览](#界面预览) · [CLI 命令行](#cli-命令行) · [Release](https://github.com/eclipse005/OneAsr/releases)
 
@@ -43,10 +43,11 @@
 
 - **完全本地**：转写与对齐都在本机，下完模型可断网用
 - **批量队列**：一次丢多个文件，进度与阶段一目了然
-- **时间轴可靠**：ForcedAligner 词级对齐 + 智能断句，不是整段估时间
+- **时间轴可靠**：CTC 词级对齐 + 智能断句，不是整段估时间
 - **文稿匹配**：已有校对好的文稿？挂上去就完全跳过识别，每一行都拿到真实时间轴——识别错的字不用再猜，写什么上什么
 - **ASS 卡拉OK输出**：中日韩逐字（空格语言逐词）各带时间戳，播放器可做逐字高亮
-- **对齐器可选**：omniASR-CTC-300M-v2 与 Qwen ForcedAligner 并存，设置里切换
+- **CTC 对齐器（默认）**：omniASR-CTC-300M-v2，帧同步、全程本地，不受语言覆盖限制
+- **兼容老档**：Qwen3-ForcedAligner-0.6B-hf 仍可在设置里切换
 - **11 种语言**：中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский（需手动指定，不自动检测）
 - **双规格 ASR**：0.6B（更快 / 省显存）· 1.7B（更准 / 更吃资源）
 - **输出可选**：SRT / ASS / TXT 任意组合，默认与视频同目录
@@ -62,10 +63,11 @@
 |------|--------|------|
 | Qwen3-ASR-0.6B-hf | ~1.6 GB | 默认推荐 |
 | Qwen3-ASR-1.7B-hf | ~4.1 GB | 更高精度 |
-| Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | 必需，所有 ASR 共用 |
+| omniASR-CTC-300M-v2-hf | ~1.3 GB | 必需，所有 ASR 共用 |
+| Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | 可选 —— 切换对齐器时才需要 |
 | HTDemucs v4 人声权重 | ~84 MB | 可选 |
 
-常用组合约 3.5～6.0 GB。仅下模型需要联网，转写过程可离线。
+常用组合约 2.9～5.4 GB。仅下模型需要联网，转写过程可离线。
 
 ## CLI 命令行
 
@@ -103,7 +105,7 @@ oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --out
 
 - 本项目代码：**MIT**
 - 模型权重与协议以 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 及对应托管方为准
-- 引擎：[qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) · [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) · [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu)
+- 引擎：[qwen3-asr-wgpu](https://github.com/eclipse005/qwen3-asr-wgpu) · [ctc-forced-aligner-wgpu](https://github.com/eclipse005/ctc-forced-aligner-wgpu) · [qwen3-aligner-wgpu](https://github.com/eclipse005/qwen3-aligner-wgpu) · [demucs-wgpu](https://github.com/eclipse005/demucs-wgpu)
 
 <p align="center">
   <sub>问题反馈请附系统版本、显卡与显存、所用模型（0.6B / 1.7B）与报错信息</sub>
