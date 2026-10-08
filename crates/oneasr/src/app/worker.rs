@@ -5,6 +5,7 @@
 //! so a new message type does not grow a branch inside a long match.
 
 use crate::app::prelude::*;
+use crate::app::transcript_ui::expand;
 
 pub(crate) enum WorkerMsg {
     FilesPicked(Vec<PathBuf>),
@@ -14,6 +15,17 @@ pub(crate) enum WorkerMsg {
         path: Option<PathBuf>,
     },
     PickCancelled,
+    /// 智能断句在后台线程跑完，回来的整段文本。
+    ///
+    /// `input` 是送去断句时的原文：写回前先比对，**只有暂存里的文字没被换过
+    /// 才落盘**。断句要读词典跑 DP，窗口不再冻结，于是「断句途中又点了重新
+    /// 读取」这类并发成为可能——那一版的正文才是用户要的，不能被慢一拍的结果
+    /// 盖掉。这与原来同步执行时不可能发生的交错被挡在同一个地方。
+    TranscriptBroken {
+        id: String,
+        input: String,
+        text: String,
+    },
     ModelDirPicked(PathBuf),
     AlignerDirPicked(PathBuf),
     DemucsDirPicked(PathBuf),
@@ -62,6 +74,9 @@ impl OneAsrApp {
                     self.handle_transcript_picked(&id, path, cx)
                 }
                 Ok(WorkerMsg::PickCancelled) => self.handle_pick_cancelled(cx),
+                Ok(WorkerMsg::TranscriptBroken { id, input, text }) => {
+                    self.handle_transcript_broken(id, input, text, cx)
+                }
                 Ok(WorkerMsg::ModelDirPicked(dir)) => self.handle_model_dir_picked(dir, cx),
                 Ok(WorkerMsg::AlignerDirPicked(dir)) => self.handle_aligner_dir_picked(dir, cx),
                 Ok(WorkerMsg::DemucsDirPicked(dir)) => self.handle_demucs_dir_picked(dir, cx),
@@ -141,6 +156,47 @@ impl OneAsrApp {
     fn handle_pick_cancelled(&mut self, cx: &mut Context<Self>) {
         self.picking = false;
         cx.notify();
+    }
+
+    /// 智能断句回来了：落盘并更新卡片上的那行提示。
+    ///
+    /// 写回前比对 `input`：暂存的正文在这期间被换过（重新读取、换了文稿）就
+    /// **整条丢弃**，不去覆盖用户已经看到的另一份文字。丢弃时不提示——
+    /// 那份文字是用户自己刚选的，不需要解释为什么旧结果没生效。
+    ///
+    /// 幂等由 `break_long_lines` 自己保证（连点两下算的是同一份输入，同一个
+    /// 结果），所以这里不需要「正在断句」的闩锁，也就不用动 `mod.rs`。
+    fn handle_transcript_broken(
+        &mut self,
+        id: String,
+        input: String,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        // 先摘掉在途标记，再走下面任何一条早退路径——漏一条就等于把这一行的
+        // 「智能断句」永久锁死。
+        self.transcript_breaking.remove(&id);
+        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+            return;
+        };
+        let Some(st) = task.transcript.as_mut() else {
+            return;
+        };
+        if st.text() != input {
+            return;
+        }
+        st.set_text(text);
+        let lines = st.line_count();
+        // 提示挂在**当前打开的那张**卡片上，而 `transcript_card_note` 是 app 级
+        // 单字段（关卡片时由 `overlays` 清空）。断句要跑一秒，这期间用户可能已经
+        // 关掉 A 的卡片、打开了 B 的——那时把 A 的行数写到 B 上，就是一张卡片上
+        // 显示着另一条文稿的「已断为 N 行」。正文按 id 落对了（上面的 CAS 保证），
+        // 这里只管提示该归谁。
+        if self.transcript_card.as_deref() == Some(id.as_str()) {
+            self.transcript_card_note =
+                Some(expand(t(L::TRANSCRIPT_BROKE), &[("n", &lines.to_string())]));
+            cx.notify();
+        }
     }
 
     /// ASR model directory chosen: rebind and probe — staged, not saved.

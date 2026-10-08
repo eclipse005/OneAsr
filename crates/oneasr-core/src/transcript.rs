@@ -51,14 +51,19 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// 行数、字数与语速单位——一次扫描算完（见 [`text_stats`]）。
+    pub fn stats(&self) -> TextStats {
+        text_stats(&self.text)
+    }
+
     /// 文字量（不含空白）——密度校验与字数展示用。
     pub fn char_count(&self) -> usize {
-        self.text.chars().filter(|c| !c.is_whitespace()).count()
+        self.stats().chars
     }
 
     /// 字幕行数。
     pub fn line_count(&self) -> usize {
-        self.text.lines().filter(|l| !l.trim().is_empty()).count()
+        self.stats().lines
     }
 
     /// 原时间轴被丢弃了没有——界面上一次性提示用的就是这句。
@@ -71,7 +76,113 @@ impl Transcript {
     /// 留着这个数是因为它守的是一种**不会报错**的错：文稿挂错文件时，强制对齐照样
     /// 给出一条看着正常、实则慢慢漂移的时间轴。
     pub fn speech_rate(&self, audio_seconds: f64) -> Option<SpeechRate> {
-        speech_rate(&self.text, audio_seconds)
+        self.stats().rate(audio_seconds)
+    }
+}
+
+/// 一份文稿的统计量——**一次全文扫描**算完。
+///
+/// 这几个数以前是各算各的：行数一遍、字数一遍、中日韩判定一遍、语速单位又一
+/// 遍。任务列表每帧重绘一次、每行都要重问一次，挂 100 份长文稿时一秒就是几万
+/// 遍全文。规则一个字都没改，只是合成一遍扫描，所以算出来的数必然一模一样
+/// （[`text_stats`] 的对照测试拿旧写法逐条比过）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextStats {
+    /// 非空行数——`trim` 后还剩东西的行。
+    pub lines: usize,
+    /// 文字量（不含空白）。
+    pub chars: usize,
+    /// `true` = 拉丁等**分词书写**，单位是词；`false` = 中日韩，单位是字。
+    pub spaced: bool,
+    /// 语速单位数：`spaced` 时是「含字母数字的词」数，否则是「字母数字字符」数。
+    pub units: usize,
+}
+
+impl TextStats {
+    /// 这份文稿按每秒多少「单位」说话。判定与 [`speech_rate`] 逐条对应。
+    pub fn rate(&self, audio_seconds: f64) -> Option<SpeechRate> {
+        if audio_seconds <= 0.0 {
+            return None;
+        }
+        // 没有分母就不画条，而不是显示一个 0。
+        (self.units > 0).then(|| SpeechRate {
+            per_second: self.units as f64 / audio_seconds,
+            spaced: self.spaced,
+        })
+    }
+}
+
+/// 一次扫描算出文稿的行数、字数与语速单位。
+///
+/// 每个判定都与原先分散在四个函数里的写法**逐条对应**，没有换过任何一个条件：
+///
+/// - **行数**：`lines()` 只按 `\n` 切，且不把末尾换行算成多出来的一行；`\r\n`
+///   的 `\r` 会被剥掉，但 `\r` 本身是空白，所以剥不剥它不改变「这行是不是空的」。
+///   于是「非空行数」= 每个 `\n` 处已经见过非空白字符的行数，再加末尾那段没被
+///   换行结束的（如果它非空）。
+/// - **字数**：`!c.is_whitespace()`。
+/// - **按字还是按词**：仍是 `cjk * 4 >= latin`。看的是**中日韩字符 vs 拉丁字母**
+///   的量，不是「有没有空格」：中文文稿里混着英文术语、日文文稿里混着片假名，
+///   都属于「按字算」。阈值给到 4:1，因为一段中文里嵌一两个英文单词是常态。
+/// - **语速单位**：按词时数「含 `is_alphanumeric` 的空白分隔词」，按字时数
+///   `is_alphanumeric` 的字符（标点不发音，「，」「。」计进去会把一段正常的中文
+///   文稿算快两成）。两种都数了，因为落到哪一侧要扫完才知道。
+pub fn text_stats(text: &str) -> TextStats {
+    let mut chars = 0usize; // 不含空白的文字量
+    let mut alnum_chars = 0usize; // 语速单位候选：字母数字**字符**数（按字算时用它）
+    let mut alnum_words = 0usize; // 语速单位候选：含字母数字的**词**数（按词算时用它）
+    let mut cjk = 0usize;
+    let mut latin = 0usize;
+    let mut lines = 0usize; // 非空行数
+    let mut line_has_text = false; // 当前行见过非空白字符
+    let mut word_has_alnum = false; // 当前词见过字母数字
+    let mut saw_any = false; // 文本非空（决定末尾那段算不算一行）
+    for c in text.chars() {
+        saw_any = true;
+        let ws = c.is_whitespace();
+        if !ws {
+            chars += 1;
+            line_has_text = true;
+        }
+        if c.is_alphanumeric() {
+            alnum_chars += 1;
+            word_has_alnum = true;
+        }
+        let cp = c as u32;
+        if matches!(cp, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF)
+        {
+            cjk += 1;
+        } else if c.is_ascii_alphabetic() {
+            latin += 1;
+        }
+        if ws {
+            // 空白既是词边界也是（`\n` 时的）行边界。`split_whitespace` 按任意
+            // 空白切词，这里逐字符判空白等价：连续空白只在第一个上收口一次词。
+            if c == '\n' && line_has_text {
+                lines += 1;
+            }
+            if c == '\n' {
+                line_has_text = false;
+            }
+            if word_has_alnum {
+                alnum_words += 1;
+            }
+            word_has_alnum = false;
+        }
+    }
+    if saw_any && line_has_text {
+        lines += 1;
+    }
+    if word_has_alnum {
+        alnum_words += 1;
+    }
+    let cjk_dominant = cjk * 4 >= latin;
+    let spaced = !cjk_dominant;
+    TextStats {
+        lines,
+        chars,
+        spaced,
+        units: if spaced { alnum_words } else { alnum_chars },
     }
 }
 
@@ -99,46 +210,12 @@ impl SpeechRate {
     }
 }
 
-/// 这份文稿按字算还是按词算。
-///
-/// 看的是**中日韩字符 vs 拉丁字母**的量，不是「有没有空格」：中文文稿里混着英文
-/// 术语、日文文稿里混着片假名latin，都属于「按字算」。阈值给到 4:1，因为一段中文
-/// 里嵌一两个英文单词是常态，不该因此翻到词那一侧。
-fn is_cjk_dominant(text: &str) -> bool {
-    let mut cjk = 0usize;
-    let mut latin = 0usize;
-    for c in text.chars() {
-        let cp = c as u32;
-        if matches!(cp, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF)
-        {
-            cjk += 1;
-        } else if c.is_ascii_alphabetic() {
-            latin += 1;
-        }
-    }
-    cjk * 4 >= latin
-}
-
 /// 文稿语速。`audio_seconds` 未知、或文稿里数不出任何单位时是 `None`——没有分母
 /// 就不画条，而不是显示一个 0。
+///
+/// 统计量只算一遍（[`text_stats`]），分行还是按词见 [`TextStats`]。
 pub fn speech_rate(text: &str, audio_seconds: f64) -> Option<SpeechRate> {
-    if audio_seconds <= 0.0 {
-        return None;
-    }
-    let spaced = !is_cjk_dominant(text);
-    let units: usize = if spaced {
-        text.split_whitespace()
-            .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
-            .count()
-    } else {
-        // 标点不发音：「，」「。」计进语速会把一段正常的中文文稿算快两成。
-        // `is_alphanumeric` 覆盖汉字、假名、谚文（它们带 Alphabetic 属性）。
-        text.chars().filter(|c| c.is_alphanumeric()).count()
-    };
-    (units > 0).then(|| SpeechRate {
-        per_second: units as f64 / audio_seconds,
-        spaced,
-    })
+    text_stats(text).rate(audio_seconds)
 }
 
 /// 读一份文稿。扩展名不认识就报错，不猜。
@@ -336,6 +413,120 @@ mod tests {
         assert!((r.per_second - 10.0 / 6.0).abs() < 1e-9, "{r:?}");
         assert!(r.plausible(), "1.67 字/秒 is a slow but real speaking rate");
         assert_eq!(t.speech_rate(0.0), None, "音频时长未知时不编造语速");
+    }
+
+    /// 合成一次扫描之后，判定必须和原先分散在四个函数里的写法**逐条等价**。
+    /// 这条钉住的就是「优化」最容易出事的地方：省掉一遍扫描时顺手把某个条件改
+    /// 了（比如行尾 `\r`、末尾换行、全角空格），卡片上的数字就会悄悄变。
+    ///
+    /// 参考实现就是优化前那四段代码的逐字拷贝，逐个用例对照。
+    fn old_char_count(text: &str) -> usize {
+        text.chars().filter(|c| !c.is_whitespace()).count()
+    }
+
+    fn old_line_count(text: &str) -> usize {
+        text.lines().filter(|l| !l.trim().is_empty()).count()
+    }
+
+    fn old_speech_rate(text: &str, audio_seconds: f64) -> Option<SpeechRate> {
+        if audio_seconds <= 0.0 {
+            return None;
+        }
+        let cjk = text
+            .chars()
+            .filter(|c| {
+                let cp = *c as u32;
+                matches!(cp, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xAC00..=0xD7AF)
+            })
+            .count();
+        let latin = text.chars().filter(char::is_ascii_alphabetic).count();
+        let cjk_dominant = cjk * 4 >= latin;
+        let spaced = !cjk_dominant;
+        let units: usize = if spaced {
+            text.split_whitespace()
+                .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
+                .count()
+        } else {
+            text.chars().filter(|c| c.is_alphanumeric()).count()
+        };
+        (units > 0).then(|| SpeechRate {
+            per_second: units as f64 / audio_seconds,
+            spaced,
+        })
+    }
+
+    #[test]
+    fn one_scan_reproduces_every_old_scan() {
+        // 覆盖每一条会被两种算法区别对待的边界：CRLF、末尾有无换行、纯空白行、
+        // 连续空白、不发音的标点、全角空格，以及中 / 英 / 混排三种书写系统。
+        let corpus = [
+            "这是第一句。\n这是第二句。",
+            "hello there my friend how are you doing tonight",
+            "中英 mixed 混排 Whisper OneAsr",
+            "第一行。\r\n\r\n   \r\n第三行。",
+            "尾行没有换行",
+            "尾行有换行\n",
+            "\n只有一个换行",
+            "。。。？！",
+            "全角空格\u{a0}夹着\u{a0}文字\u{a0}",
+            "日文とカタカナと漢字",
+            "한국어 한 줄",
+            "a  b\tc\u{b}\u{c}d",
+            "   leading spaces",
+            "trailing spaces   ",
+        ];
+        for text in corpus {
+            let s = text_stats(text);
+            assert_eq!(s.chars, old_char_count(text), "字数: {text:?}");
+            assert_eq!(s.lines, old_line_count(text), "行数: {text:?}");
+            for audio in [0.0, 0.5, 2.0, 6.0, 120.0] {
+                assert_eq!(
+                    s.rate(audio),
+                    old_speech_rate(text, audio),
+                    "语速 {audio}s: {text:?}"
+                );
+                assert_eq!(
+                    speech_rate(text, audio),
+                    old_speech_rate(text, audio),
+                    "speech_rate {audio}s: {text:?}"
+                );
+            }
+        }
+    }
+
+    /// 时长是 `NaN` 时 `NaN <= 0.0` 为假，所以两条路都会算出一个 `NaN` 语速而
+    /// 不是 `None`——**这是原样保留的行为**（密度校验那边靠 `plausible()` 把
+    /// `NaN` 判掉）。这里只钉住两条路一致，不把它改成 `None`。
+    #[test]
+    fn a_nan_duration_behaves_identically_on_both_paths() {
+        let text = "hello world";
+        let from_stats = text_stats(text).rate(f64::NAN);
+        let from_fn = speech_rate(text, f64::NAN);
+        assert_eq!(
+            from_stats.map(|r| r.spaced),
+            from_fn.map(|r| r.spaced),
+            "按字还是按词，两条路要一样"
+        );
+        assert!(
+            from_stats.expect("NaN 时长不返回 None").per_second.is_nan(),
+            "{from_stats:?}"
+        );
+        // 负时长与零时长照旧是没有分母。
+        assert_eq!(text_stats(text).rate(-1.0), None);
+        assert_eq!(text_stats(text).rate(0.0), None);
+    }
+
+    /// `Transcript` 上的三个数与自由函数一致：调用方（CLI 的加载提示、密度校验）
+    /// 无论走哪条路，看到的都是同一个数。
+    #[test]
+    fn a_transcript_reports_the_same_stats_as_the_free_function() {
+        let t = parse_transcript(TranscriptKind::Plain, "第一行。\n\n第二行 hello。").unwrap();
+        let s = t.stats();
+        assert_eq!(s.chars, old_char_count(&t.text));
+        assert_eq!(s.lines, old_line_count(&t.text));
+        assert_eq!(t.char_count(), s.chars);
+        assert_eq!(t.line_count(), s.lines);
+        assert_eq!(t.speech_rate(4.0), s.rate(4.0));
     }
 
     #[test]

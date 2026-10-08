@@ -95,7 +95,14 @@ pub struct Task {
 #[derive(Debug, Clone)]
 pub struct StagedTranscript {
     /// 规范化后的纯文本，**一行 = 一条字幕**。
-    pub text: String,
+    ///
+    /// 私有是有意的：改写只能走 [`Self::set_text`]。任务列表每帧重绘一次、每行都要
+    /// 重问一次行数/字数/语速，这三个数由 [`Self::stats`] 一次性算好缓存着；留一个
+    /// 公开字段就等于留了一条「改了正文、缓存不重算」的路，而那条路不报错，只是
+    /// 让整列任务一直显示旧的字数。
+    text: String,
+    /// 由 `text` 派生的缓存，见 [`Self::set_text`]。
+    stats: oneasr_core::transcript::TextStats,
     /// 原始文件路径。文稿来自粘贴时为 `None`。
     pub path: Option<PathBuf>,
     /// 原时间轴被丢弃了没有——挂 `.srt` 时为真，界面上要说明一次。这是程序
@@ -105,20 +112,38 @@ pub struct StagedTranscript {
 
 impl StagedTranscript {
     pub fn from_core(t: &oneasr_core::transcript::Transcript, path: Option<PathBuf>) -> Self {
+        let text = t.text.clone();
+        let stats = oneasr_core::transcript::text_stats(&text);
         Self {
-            text: t.text.clone(),
+            text,
+            stats,
             path,
             dropped_timecodes: t.dropped_timecodes(),
         }
     }
 
+    /// 正文。只读——要改走 [`Self::set_text`]，那条路会顺带重算缓存。
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// 换掉整份文稿，并把行数/字数/语速重算一遍。
+    ///
+    /// 唯一在用它是「智能断句」：那份 DP 要在后台线程上跑，回来时正文可能已经被
+    /// 换过（重新读取、换了文稿），所以换文本的时机由调用方决定，缓存在这里保证
+    /// 永远跟着正文走。
+    pub fn set_text(&mut self, text: String) {
+        self.stats = oneasr_core::transcript::text_stats(&text);
+        self.text = text;
+    }
+
     /// 文字量（不含空白）——卡片上的字数与密度校验共用。
     pub fn char_count(&self) -> usize {
-        self.text.chars().filter(|c| !c.is_whitespace()).count()
+        self.stats.chars
     }
 
     pub fn line_count(&self) -> usize {
-        self.text.lines().filter(|l| !l.trim().is_empty()).count()
+        self.stats.lines
     }
 
     /// 语速：按文稿自己的书写系统计数（字/秒 或 词/秒）。
@@ -126,7 +151,7 @@ impl StagedTranscript {
     /// 留着这个数是因为它守的是一种**不会报错**的错：文稿挂错文件时，强制对齐
     /// 照样给出一条看着正常、实则慢慢漂移的时间轴。判断在 core 里（那里能单测）。
     pub fn speech_rate(&self, audio_seconds: f64) -> Option<oneasr_core::transcript::SpeechRate> {
-        oneasr_core::transcript::speech_rate(&self.text, audio_seconds)
+        self.stats.rate(audio_seconds)
     }
 }
 
@@ -314,6 +339,52 @@ mod transcript_tests {
         assert_eq!(st.line_count(), 2);
     }
 
+    /// `set_text` 必须把缓存一起换掉。
+    ///
+    /// 这三个数是**缓存**而不是每次现算的（任务列表每帧每行都要问一次），所以唯一
+    /// 的失效点就是 `set_text`。漏了它，正文已经是断过句的、卡片上的行数字数却还是
+    /// 旧的——不报错，只是永远对不上。这条测试就是钉住那个时刻。
+    #[test]
+    fn set_text_refreshes_the_cached_counts() {
+        let mut st = staged("第一行。\n第二行。");
+        assert_eq!((st.line_count(), st.char_count()), (2, 8));
+
+        st.set_text("第一行。\n第二行。\n第三行。\n".to_string());
+        assert_eq!(st.line_count(), 3, "末尾换行不算新行");
+        assert_eq!(st.char_count(), 12);
+        assert_eq!(st.text(), "第一行。\n第二行。\n第三行。\n");
+
+        // 换成以拉丁为主：语速的计数单位随之从「字」变成「词」。
+        st.set_text("one two three".to_string());
+        assert_eq!(st.line_count(), 1);
+        assert_eq!(st.char_count(), 11, "空格不算文字量");
+        let rate = st.speech_rate(2.0).expect("rate");
+        assert!((rate.per_second - 1.5).abs() < 1e-9, "3 词 / 2 秒");
+        assert!(rate.spaced, "拉丁书写系统按词计");
+    }
+
+    /// 缓存出来的语速与 core 现算的逐项一致。
+    ///
+    /// `StagedTranscript` 现在只是 core `text_stats` 的一层壳，两条路径必须给出同
+    /// 一个答案——否则界面上「文稿太密/太稀」的提示会跟密度校验里的数打架。
+    #[test]
+    fn cached_rate_matches_the_core_function() {
+        for text in [
+            "你好世界，这是一段中文。",
+            "hello there world",
+            "混合 mixed 文本 text",
+        ] {
+            for secs in [0.5_f64, 12.0, 3600.0] {
+                let st = staged(text);
+                assert_eq!(
+                    st.speech_rate(secs),
+                    oneasr_core::transcript::speech_rate(text, secs),
+                    "text={text:?} secs={secs}"
+                );
+            }
+        }
+    }
+
     /// 挂 SRT 时原时间轴被丢了，界面上要说明一次。
     #[test]
     fn an_srt_records_that_its_timings_were_dropped() {
@@ -324,7 +395,7 @@ mod transcript_tests {
         .expect("srt");
         let st = StagedTranscript::from_core(&t, None);
         assert!(st.dropped_timecodes);
-        assert_eq!(st.text, "你好。", "只剩正文，时间轴没了");
+        assert_eq!(st.text(), "你好。", "只剩正文，时间轴没了");
         assert!(!staged("你好。").dropped_timecodes);
     }
 

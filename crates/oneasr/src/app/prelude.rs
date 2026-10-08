@@ -9,6 +9,7 @@
 //! methods move between files, and every name below is app-layer vocabulary.
 
 pub(crate) use std::collections::HashMap;
+pub(crate) use std::collections::HashSet;
 pub(crate) use std::f32::consts::TAU;
 pub(crate) use std::path::PathBuf;
 pub(crate) use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
