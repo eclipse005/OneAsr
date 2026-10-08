@@ -8,10 +8,39 @@
   [English](README.md) · **简体中文**
 </div>
 
-```text
-音视频 → [人声分离] → VAD 分段 → 转写 → 对齐打轴 → 智能断句 → *.srt / *.ass / *.txt
-文稿 → [人声分离] → 强制对齐打轴（跳过识别）→ *.srt / *.ass
-```
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <p><strong>01 · 音视频转写</strong></p>
+      <h3>把音视频变成字幕</h3>
+      <p><strong>输入</strong> · 音频或视频</p>
+      <p align="center">
+        <code>人声分离 · 可选</code><br>
+        ↓<br>
+        <code>VAD 分段</code><br>
+        ↓<br>
+        <code>Qwen3-ASR 转写</code><br>
+        ↓<br>
+        <code>CTC 词级打轴</code><br>
+        ↓<br>
+        <code>智能断句</code>
+      </p>
+      <p><strong>输出</strong> · SRT / ASS / TXT</p>
+    </td>
+    <td width="50%" valign="top">
+      <p><strong>02 · 文稿直接打轴</strong></p>
+      <h3>给现有文稿加上时间轴</h3>
+      <p><strong>输入</strong> · 音视频 + 校对好的 .txt / .srt</p>
+      <p align="center">
+        <code>人声分离 · 可选</code><br>
+        ↓<br>
+        <code>强制对齐打轴</code><br>
+        <sub>跳过语音识别</sub>
+      </p>
+      <p><strong>输出</strong> · SRT / ASS</p>
+    </td>
+  </tr>
+</table>
 
 ## 下载安装
 
