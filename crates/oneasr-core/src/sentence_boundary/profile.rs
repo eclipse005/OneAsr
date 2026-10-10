@@ -662,6 +662,12 @@ impl LanguageProfile for ChineseProfile {
     fn is_char_based(&self) -> bool {
         true
     }
+    /// Wider quality band so DP prefers commas / connectors over mid-NP
+    /// force cuts (`地球的 | 温度`). Force ceiling stays at the raw cap so
+    /// unpunctuated runs still hard-split at the preset limit.
+    fn length_grace_units(&self) -> f64 {
+        6.0
+    }
 }
 
 // ============================================================================

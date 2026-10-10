@@ -111,13 +111,100 @@ pub(super) fn is_closing_punctuation(c: char) -> bool {
 /// "that" — it is both a demonstrative and a complement introducer
 /// ("see that | the..." is a good cut).
 const FUNCTION_WORDS_LEFT: &[&str] = &[
-    "a", "an", "the", "this", "these", "those", "my", "your", "his", "her", "its", "our", "their",
-    "of", "to", "in", "on", "at", "for", "with", "by", "from", "can", "could", "will", "would",
-    "shall", "should", "may", "might", "must", "do", "does", "did", "is", "are", "was", "were",
-    "be", "been", "being", "am", "have", "has", "had", "not", "and", "but", "or", "nor", "so",
-    "as", "than", "towards", "into", "onto", "above", "below", "under", "over", "through",
-    "across", "along", "around", "against", "between", "during", "within", "without", "upon",
-    "near", "behind", "beyond", "among", "inside", "outside", "beside", "off", "via", "per",
+    "a",
+    "an",
+    "the",
+    "this",
+    "these",
+    "those",
+    "my",
+    "your",
+    "his",
+    "her",
+    "its",
+    "our",
+    "their",
+    "of",
+    "to",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+    "by",
+    "from",
+    "can",
+    "could",
+    "will",
+    "would",
+    "shall",
+    "should",
+    "may",
+    "might",
+    "must",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "am",
+    "have",
+    "has",
+    "had",
+    "not",
+    "and",
+    "but",
+    "or",
+    "nor",
+    "so",
+    "as",
+    "than",
+    "towards",
+    "into",
+    "onto",
+    "above",
+    "below",
+    "under",
+    "over",
+    "through",
+    "across",
+    "along",
+    "around",
+    "against",
+    "between",
+    "during",
+    "within",
+    "without",
+    "upon",
+    "near",
+    "behind",
+    "beyond",
+    "among",
+    "inside",
+    "outside",
+    "beside",
+    "off",
+    "via",
+    "per",
+    // Line-end dangling adverbs / hedges: "but basically | what" reads mid-phrase.
+    "basically",
+    "fundamentally",
+    "actually",
+    "literally",
+    "essentially",
+    "particularly",
+    "especially",
+    "simply",
+    "merely",
+    "probably",
+    "possibly",
+    "certainly",
+    "generally",
 ];
 
 /// Chinese function words: cutting after these splits "在|教育", "把|门".
@@ -140,8 +227,9 @@ const JA_DEMONSTRATIVES: &[&str] = &[
     "あんなに",
 ];
 
-/// Chinese phrase-closing particles: cutting AFTER these is a good cut
-/// ("台风的 | 形状" — the particle ends a modifier phrase).
+/// Chinese phrase-closing particles: cutting AFTER these is a good cut when
+/// the following token is NOT the head of an open genitive NP (see
+/// [`is_open_genitive_link`]). Bare 了/着/过/吗/呢/吧/啊 stay cheap cuts.
 const CJK_PHRASE_CLOSE: &[&str] = &["的", "了", "着", "过", "吗", "呢", "吧", "啊"];
 
 /// Japanese (and Korean) phrase-closing particles / postpositions.
@@ -175,8 +263,26 @@ const KO_PHRASE_CLOSE: &[&str] = &[
 /// Discourse markers followed by a comma ("Okay," / "Now,"). Cutting after
 /// them isolates a flash line; the comma discount must not apply.
 const DISCOURSE_MARKERS: &[&str] = &[
-    "okay", "ok", "now", "so", "well", "right", "alright", "look", "listen", "then", "hey", "oh",
-    "uh", "um", "hmm",
+    "okay",
+    "ok",
+    "now",
+    "so",
+    "well",
+    "right",
+    "alright",
+    "look",
+    "listen",
+    "then",
+    "hey",
+    "oh",
+    "uh",
+    "um",
+    "hmm",
+    "basically",
+    "fundamentally",
+    "actually",
+    "literally",
+    "essentially",
 ];
 
 /// Words that bind a following "to" ("need to", "going to", "want to"):
@@ -651,28 +757,87 @@ fn ja_has_content(token: &str) -> bool {
     t.chars().any(|c| c.is_alphanumeric() || is_cjk_letter(c))
 }
 
-/// Cutting AFTER の would split a genitive NP (`Z世代の | 選手`).
-/// の is a linker to the following head, not a phrase closer.
+/// Cutting AFTER の / 的 would split a genitive NP (`Z世代の | 選手`,
+/// `地球的 | 温度`). The particle links to the following head — not a phrase
+/// closer — so DP must not treat it as a cheap / quality cut.
 pub(super) fn is_open_genitive_link(left: &str, right: &str) -> bool {
     let l = strip_token(left);
     let r = strip_token(right);
     if l.is_empty() || r.is_empty() {
         return false;
     }
+    // Clause-final 的/の already closed by trailing comma/period on the raw
+    // token (`发出的，` / `のだ。`) is not an open NP waiting for a head.
+    if left.chars().any(|c| {
+        matches!(
+            c,
+            ',' | '，'
+                | '、'
+                | ';'
+                | '；'
+                | ':'
+                | '：'
+                | '.'
+                | '。'
+                | '!'
+                | '！'
+                | '?'
+                | '？'
+                | '…'
+        )
+    }) {
+        return false;
+    }
     if JA_NOMINALIZER_TAILS.iter().any(|tail| l.ends_with(tail)) {
         return false;
     }
-    if !l.ends_with('の') {
+    let ja_no = l.ends_with('の');
+    let zh_de = l.ends_with('的');
+    if !ja_no && !zh_de {
         return false;
     }
-    if JA_DEMONSTRATIVES.contains(&l) {
+    if ja_no {
+        if JA_DEMONSTRATIVES.contains(&l) {
+            return false;
+        }
+        // 準体言/終助詞の (何してるの / 好きなの) is not a genitive linker.
+        if is_explanatory_or_question_no(l) {
+            return false;
+        }
+        return is_ja_content_start(r);
+    }
+    // Chinese 的 + content head (`它的 | 厚度`). Connectors starting a new
+    // clause are not heads; bare particles are not heads either.
+    if CJK_FUNCTION_WORDS_LEFT.contains(&r) || CJK_PHRASE_CLOSE.contains(&r) {
         return false;
     }
-    // 準体言/終助詞の (何してるの / 好きなの) is not a genitive linker.
-    if is_explanatory_or_question_no(l) {
+    if CHINESE_CONNECTOR_STARTS
+        .iter()
+        .any(|c| r.starts_with(c) || r == *c)
+    {
         return false;
     }
-    is_ja_content_start(r)
+    is_zh_content_start(r)
+}
+
+/// Multi-char Chinese connectors / clause starters that must not count as a
+/// genitive head after 的.
+const CHINESE_CONNECTOR_STARTS: &[&str] = &[
+    "但是", "因为", "所以", "而且", "或者", "如果", "虽然", "因此", "不过", "然后", "可是", "然而",
+    "另外", "并且", "为了", "以及", "还有", "及其", "否则", "此外", "总之", "于是",
+];
+
+fn is_zh_content_start(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let Some(c) = token.chars().next() else {
+        return false;
+    };
+    // Han / kana / hangul / ASCII letter-digit (e.g. S波).
+    is_cjk_letter(c)
+        || matches!(c as u32, 0xAC00..=0xD7AF | 0x1100..=0x11FF)
+        || c.is_ascii_alphanumeric()
 }
 
 /// の after a hiragana verb/adjective ending is a question/nominalizer
@@ -904,7 +1069,24 @@ pub(crate) fn is_discourse_marker_text(text: &str) -> bool {
                 '.' | '!' | '?' | '。' | '！' | '？' | '…' | ',' | '，' | '、'
             )
         });
-    in_list(core, DISCOURSE_MARKERS)
+    if in_list(core, DISCOURSE_MARKERS) {
+        return true;
+    }
+    // Multi-word lead-ins that read as flash orphans when isolated.
+    let lower = core.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "the truth is"
+            | "the fact is"
+            | "the point is"
+            | "the thing is"
+            | "i mean"
+            | "you know"
+            | "you see"
+            | "in fact"
+            | "of course"
+            | "for example"
+    )
 }
 
 /// "need to" / "want to" — the following "to" is not an independent start.
@@ -1041,6 +1223,18 @@ mod tests {
         assert!(!is_open_genitive_link("は", "選手"));
         assert!(!is_open_genitive_link("の", "は"));
         assert!(!is_open_genitive_link("の", "を"));
+        // Chinese 的 + head noun (char-token or multi-char).
+        assert!(is_open_genitive_link("的", "厚度"));
+        assert!(is_open_genitive_link("的", "温度"));
+        assert!(is_open_genitive_link("它的", "厚度"));
+        assert!(is_open_genitive_link("地球的", "温度"));
+        assert!(is_open_genitive_link("大的", "S波"));
+        // Clause-final 的 with comma is closed, not open.
+        assert!(!is_open_genitive_link("的，", "因为"));
+        assert!(!is_open_genitive_link("发出的，", "因为"));
+        // Connector after 的 is a new clause, not a head.
+        assert!(!is_open_genitive_link("的", "因为"));
+        assert!(!is_open_genitive_link("的", "但是"));
     }
 
     #[test]

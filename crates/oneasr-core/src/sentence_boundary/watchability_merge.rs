@@ -17,6 +17,9 @@ const FLASH_SEC: f64 = 0.8;
 const ORPHAN_TAIL_MAX_SEC: f64 = 1.5;
 const WATCHABILITY_GAP_SEC: f64 = 0.8;
 const MERGE_BUDGET_SEC: f64 = 6.0;
+/// Orphan / open-genitive reglue may slightly exceed the normal watchability
+/// duration budget so `The truth is,` + a 5s clause can reunite.
+const ORPHAN_MERGE_BUDGET_SEC: f64 = 7.5;
 const ORPHAN_TAIL_LATIN_UNITS: f64 = 4.0;
 const ORPHAN_TAIL_CJK_UNITS: f64 = 8.0;
 const ORPHAN_MERGE_GRACE_UNITS: f64 = 4.0;
@@ -155,7 +158,8 @@ fn can_merge(
     if gap > WATCHABILITY_GAP_SEC {
         return false;
     }
-    if cue_end(words, right) - cue_start(words, left) > MERGE_BUDGET_SEC {
+    let pair_dur = cue_end(words, right) - cue_start(words, left);
+    if pair_dur > ORPHAN_MERGE_BUDGET_SEC {
         return false;
     }
     let left_text = cue_text(words, left);
@@ -166,6 +170,9 @@ fn can_merge(
     let right_orphan =
         is_orphan_tail(words, right, profile) && !is_orphan_tail(words, left, profile);
     if right_orphan {
+        if pair_dur > ORPHAN_MERGE_BUDGET_SEC {
+            return false;
+        }
         return !pair_exceeds_caps(
             words,
             left,
@@ -179,6 +186,9 @@ fn can_merge(
     let left_orphan =
         is_orphan_tail(words, left, profile) && !is_orphan_tail(words, right, profile);
     if left_orphan {
+        if pair_dur > ORPHAN_MERGE_BUDGET_SEC {
+            return false;
+        }
         let grace = if cue_duration(words, right) >= FLASH_SEC {
             ORPHAN_MERGE_GRACE_UNITS
         } else {
@@ -187,12 +197,26 @@ fn can_merge(
         return !pair_exceeds_caps(words, left, right, profile, unit_cap, char_cap, grace);
     }
 
+    // Non-orphan merges stay on the tighter duration budget.
+    if pair_dur > MERGE_BUDGET_SEC {
+        return false;
+    }
+
     if is_open_genitive_link(last_word, first_right)
         || is_case_particle_before_predicate(last_word, first_right)
         || is_function_word_left(last_word, profile.function_words_left())
     {
         let right_units = cue_units(words, right, profile);
-        let right_cap = if profile.is_char_based() { 12.0 } else { 8.0 };
+        // Near-zero acoustic gap: allow a longer right head so `地球的 | 温度…`
+        // can reglue even when the head clause is a full cue.
+        let gap = cue_start(words, right) - cue_end(words, left);
+        let right_cap = if profile.is_char_based() {
+            if gap < 0.12 { 22.0 } else { 14.0 }
+        } else if gap < 0.12 {
+            12.0
+        } else {
+            8.0
+        };
         if right_units > 0.0 && right_units <= right_cap {
             return !pair_exceeds_caps(
                 words,
@@ -394,6 +418,14 @@ fn is_closed_sentence_pair(
     if !is_sentence_close_char(last) {
         return false;
     }
+    // Comma-ended discourse / dangling lead-ins (`The truth is,` /
+    // `Well, like other foods,`) are not finished sentences — allow merge.
+    if matches!(last, ',' | '，' | '、')
+        && (is_discourse_marker_text(left_text)
+            || text_looks_like_dangling_leadin(left_text, profile))
+    {
+        return false;
+    }
     if is_short_interjection(words, left, profile) {
         return false;
     }
@@ -418,8 +450,20 @@ fn is_short_interjection(words: &[WordTokenDto], cue: Cue, profile: &dyn Languag
 
 fn is_orphan_tail(words: &[WordTokenDto], cue: Cue, profile: &dyn LanguageProfile) -> bool {
     let dur = cue_duration(words, cue);
-    if dur <= 0.0 || dur > ORPHAN_TAIL_MAX_SEC {
+    if dur <= 0.0 {
         return false;
+    }
+    let text = cue_text(words, cue);
+    // Discourse lead-ins (`The truth is,` / `But fundamentally, with farmers,`)
+    // glue forward even when a bit over the usual orphan duration/unit caps.
+    let discourse =
+        is_discourse_marker_text(&text) || text_looks_like_dangling_leadin(&text, profile);
+    let max_dur = if discourse { 2.5 } else { ORPHAN_TAIL_MAX_SEC };
+    if dur > max_dur {
+        return false;
+    }
+    if discourse {
+        return true;
     }
     let units = cue_units(words, cue, profile);
     let cap = if profile.is_char_based() {
@@ -428,6 +472,61 @@ fn is_orphan_tail(words: &[WordTokenDto], cue: Cue, profile: &dyn LanguageProfil
         ORPHAN_TAIL_LATIN_UNITS
     };
     units > 0.0 && units <= cap
+}
+
+fn text_looks_like_dangling_leadin(text: &str, profile: &dyn LanguageProfile) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // Short comma-ended cue that *opens* like a discourse lead-in
+    // ("Well, like other foods," / "But fundamentally, with farmers,").
+    // Do NOT treat every short comma cue as an orphan — Romance subtitles
+    // often end mid-clause on a comma and must stay split.
+    let ends_comma = t.ends_with(',') || t.ends_with('，');
+    if !ends_comma {
+        return false;
+    }
+    let units = if profile.is_char_based() {
+        t.chars().filter(|c| !c.is_whitespace()).count() as f64
+    } else {
+        t.split_whitespace().count() as f64
+    };
+    let cap = if profile.is_char_based() { 12.0 } else { 6.0 };
+    if units <= 0.0 || units > cap {
+        return false;
+    }
+    let first = t
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '，')
+        .find(|p| !p.is_empty())
+        .unwrap_or("")
+        .to_lowercase();
+    const LEADINS: &[&str] = &[
+        "well",
+        "so",
+        "now",
+        "but",
+        "and",
+        "or",
+        "yet",
+        "still",
+        "okay",
+        "ok",
+        "right",
+        "look",
+        "listen",
+        "basically",
+        "fundamentally",
+        "actually",
+        "literally",
+        "essentially",
+        "however",
+        "therefore",
+        "meanwhile",
+        "anyway",
+        "also",
+    ];
+    LEADINS.contains(&first.as_str())
 }
 
 fn pair_exceeds_caps(
@@ -596,6 +695,49 @@ mod tests {
         let merged =
             merge_watchability_spans(&words, &spans, &*profile, SubtitleLengthPreset::Standard);
         assert_eq!(merged.len(), 2, "はい turn must not reglue: {merged:?}");
+    }
+
+    #[test]
+    fn truth_is_orphan_glues_forward() {
+        let mut words = vec![
+            timed("The", 0.0, 0.1),
+            timed("truth", 0.14, 0.42),
+            timed("is,", 0.46, 0.82),
+        ];
+        let body = [
+            "neuroscientists",
+            "still",
+            "dont",
+            "know",
+            "exactly",
+            "how",
+            "or",
+            "why",
+            "our",
+            "brain",
+            "is",
+            "so",
+            "good",
+            "at",
+            "adapting,",
+        ];
+        let mut t0 = 1.0;
+        for tok in body {
+            words.push(timed(tok, t0, t0 + 0.3));
+            t0 += 0.35;
+        }
+        let profile = super::super::profile::profile_for_lang("en");
+        let spans = merge_watchability_spans(
+            &words,
+            &[(0, 2), (3, words.len() - 1)],
+            profile.as_ref(),
+            SubtitleLengthPreset::Standard,
+        );
+        assert_eq!(
+            spans.len(),
+            1,
+            "The truth is, should glue to the following clause; got {spans:?}"
+        );
     }
 
     #[test]

@@ -1197,9 +1197,9 @@ fn local_subtitle_layout_splits_long_semantic_sentence_near_punctuation() {
 
 #[test]
 fn short_sentence_with_vad_pause_stays_intact() {
-    // 4 words with a VAD silence gap in the middle, but well under the length
-    // budget (short preset = 12 words). After the DP rewrite, this is NOT
-    // split — the VAD pause only matters for overlong spans.
+    // 4 words with a VAD silence gap in the middle, under the length budget.
+    // Inside-budget VAD cuts require ≥4 units on each side, so a 2|2 split is
+    // refused and the short cue stays intact.
     let words = vec![
         WordTokenDto {
             start: 0.0,
@@ -1237,6 +1237,62 @@ fn short_sentence_with_vad_pause_stays_intact() {
     assert_eq!(
         response.translation_sentences[0].text,
         "Before pause after pause"
+    );
+}
+
+/// Under-budget span with a strong VAD silence and ≥4 units on each side
+/// splits at the pause (speaking-rhythm default).
+#[test]
+fn strong_vad_inside_budget_cuts_when_both_sides_long_enough() {
+    fn word(start: f64, end: f64, text: &str) -> WordTokenDto {
+        WordTokenDto {
+            start,
+            end,
+            word: text.to_string(),
+        }
+    }
+    // 4 + 4 words, short preset limit 12 → within budget; silence in the middle.
+    let left = ["These", "four", "solid", "words"];
+    let right = ["continue", "after", "long", "silence"];
+    let mut words = Vec::new();
+    let mut t = 0.0;
+    for w in left {
+        words.push(word(t, t + 0.2, w));
+        t += 0.25;
+    }
+    let silence_start = t;
+    t += 0.8; // ≥ 0.55s VAD silence
+    let silence_end = t;
+    for w in right {
+        words.push(word(t, t + 0.2, w));
+        t += 0.25;
+    }
+
+    let response = build_source_sentences_from_words(request_with_vad(
+        words,
+        "en",
+        "short",
+        vec![(0.0, silence_start), (silence_end, t)],
+    ))
+    .expect("step2 should build with speaking-rhythm cuts");
+
+    assert_eq!(
+        response.sentence_total,
+        2,
+        "strong VAD silence under budget should split when both sides are long enough; got {:?}",
+        response
+            .translation_sentences
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        response.translation_sentences[0].text,
+        "These four solid words"
+    );
+    assert_eq!(
+        response.translation_sentences[1].text,
+        "continue after long silence"
     );
 }
 
