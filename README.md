@@ -41,13 +41,13 @@
 
 ## Download
 
-Current version **[v1.2.2](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.2)** (click a file name to download):
+Current version **[v1.2.3](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.3)** (click a file name to download):
 
 | Platform | Download |
 |------|------|
-| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_windows_portable.zip) |
-| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_linux_x64.tar.gz) |
-| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.2.2/OneAsr_1.2.2_macos.dmg) |
+| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.2.3/OneAsr_1.2.3_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.3/OneAsr_1.2.3_windows_portable.zip) |
+| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.2.3/OneAsr_1.2.3_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.3/OneAsr_1.2.3_linux_x64.tar.gz) |
+| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.2.3/OneAsr_1.2.3_macos.dmg) |
 
 ## Quick start
 
