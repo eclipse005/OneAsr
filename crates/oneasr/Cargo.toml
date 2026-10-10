@@ -21,7 +21,7 @@ rodio = { version = "0.22.2", default-features = false, features = ["playback", 
 
 [target.'cfg(windows)'.dependencies]
 # Used by `crashlog` for human-readable local timestamps in `oneasr-error.log`.
-windows = { version = "0.61", default-features = false, features = [
+windows = { version = "0.62", default-features = false, features = [
     "Win32_Foundation",
     "Win32_System_SystemInformation",
 ] }
