@@ -34,6 +34,10 @@ pub(super) const SOFT_COST: f64 = 1.0;
 pub(super) const COMMA_COST: f64 = 1.5;
 pub(super) const CONNECTOR_COST: f64 = 2.5;
 pub(super) const WORD_COST: f64 = 6.0;
+/// Ending a cue on ZH 了/着/的, JA/KO particles, or a coordinator. Worse than
+/// a plain mid-content cut so Force prefers soft clause punct / connectors,
+/// and only keeps a particle end as a last-resort kinsoku fallback.
+pub(super) const WEAK_ENDING_COST: f64 = 10.0;
 pub(super) const FORBIDDEN_COST: f64 = f64::INFINITY;
 
 pub(super) fn strip_token(token: &str) -> &str {
@@ -429,6 +433,35 @@ pub(super) fn is_phrase_close_particle(token: &str) -> bool {
     // 末字「的」：所有的 | 人 (NOT 「了」— 为了 is a connector, cutting
     // after 了 would be wrong in 为了).
     last == '的'
+}
+
+/// Weak cue endings for Force ranking: never prefer cutting after these.
+///
+/// Profile-symmetric lists only — ZH aspect/genitive tails (`了`/`着`/`的`),
+/// bare JA/KO particles, and profile coordinators. Soft clause punctuation
+/// and true clause boundaries outrank mid-content; these endings are worse
+/// than a plain word cut so Force does not pack past a comma onto `は`/`的`.
+pub(super) fn is_weak_cue_ending(token: &str, connectors: &[&str]) -> bool {
+    let t = strip_token(token);
+    if t.is_empty() {
+        return false;
+    }
+    // Coordinators never end a cue (symmetric with function_words_left).
+    if is_connector_like(token, connectors) {
+        return true;
+    }
+    // ZH: bare 了/着/的; multi-char …的 (所有的). 为了 is a connector above.
+    if matches!(t, "了" | "着" | "的") {
+        return true;
+    }
+    if t.chars().count() >= 2 && t.ends_with('的') {
+        return true;
+    }
+    // Bare JA / KO particles (어절 wholes are not bare particles).
+    if JA_PHRASE_CLOSE.contains(&t) || KO_PHRASE_CLOSE.contains(&t) {
+        return true;
+    }
+    false
 }
 
 fn is_ja_single_particle_char(c: char) -> bool {
@@ -1261,6 +1294,27 @@ mod tests {
         assert!(!is_phrase_close_particle("为了"));
         // Korean 어절 is a whole word, not a bare particle.
         assert!(!is_phrase_close_particle("국방부가"));
+    }
+
+    #[test]
+    fn weak_cue_endings_cover_force_forbid_set() {
+        let zh = &["但是", "因为", "所以", "为了"];
+        let ja = &["しかし", "だから"];
+        assert!(is_weak_cue_ending("了", zh));
+        assert!(is_weak_cue_ending("着", zh));
+        assert!(is_weak_cue_ending("的", zh));
+        assert!(is_weak_cue_ending("所有的", zh));
+        assert!(is_weak_cue_ending("所以", zh));
+        assert!(is_weak_cue_ending("为了", zh));
+        assert!(is_weak_cue_ending("は", ja));
+        assert!(is_weak_cue_ending("を", ja));
+        assert!(is_weak_cue_ending("の", ja));
+        assert!(is_weak_cue_ending("을", &[]));
+        // Sentence-final 吗/呢 stay phrase-close but are not Force weak endings.
+        assert!(!is_weak_cue_ending("吗", zh));
+        assert!(!is_weak_cue_ending("呢", zh));
+        assert!(!is_weak_cue_ending("厚度", zh));
+        assert!(!is_weak_cue_ending("選手", ja));
     }
 
     #[test]

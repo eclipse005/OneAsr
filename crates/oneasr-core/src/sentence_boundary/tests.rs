@@ -258,11 +258,62 @@ fn hard_pause_does_not_split_short_sentence_without_punctuation() {
     assert_eq!(spans, vec![(0, 1)]);
 }
 
-/// Ported EggTranslate guard: Japanese phrase-closing particle (は) is a good
-/// cut, so an overlong unpunctuated Japanese span splits after the particle.
+/// Force ranking: soft clause punct outranks ending on JA particles.
 #[test]
-fn japanese_particle_guides_force_cuts() {
-    // Short cap 16 (= Force ceiling). Span is well over, so DP prefers particle cuts.
+fn japanese_force_prefers_clause_punct_over_particle_end() {
+    // Short cap 16 (= Force ceiling). Interior 、 must win over packing onto は/を.
+    let tokens = [
+        "第二次世界大戦当時、",
+        "ナチスドイツは",
+        "大戦車自走砲とする",
+        "改造で成功を",
+        "収めました。",
+    ];
+    // Char-level-ish tokens with an early comma in a long fused span:
+    let chars: Vec<String> = "第二次世界大戦当時、ナチスドイツは大戦車自走砲とする改造でそこそこの成功作業を収めました"
+        .chars()
+        .map(|c| c.to_string())
+        .collect();
+    let words = chars
+        .iter()
+        .enumerate()
+        .map(|(i, t)| w(i, t))
+        .collect::<Vec<_>>();
+
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "short"))
+            .expect("step2 should build japanese sentences");
+    let texts: Vec<&str> = response
+        .translation_sentences
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert!(
+        texts.len() >= 2,
+        "Force must split the overlong JA span: {texts:?}"
+    );
+    // Prefer cutting at 、 rather than ending a non-final cue on a particle.
+    let non_final = &texts[..texts.len() - 1];
+    assert!(
+        non_final.iter().any(|t| t.ends_with('、') || t.ends_with('，')),
+        "Force should prefer clause punct; cues={texts:?}"
+    );
+    for t in non_final {
+        let last = t.chars().last().unwrap_or_default();
+        assert!(
+            !matches!(
+                last,
+                'は' | 'が' | 'を' | 'に' | 'の' | 'と' | 'で' | 'も' | 'へ' | 'や'
+            ),
+            "Force must not end a cue on a JA particle when punct exists: {t:?}"
+        );
+    }
+    let _ = tokens; // keep sample wording nearby for readers
+}
+
+#[test]
+fn force_cuts_over_budget_without_punct_stay_under_ceiling() {
+    // No clause punct: Force still hard-caps at the Short preset (not particle-ranked).
     let tokens = [
         "それ",
         "は",
@@ -281,40 +332,9 @@ fn japanese_particle_guides_force_cuts() {
         .enumerate()
         .map(|(i, t)| w(i, t))
         .collect::<Vec<_>>();
-
-    let ja_profile = super::profile::profile_for_lang("ja");
-    let short_preset = super::preset::SubtitleLengthPreset::Short;
-    let idx = super::vad_align::SpeechSegmentIndex::new(Vec::new());
-    let semantic = vec![(0usize, words.len() - 1)];
-    let dp_cuts = super::subtitle_layout::build_subtitle_layout_split_points(
-        &words,
-        &semantic,
-        &*ja_profile,
-        short_preset,
-        &idx,
-    );
-    assert!(
-        !dp_cuts.is_empty(),
-        "DP must cut an overlong Japanese span at a particle"
-    );
-    for (index, _) in &dp_cuts {
-        let last = tokens[*index].chars().last().unwrap_or_default();
-        assert!(
-            matches!(
-                last,
-                'は' | 'が' | 'を' | 'に' | 'の' | 'と' | 'で' | 'も' | 'へ' | 'や'
-            ),
-            "DP cut after {:?} is not a phrase-close particle",
-            tokens[*index]
-        );
-    }
-
     let response =
         build_source_sentences_from_words(request_with_lang_and_preset(words, "ja", "short"))
             .expect("step2 should build japanese sentences");
-
-    // A 3-char first piece ("それは") is an orphan flash line; source-side
-    // watchability may glue it back. Final cues must stay within the cap.
     let joined = response
         .translation_sentences
         .iter()
@@ -325,21 +345,56 @@ fn japanese_particle_guides_force_cuts() {
         joined,
         "それはとても面白い話で本当に感動した昨日から何度も繰り返し考えている"
     );
-    let n = response.translation_sentences.len();
-    for (idx, s) in response.translation_sentences.iter().enumerate() {
-        // Watchability may re-glue a particle orphan within quality grace.
-        assert!(s.text.chars().count() <= 22, "cue over cap: {:?}", s.text);
-        if idx + 1 < n {
-            let last = s.text.chars().last().unwrap_or_default();
-            assert!(
-                matches!(
-                    last,
-                    'は' | 'が' | 'を' | 'に' | 'の' | 'と' | 'で' | 'も' | 'へ' | 'や'
-                ),
-                "cut should follow a particle: {:?}",
-                s.text
-            );
-        }
+    assert!(
+        response.translation_sentences.len() >= 2,
+        "must Force-split: {:?}",
+        response
+            .translation_sentences
+            .iter()
+            .map(|s| &s.text)
+            .collect::<Vec<_>>()
+    );
+    for s in &response.translation_sentences {
+        // Watchability may re-glue within quality grace; stay near Short ceiling.
+        assert!(
+            s.text.chars().count() <= 22,
+            "cue over Force/watchability band: {:?}",
+            s.text
+        );
+    }
+}
+
+
+
+#[test]
+fn chinese_force_prefers_comma_not_de_le_zhe_ending() {
+    // Over Short (16) with an early comma: must cut at ， not after 的/了/着.
+    let text = "如果没有他们的存在，地球的温度就可能降到零下十五摄氏度左右了";
+    let words = text
+        .chars()
+        .enumerate()
+        .map(|(i, c)| w(i, &c.to_string()))
+        .collect::<Vec<_>>();
+    let response =
+        build_source_sentences_from_words(request_with_lang_and_preset(words, "zh", "short"))
+            .expect("zh force");
+    let texts: Vec<&str> = response
+        .translation_sentences
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert!(texts.len() >= 2, "expected Force split: {texts:?}");
+    let non_final = &texts[..texts.len() - 1];
+    assert!(
+        non_final.iter().any(|t| t.ends_with('，') || t.ends_with(',')),
+        "Force should cut at comma; cues={texts:?}"
+    );
+    for t in non_final {
+        let last = t.chars().last().unwrap_or_default();
+        assert!(
+            !matches!(last, '的' | '了' | '着'),
+            "Force must not end on 的/了/着 when comma exists: {t:?}"
+        );
     }
 }
 
