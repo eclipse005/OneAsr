@@ -16,8 +16,10 @@
 //! 2) Slightly over (grace band): split ONLY at linguistically good cut points
 //!    (punctuation, connectors, phrase-closing particles, real pauses); keep
 //!    the whole line when no good cut exists.
-//! 3) Far over: force cuts at the user preset length limit only (no parallel
-//!    force ceiling); a single pathological token may stand alone.
+//! 3) Far over (Force): hard-cap is the user preset only (no parallel ceiling).
+//!    Rank cuts: prefer soft clause punct / clause boundaries; forbid ending
+//!    on ZH 了/着/的, JA/KO particles, or coordinators (profile-symmetric).
+//!    Mid-content is a last resort; a single pathological token may stand alone.
 //!
 //! Grammar guard rules (function words, phrase-closing particles, discourse
 //! markers, "to"-binding, Japanese orthography) live in `boundary_rules` and
@@ -30,12 +32,13 @@ use crate::subtitle::text_rules::has_break_terminal_punctuation;
 use super::boundary_rules::{
     COMMA_COST, CONNECTOR_COST, FORBIDDEN_COST, GLUE_GAP_SEC, GLUED_WORD_COST, GOOD_SILENCE_SEC,
     LENGTH_GRACE_CHARS, MIN_FRAGMENT_UNITS, SHORT_SEGMENT_PENALTY, SOFT_COST, TERMINAL_COST,
-    WORD_COST, is_bound_connector, is_case_particle_before_predicate, is_closing_punctuation,
-    is_connector_like, is_discourse_marker_comma, is_function_word_left, is_japanese_lexical_bind,
-    is_japanese_orthographic_bind, is_japanese_spoken_end, is_line_start_bound_particle,
-    is_numeric_continuation, is_open_genitive_link, is_opening_punctuation,
-    is_phrase_close_particle, is_soft_punctuation, is_split_connector_pair, is_split_hai,
-    is_time_glued_content, is_to_binding_left, lexical_cut_cost, strip_token,
+    WEAK_ENDING_COST, WORD_COST, is_bound_connector, is_case_particle_before_predicate,
+    is_closing_punctuation, is_connector_like, is_discourse_marker_comma, is_function_word_left,
+    is_japanese_lexical_bind, is_japanese_orthographic_bind, is_japanese_spoken_end,
+    is_line_start_bound_particle, is_numeric_continuation, is_open_genitive_link,
+    is_opening_punctuation, is_phrase_close_particle, is_soft_punctuation,
+    is_split_connector_pair, is_split_hai, is_time_glued_content, is_to_binding_left,
+    is_weak_cue_ending, lexical_cut_cost, strip_token,
 };
 use super::profile::{Advisor, LanguageProfile};
 use super::types::SplitReason;
@@ -151,23 +154,23 @@ fn boundary_base_cost(
     if is_comma(&left.word) && !is_discourse_marker_comma(&left.word) {
         return COMMA_COST;
     }
-    // Genitive の/的 + following head: not a cheap/quality cut.
-    // Japanese の: WORD_COST so force may still cut as last resort (kinsoku).
-    // Chinese 的: much heavier — dangling `地球的 | 温度` is worse than a
-    // mid-content force cut, and commas earlier in the span should win.
+    // Genitive の/的 + following head: never a preferred Force cut.
+    // Heavier than WEAK_ENDING / WORD so Force ranks soft punct and mid-content
+    // first; greedy last-resort may still break it under emergency overflow.
     if is_open_genitive_link(&left.word, &right.word) {
-        let l = strip_token(&left.word);
-        if l.ends_with('的') {
-            return 15.0;
-        }
-        return WORD_COST;
+        return 15.0;
     }
     // で/に/を/と immediately before their predicate: not a cheap cut.
     if is_case_particle_before_predicate(&left.word, &right.word) {
         return WORD_COST;
     }
-    // Phrase-closing particle (的/了/は/を/을...): cutting after it closes a
-    // phrase — a good cut. Japanese の is handled above when the head follows.
+    // Weak cue endings (ZH 了/着/的, JA/KO particles, coordinators): never
+    // prefer these over soft clause punct. Cost beats WORD so Force packs to
+    // punctuation / mid-content instead of dangling a particle at the cue end.
+    if is_weak_cue_ending(&left.word, profile.connectors()) {
+        return WEAK_ENDING_COST;
+    }
+    // Remaining phrase-close (吗/呢/吧/啊…): cutting after closes a phrase.
     if is_phrase_close_particle(&left.word) {
         return COMMA_COST;
     }
@@ -273,6 +276,10 @@ fn is_quality_cut_boundary(
     if is_open_genitive_link(&left.word, &right.word)
         || is_case_particle_before_predicate(&left.word, &right.word)
     {
+        return false;
+    }
+    // Weak endings are not quality cuts — prefer punct / connectors instead.
+    if is_weak_cue_ending(&left.word, profile.connectors()) {
         return false;
     }
     if is_phrase_close_particle(&left.word) {
@@ -413,6 +420,74 @@ fn is_strong_silence_cut_boundary(
     if let Some(gap) = gap_at(words, i)
         && gap >= INSIDE_BUDGET_GAP_SEC
     {
+        return true;
+    }
+    false
+}
+
+/// Force-mode mandatory pre-split cut: soft clause punctuation (`，、, ; ：:`).
+///
+/// Connectors and pauses are intentionally excluded here — they stay cheap in
+/// the ungated Force cost ranking so Latin coordinators do not explode cue
+/// counts. Weak endings (ZH 了/着/的, JA/KO particles, coordinators) are never
+/// preferred: profile tables only, no material-specific hacks.
+fn is_force_preferred_cut(
+    words: &[WordTokenDto],
+    i: usize,
+    profile: &dyn LanguageProfile,
+    _vad_index: &SpeechSegmentIndex,
+) -> bool {
+    let Some(left) = words.get(i) else {
+        return false;
+    };
+    let Some(right) = words.get(i + 1) else {
+        return false;
+    };
+
+    if ends_with_opening_punctuation(&left.word) || starts_with_closing_punctuation(&right.word) {
+        return false;
+    }
+    if is_numeric_continuation(&left.word, &right.word) {
+        return false;
+    }
+    if is_japanese_lexical_bind(&left.word, &right.word) {
+        return false;
+    }
+    let next2 = peek_word(words, i + 2);
+    if is_line_start_bound_particle(&right.word) && !is_split_hai(&right.word, next2) {
+        return false;
+    }
+    if is_open_genitive_link(&left.word, &right.word)
+        || is_case_particle_before_predicate(&left.word, &right.word)
+    {
+        return false;
+    }
+    if is_weak_cue_ending(&left.word, profile.connectors()) {
+        return false;
+    }
+    if is_function_word_left(&left.word, profile.function_words_left()) {
+        return false;
+    }
+    if is_time_glued_content(&left.word, &right.word, gap_at(words, i)) {
+        return false;
+    }
+
+    if has_break_terminal_punctuation(&left.word)
+        && !(profile.uses_punkt_sentence_boundary()
+            && super::semantic::should_suppress_question_bang_split(words, i))
+    {
+        return true;
+    }
+    if spoken_end_at(words, i) {
+        return true;
+    }
+    // Mandatory Force pre-split keys: soft clause punctuation only.
+    // Connectors / VAD stay cost-ranked in the ungated pass (CONNECTOR_COST
+    // << WORD << WEAK) so Latin "and/but" does not explode cue counts.
+    if ends_with_soft_punctuation(&left.word) {
+        return true;
+    }
+    if is_comma(&left.word) && !is_discourse_marker_comma(&left.word) {
         return true;
     }
     false
@@ -614,6 +689,111 @@ fn dp_split_span(
         DpMode::Force
     };
 
+    let char_based = profile.is_char_based();
+
+    // Force ranking: mandatory pre-split at soft clause punct / clause
+    // boundaries (min-side floor), then ungated Force on leftovers still over
+    // the preset ceiling. Skipping a comma for a cheaper mid-content pack is
+    // exactly the residual this step removes.
+    if mode == DpMode::Force {
+        let min_side = if profile.is_char_based() { 6.0 } else { 4.0 };
+        let preferred_rel: Vec<usize> = (1..n)
+            .filter(|&k| {
+                let left_u = prefix[k];
+                let right_u = prefix[n] - prefix[k];
+                left_u >= min_side
+                    && right_u >= min_side
+                    && is_force_preferred_cut(words, start + k - 1, profile, vad_index)
+            })
+            .collect();
+        if !preferred_rel.is_empty() {
+            let mut bounds = vec![0usize];
+            bounds.extend(preferred_rel.iter().copied());
+            bounds.push(n);
+            let mut out: Vec<DpCut> = preferred_rel
+                .iter()
+                .map(|&k| DpCut {
+                    index: start + k - 1,
+                    reason: SplitReason::SubtitleLayout,
+                })
+                .collect();
+            for w in bounds.windows(2) {
+                let a = w[0];
+                let b = w[1];
+                if b <= a + 1 {
+                    continue;
+                }
+                let sub_n = b - a;
+                let sub_units = prefix[b] - prefix[a];
+                let sub_chars = char_of(a, b - 1);
+                let still_over = sub_units > hard.max_unit
+                    || (hard.char_limited() && sub_chars > hard.char);
+                if !still_over {
+                    continue;
+                }
+                let mut sub_prefix = vec![0.0_f64; sub_n + 1];
+                for k in 0..sub_n {
+                    sub_prefix[k + 1] = prefix[a + k + 1] - prefix[a];
+                }
+                let mut sub_byte = vec![0usize; sub_n + 1];
+                let mut acc = 0usize;
+                for k in 0..sub_n {
+                    acc += words[start + a + k].word.len();
+                    sub_byte[k + 1] = acc;
+                }
+                let sub_base = compute_base_costs(
+                    words,
+                    start + a,
+                    start + b - 1,
+                    vad_index,
+                    profile,
+                    &advisor,
+                    &sub_byte,
+                );
+                if let Some(extra) = dp_split_span_ungated_force(
+                    words,
+                    start + a,
+                    start + b - 1,
+                    profile,
+                    budget,
+                    vad_index,
+                    &sub_prefix,
+                    &|i, j| char_of(a + i, a + j),
+                    &hard,
+                    &sub_base,
+                    &advisor,
+                    &sub_byte,
+                    sub_n,
+                    char_based,
+                ) {
+                    out.extend(extra);
+                }
+            }
+            out.sort_by_key(|c| c.index);
+            out.dedup_by_key(|c| c.index);
+            return Some(out);
+        }
+        // No preferred clause cut with both sides long enough → ungated Force.
+        return dp_split_span_ungated_force(
+            words,
+            start,
+            end,
+            profile,
+            budget,
+            vad_index,
+            &prefix,
+            &*char_of,
+            &hard,
+            &compute_base_costs(
+                words, start, end, vad_index, profile, &advisor, &byte_offset,
+            ),
+            &advisor,
+            &byte_offset,
+            n,
+            char_based,
+        );
+    }
+
     let base_cost = compute_base_costs(
         words,
         start,
@@ -636,7 +816,9 @@ fn dp_split_span(
                     prefix[k],
                     prefix[n] - prefix[k],
                 ),
-                _ => is_quality_cut_boundary(words, i, profile, vad_index),
+                DpMode::Quality | DpMode::Force => {
+                    is_quality_cut_boundary(words, i, profile, vad_index)
+                }
             }
         })
         .collect();
@@ -645,7 +827,6 @@ fn dp_split_span(
     let mut prev = vec![0usize; n + 1];
     dp[0] = 0.0;
 
-    let char_based = profile.is_char_based();
     for i in 1..=n {
         // Last segment = words[start+j .. start+i]; scan candidate starts from
         // i-1 downward. Word units are monotonic → break once over max_unit.
@@ -696,13 +877,9 @@ fn dp_split_span(
     }
 
     if dp[n].is_infinite() {
-        if mode.quality_gated() {
-            return Some(Vec::new()); // no allowed cut → keep the whole line
-        }
-        // Force mode without a DP solution: fall back to greedy first-fit.
-        return Some(greedy_cuts_by_hard_limit(
-            words, start, end, &prefix, &*char_of, &hard, profile,
-        ));
+        // Quality / VadInsideBudget: no allowed cut → keep the whole line.
+        // Force returns earlier and never reaches here.
+        return Some(Vec::new());
     }
 
     let mut cuts_rel: Vec<usize> = Vec::new();
@@ -731,7 +908,7 @@ fn dp_split_span(
                 ))
     });
 
-    if mode.quality_gated() && !all_cuts_quality(&cuts_rel, &quality_ok) {
+    if mode.keep_whole_if_no_cut() && !all_cuts_quality(&cuts_rel, &quality_ok) {
         return Some(Vec::new());
     }
 
@@ -752,15 +929,112 @@ enum DpMode {
     VadInsideBudget,
     /// Grace band: only linguistically good cuts, else keep whole.
     Quality,
+    /// Far over: prefer soft clause punct / clause boundaries; weak endings
+    /// forbidden in the preferred pass. Falls back to ranked mid-content.
     Force,
 }
 
 impl DpMode {
-    /// Quality and VadInsideBudget both refuse non-whitelisted cuts and keep
-    /// the whole span when none exist.
+    /// Quality and VadInsideBudget refuse non-whitelisted cuts and keep the
+    /// whole span when none exist. Force pre-splits preferred cuts then runs
+    /// an ungated pass (see early return above).
     fn quality_gated(self) -> bool {
         matches!(self, Self::Quality | Self::VadInsideBudget)
     }
+
+    fn keep_whole_if_no_cut(self) -> bool {
+        matches!(self, Self::Quality | Self::VadInsideBudget)
+    }
+}
+
+/// Ungated Force pass: any non-forbidden cut, ranked by `boundary_base_cost`
+/// (soft punct cheapest; weak endings expensive). Used when the preferred
+/// clause-boundary pass cannot meet the preset Force ceiling.
+fn dp_split_span_ungated_force(
+    words: &[WordTokenDto],
+    start: usize,
+    end: usize,
+    profile: &dyn LanguageProfile,
+    budget: &SpanBudget,
+    _vad_index: &SpeechSegmentIndex,
+    prefix: &[f64],
+    char_of: &dyn Fn(usize, usize) -> f64,
+    hard: &HardLimits,
+    base_cost: &[f64],
+    _advisor: &Advisor,
+    _byte_offset: &[usize],
+    n: usize,
+    char_based: bool,
+) -> Option<Vec<DpCut>> {
+    let mut dp = vec![f64::INFINITY; n + 1];
+    let mut prev = vec![0usize; n + 1];
+    dp[0] = 0.0;
+
+    for i in 1..=n {
+        for j in (0..i).rev() {
+            let token_count = i - j;
+            let seg_units = prefix[i] - prefix[j];
+            if token_count > 1 && seg_units > hard.max_unit {
+                break;
+            }
+            let seg_chars = char_of(j, i - 1);
+            if !hard.valid(token_count, seg_units, seg_chars) {
+                continue;
+            }
+            if base_cost[j].is_infinite() || dp[j].is_infinite() {
+                continue;
+            }
+            let length_penalty =
+                LENGTH_PENALTY_WEIGHT * (seg_units - budget.limit).abs() / budget.limit;
+            let mut cost = dp[j] + base_cost[j] + length_penalty;
+            if hard.char_limited() && hard.char > 0.0 {
+                cost += LENGTH_PENALTY_WEIGHT * 0.5 * (seg_chars - hard.char).abs() / hard.char;
+            }
+            if seg_units > 0.0 && seg_units <= 2.0 {
+                cost += SHORT_SEGMENT_PENALTY;
+            }
+            let better = if char_based {
+                cost < dp[i]
+            } else {
+                cost <= dp[i]
+            };
+            if better {
+                dp[i] = cost;
+                prev[i] = j;
+            }
+        }
+    }
+
+    if dp[n].is_infinite() {
+        return Some(greedy_cuts_by_hard_limit(
+            words, start, end, prefix, char_of, hard, profile,
+        ));
+    }
+
+    let mut cuts_rel: Vec<usize> = Vec::new();
+    let mut cur = n;
+    while cur > 0 {
+        let p = prev[cur];
+        if p > 0 {
+            cuts_rel.push(p);
+        }
+        cur = p;
+    }
+    cuts_rel.reverse();
+
+    absorb_short_fragments(&mut cuts_rel, prefix, char_of, n, hard, &|cut_k| {
+        should_keep_short_cut(words, start, cut_k, profile)
+    });
+
+    Some(
+        cuts_rel
+            .into_iter()
+            .map(|k| DpCut {
+                index: start + k - 1,
+                reason: SplitReason::SubtitleLayout,
+            })
+            .collect(),
+    )
 }
 
 fn compute_base_costs(
@@ -941,16 +1215,30 @@ fn greedy_cuts_by_hard_limit(
             i += 1;
             continue;
         }
-        // Cut back from i while the boundary is structurally bad.
+        // Prefer a soft clause punct / comma in [seg_start+1, i] when present.
+        let mut punct_cut: Option<usize> = None;
+        for k in (seg_start + 1..=i).rev() {
+            let left = words[start + k - 1].word.as_str();
+            if ends_with_soft_punctuation(left) || is_comma(left) {
+                if !is_discourse_marker_comma(left)
+                    && !is_weak_cue_ending(left, profile.connectors())
+                {
+                    punct_cut = Some(k);
+                    break;
+                }
+            }
+        }
+        // Cut back from i while the boundary is structurally bad / weak.
         // Do NOT retreat across open genitive — that would put の on the next
-        // line. の stays on the left (kinsoku).
-        let mut cut = i;
+        // line. の stays on the left only as last-resort kinsoku.
+        let mut cut = punct_cut.unwrap_or(i);
         let mut glue_steps = 0;
         while cut > seg_start + 1 {
             let left = words[start + cut - 1].word.as_str();
             let right = words[start + cut].word.as_str();
             if is_function_word_left(left, profile.function_words_left())
                 || is_japanese_orthographic_bind(left, right)
+                || (punct_cut.is_none() && is_weak_cue_ending(left, profile.connectors()))
             {
                 cut -= 1;
                 continue;
