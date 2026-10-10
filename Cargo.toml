@@ -30,3 +30,6 @@ codegen-units = 1
 # once a released gpui includes the fix. Local patch details: vendor/gpui/PATCHES.md.
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
+# Force windows 0.62 so gpu-allocator matches wgpu-hal 30 DX12 types (sysinfo
+# 0.31 via optional zed-scap would otherwise unify gpu-allocator onto 0.57).
+gpu-allocator = { path = "vendor/gpu-allocator" }
