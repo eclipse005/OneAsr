@@ -7,15 +7,17 @@
 //! artifacts.
 //!
 //! Length policy (quality first, readability second):
-//! 1) Within the word/char target → keep intact unless a *strong* speaking
-//!    pause is present (VAD silence ≥ 0.55s or word gap ≥ 0.50s), both sides
-//!    of the cut meet a min-length floor, and grammar forbids do not apply.
-//!    Connectors / phrase particles alone are never enough inside budget.
+//! 1) Within the word/char target → speaking-rhythm cuts at *strong* pauses
+//!    (VAD silence ≥ 0.55s or word gap ≥ 0.50s) **or** soft clause
+//!    punctuation (，、, ; ：:), both sides meeting a min-length floor, with
+//!    grammar forbids applied. Connectors / phrase particles alone are never
+//!    enough inside budget; continuation starters come from the profile's
+//!    function-word-left table (symmetric with "never end a cue on these").
 //! 2) Slightly over (grace band): split ONLY at linguistically good cut points
 //!    (punctuation, connectors, phrase-closing particles, real pauses); keep
 //!    the whole line when no good cut exists.
-//! 3) Far over: force cuts so every multi-token segment fits word AND display-
-//!    char hard limits; a single pathological token may stand alone.
+//! 3) Far over: force cuts at the user preset length limit only (no parallel
+//!    force ceiling); a single pathological token may stand alone.
 //!
 //! Grammar guard rules (function words, phrase-closing particles, discourse
 //! markers, "to"-binding, Japanese orthography) live in `boundary_rules` and
@@ -310,12 +312,18 @@ fn is_quality_cut_boundary(
     false
 }
 
-/// Strong acoustic pause only — used when the span is still inside the length
-/// budget (speaking-rhythm path).
+/// Strong speaking-rhythm cut — used when the span is still inside the length
+/// budget.
+///
+/// Eligible keys (rhythm first, punctuation for readability):
+/// - strong VAD silence (≥ 0.55s) or word gap (≥ 0.50s)
+/// - soft clause punctuation (，、, ; ：:) — same min-side floor as pauses
 ///
 /// Grammar forbids still block a cut (function words, Japanese binds, open
 /// genitive, …). Connectors / phrase particles alone are intentionally **not**
-/// enough: this path is acoustic, not an oral-connector word list.
+/// enough. Continuation starters are derived from the profile's
+/// `function_words_left` (symmetric with "never end a cue on these"); there is
+/// no EN-only word list and no `that` / `就是` special case.
 ///
 /// `left_units` / `right_units` are the language-aware lengths of the would-be
 /// fragments on each side of the cut (within the current semantic span).
@@ -360,9 +368,9 @@ fn is_strong_silence_cut_boundary(
     if is_function_word_left(&left.word, profile.function_words_left()) {
         return false;
     }
-    // Do not open a cue on a bare continuation determiner/preposition after a
-    // non-punct left ("week | of a ninety-year life").
-    if is_inside_budget_continuation_start(&right.word)
+    // Profile-symmetric continuation: never open a cue on a function word
+    // after a non-punct left ("week | of a ninety-year life", "beliefern | von").
+    if is_function_word_left(&right.word, profile.function_words_left())
         && !left.word.chars().any(|c| {
             matches!(
                 c,
@@ -387,6 +395,15 @@ fn is_strong_silence_cut_boundary(
     if is_time_glued_content(&left.word, &right.word, gap_at(words, i)) {
         return false;
     }
+    // Soft clause punctuation is an inside-budget cut key (same floor as VAD).
+    // Discourse-marker commas ("Okay," / "Now,") stay blocked so they cannot
+    // become flash lines under the target.
+    if ends_with_soft_punctuation(&left.word) {
+        return true;
+    }
+    if is_comma(&left.word) && !is_discourse_marker_comma(&left.word) {
+        return true;
+    }
     if let Some((l_end, r_start)) = boundary_at(words, i)
         && vad_index.crosses_silence(l_end, r_start)
         && vad_index.silence_duration_sec(l_end, r_start) >= VAD_INSIDE_BUDGET_SILENCE_SEC
@@ -399,30 +416,6 @@ fn is_strong_silence_cut_boundary(
         return true;
     }
     false
-}
-
-fn is_inside_budget_continuation_start(token: &str) -> bool {
-    let t = strip_token(token).to_lowercase();
-    matches!(
-        t.as_str(),
-        "of" | "which"
-            | "that"
-            | "who"
-            | "whom"
-            | "whose"
-            | "a"
-            | "an"
-            | "the"
-            | "and"
-            | "or"
-            | "but"
-            | "to"
-            | "for"
-            | "with"
-            | "from"
-            | "into"
-            | "onto"
-    )
 }
 
 /// Split overlong semantic spans into subtitle-length segments via DP.
@@ -755,7 +748,7 @@ fn dp_split_span(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DpMode {
-    /// Under target: only strong VAD / gap silences (speaking rhythm).
+    /// Under target: strong VAD / gap silences or soft clause punctuation.
     VadInsideBudget,
     /// Grace band: only linguistically good cuts, else keep whole.
     Quality,

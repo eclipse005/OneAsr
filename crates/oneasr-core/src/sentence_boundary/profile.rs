@@ -166,8 +166,8 @@ pub(super) trait LanguageProfile {
         super::boundary_rules::LENGTH_GRACE_UNITS
     }
 
-    /// Force-mode ceiling. JA/KO may exceed the target so a bunsetsu is not
-    /// split; other languages keep the raw cap so existing tests hold.
+    /// Force-mode ceiling = the user preset limit only. No parallel inflated
+    /// threshold: short / standard / loose are the sole Force hard caps.
     fn force_unit_ceiling(&self, limit: f64) -> f64 {
         limit
     }
@@ -307,6 +307,41 @@ const U35_SPACED_CONNECTORS: &[&str] = &[
 ];
 
 const U35_SPACED_FUNCTION_WORDS: &[&str] = &[
+    // Coordinators — never end a cue (symmetric with EN and/but/or).
+    "und",
+    "oder",
+    "aber",
+    "et",
+    "ou",
+    "mais",
+    "y",
+    "o",
+    "pero",
+    "e",
+    "mas",
+    "ma",
+    "però",
+    "en",
+    "maar",
+    "och",
+    "eller",
+    "men",
+    "og",
+    "ja",
+    "tai",
+    "mutta",
+    "i",
+    "lub",
+    "ale",
+    "ve",
+    "veya",
+    "ama",
+    "và",
+    "hoặc",
+    "nhưng",
+    "и",
+    "или",
+    "но",
     // articles / prep / clitic (es/fr/de/pt/it/nl)
     "el",
     "la",
@@ -663,8 +698,8 @@ impl LanguageProfile for ChineseProfile {
         true
     }
     /// Wider quality band so DP prefers commas / connectors over mid-NP
-    /// force cuts (`地球的 | 温度`). Force ceiling stays at the raw cap so
-    /// unpunctuated runs still hard-split at the preset limit.
+    /// force cuts (`地球的 | 温度`). Force still hard-splits at the preset
+    /// limit only (no parallel ceiling).
     fn length_grace_units(&self) -> f64 {
         6.0
     }
@@ -741,9 +776,6 @@ impl LanguageProfile for JapaneseProfile {
     fn length_grace_units(&self) -> f64 {
         6.0
     }
-    fn force_unit_ceiling(&self, limit: f64) -> f64 {
-        limit + self.length_grace_units()
-    }
 }
 
 // ============================================================================
@@ -799,9 +831,6 @@ impl LanguageProfile for KoreanProfile {
     }
     fn length_grace_units(&self) -> f64 {
         6.0
-    }
-    fn force_unit_ceiling(&self, limit: f64) -> f64 {
-        limit + self.length_grace_units()
     }
 }
 
