@@ -9,6 +9,19 @@
 use crate::app::prelude::*;
 use crate::app::ui::settings_drawer::SettingsFormState;
 
+/// 设置标题。悬停用现成的深色小卡片，文案按当前界面语言取。
+fn setting_title(id: &'static str, label: &str, tip: &'static str) -> impl IntoElement {
+    let tip: SharedString = tip.into();
+    div()
+        .id(id)
+        .text_sm()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(TEXT)
+        .whitespace_nowrap()
+        .child(label.to_string())
+        .tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into())
+}
+
 /// One settings card: rounded, bordered, padded. All ten sections go through
 /// this so their chrome cannot drift apart. Gray cards on the white drawer. White on the gray page background.
 pub(super) fn settings_section(body: AnyElement) -> impl IntoElement + use<> {
@@ -52,13 +65,11 @@ impl OneAsrApp {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(TEXT)
-                                .child(t(L::DEFAULT_LANGUAGE)),
-                        )
+                        .child(setting_title(
+                            "tip-default-language",
+                            t(L::DEFAULT_LANGUAGE),
+                            t(L::TIP_DEFAULT_LANGUAGE),
+                        ))
                         .child(
                             div()
                                 .relative()
@@ -117,13 +128,11 @@ impl OneAsrApp {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(TEXT)
-                                .child(t(L::SUBTITLE_LENGTH)),
-                        )
+                        .child(setting_title(
+                            "tip-subtitle-length",
+                            t(L::SUBTITLE_LENGTH),
+                            t(L::TIP_SUBTITLE_LENGTH),
+                        ))
                         .child(
                             div().flex().gap_1p5().children(
                                 [
@@ -177,13 +186,11 @@ impl OneAsrApp {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(TEXT)
-                                    .child(t(L::CHUNK_DURATION)),
-                            )
+                            .child(setting_title(
+                                "tip-chunk-duration",
+                                t(L::CHUNK_DURATION),
+                                t(L::TIP_CHUNK_DURATION),
+                            ))
                             .child(div().text_xs().text_color(MUTED).child(
                                 crate::i18n::chunk_target_label(
                                     form.chunk_target,
@@ -226,13 +233,13 @@ impl OneAsrApp {
         settings_section(body)
     }
 
-    /// 输出格式 + 中文输出
+    /// 输出格式、中文输出，以及同一块里的字幕美化。
     pub(super) fn render_settings_output(
         &mut self,
         form: &SettingsFormState,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let body = div()
+        let columns = div()
             .flex()
             .items_start()
             .gap_2p5()
@@ -244,16 +251,11 @@ impl OneAsrApp {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(
-                        div().flex().items_center().child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(TEXT)
-                                .whitespace_nowrap()
-                                .child(t(L::OUTPUT_FORMAT)),
-                        ),
-                    )
+                    .child(div().flex().items_center().child(setting_title(
+                        "tip-output-format",
+                        t(L::OUTPUT_FORMAT),
+                        t(L::TIP_OUTPUT_FORMAT),
+                    )))
                     .child(
                         div()
                             .flex()
@@ -323,14 +325,11 @@ impl OneAsrApp {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(TEXT)
-                                    .whitespace_nowrap()
-                                    .child(t(L::CHINESE_OUTPUT)),
-                            )
+                            .child(setting_title(
+                                "tip-chinese-output",
+                                t(L::CHINESE_OUTPUT),
+                                t(L::TIP_CHINESE_OUTPUT),
+                            ))
                             .child(
                                 div()
                                     .text_xs()
@@ -358,6 +357,32 @@ impl OneAsrApp {
                             }),
                         )
                     }))),
+            );
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(columns)
+            // 卡片左右有 px_3。负边距把线拉到边框内侧，颜色比边框深一档、比文字浅。
+            .child(div().h(px(1.)).mx(gpui::rems(-0.75)).bg(DIVIDER))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(setting_title(
+                        "tip-subtitle-beautify",
+                        t(L::SUBTITLE_BEAUTIFY),
+                        t(L::TIP_SUBTITLE_BEAUTIFY),
+                    ))
+                    .child(switch(
+                        "switch-subtitle-beautify",
+                        form.subtitle_beautify,
+                        cx.listener(|this, _, _, cx| {
+                            this.settings.subtitle_beautify = !this.settings.subtitle_beautify;
+                            this.mark_settings_dirty(cx);
+                        }),
+                    )),
             )
             .into_any_element();
         settings_section(body)
@@ -378,7 +403,11 @@ impl OneAsrApp {
                     .text_sm()
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(TEXT)
-                    .child(t(L::OUTPUT_LOCATION)),
+                    .child(setting_title(
+                        "tip-output-location",
+                        t(L::OUTPUT_LOCATION),
+                        t(L::TIP_OUTPUT_LOCATION),
+                    )),
             )
             .child(
                 div().flex().gap_1p5().children(
@@ -477,13 +506,11 @@ impl OneAsrApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(TEXT)
-                            .child(t(L::ASR_MODEL)),
-                    )
+                    .child(setting_title(
+                        "tip-asr-model",
+                        t(L::ASR_MODEL),
+                        t(L::TIP_ASR_MODEL),
+                    ))
                     .child(div().size(px(8.)).rounded_full().bg(if form.asr_ready {
                         ACCENT
                     } else {
@@ -530,6 +557,7 @@ impl OneAsrApp {
                         "asr-quant",
                         t(L::QUANT),
                         form.asr_quant,
+                        Some(t(L::TIP_QUANT)),
                         cx.listener(|this, _, _, cx| {
                             if this.download_kind_busy(ModelKind::Asr) {
                                 this.flash_hint(t(L::ASR_DL_BUSY), cx);
@@ -631,13 +659,11 @@ impl OneAsrApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(TEXT)
-                            .child(t(L::ALIGNER_MODEL)),
-                    )
+                    .child(setting_title(
+                        "tip-aligner-model",
+                        t(L::ALIGNER_MODEL),
+                        t(L::TIP_ALIGNER_MODEL),
+                    ))
                     .child(div().size(px(8.)).rounded_full().bg(if form.align_ready {
                         ACCENT
                     } else {
@@ -760,13 +786,11 @@ impl OneAsrApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(TEXT)
-                            .child(t(L::VOCAL_SEPARATION)),
-                    )
+                    .child(setting_title(
+                        "tip-vocal-separation",
+                        t(L::VOCAL_SEPARATION),
+                        t(L::TIP_VOCAL_SEPARATION),
+                    ))
                     .child(div().size(px(8.)).rounded_full().bg(if form.demucs_ready {
                         ACCENT
                     } else {
@@ -779,6 +803,7 @@ impl OneAsrApp {
                 "vocal-sep-default",
                 t(L::SEP_DEFAULT_ON),
                 form.vocal_sep,
+                Some(t(L::TIP_SEP_DEFAULT_ON)),
                 cx.listener(|this, _, _, cx| {
                     let enabling = !this.settings.vocal_separation;
                     if enabling && !this.demucs_ready {
@@ -867,12 +892,11 @@ impl OneAsrApp {
             .flex()
             .flex_col()
             .gap_1p5()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(t(L::BACKEND)),
-            )
+            .child(setting_title(
+                "tip-backend",
+                t(L::BACKEND),
+                t(L::TIP_BACKEND),
+            ))
             .child(
                 div().flex().gap_1p5().children(
                     [("auto", t(L::BACKEND_AUTO)), ("gpu", "GPU"), ("cpu", "CPU")]
@@ -913,13 +937,7 @@ impl OneAsrApp {
             .flex()
             .items_center()
             .justify_between()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(TEXT)
-                    .child(t(L::SOUND)),
-            )
+            .child(setting_title("tip-sound", t(L::SOUND), t(L::TIP_SOUND)))
             .child(switch(
                 "switch-sound",
                 form.sound,

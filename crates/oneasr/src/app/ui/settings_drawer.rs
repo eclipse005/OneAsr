@@ -144,6 +144,7 @@ pub(super) struct SettingsFormState {
     pub(super) output_srt: bool,
     pub(super) output_txt: bool,
     pub(super) output_ass: bool,
+    pub(super) subtitle_beautify: bool,
     pub(super) text_script: TextScript,
     pub(super) vocal_sep: bool,
     pub(super) sound: bool,
@@ -188,6 +189,7 @@ impl OneAsrApp {
         let output_srt = self.settings.output_srt;
         let output_txt = self.settings.output_txt;
         let output_ass = self.settings.output_ass;
+        let subtitle_beautify = self.settings.subtitle_beautify;
         let text_script = self.settings.text_script_choice();
         let vocal_sep = self.settings.vocal_separation;
         let sound = self.settings.sound;
@@ -232,6 +234,7 @@ impl OneAsrApp {
             output_srt,
             output_txt,
             output_ass,
+            subtitle_beautify,
             text_script,
             vocal_sep,
             sound,

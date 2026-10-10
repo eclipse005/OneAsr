@@ -321,9 +321,10 @@ pub fn pill(
     id: &'static str,
     label: &'static str,
     active: bool,
+    tip: Option<&'static str>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    div()
+    let mut el = div()
         .id(id)
         .px_3()
         .py_1()
@@ -352,8 +353,12 @@ pub fn pill(
         })
         .cursor_pointer()
         .hover(|s| s.border_color(crate::theme::ACCENT))
-        .child(label)
-        .on_click(on_click)
+        .child(label);
+    if let Some(tip) = tip {
+        let tip: SharedString = tip.into();
+        el = el.tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into());
+    }
+    el.on_click(on_click)
 }
 
 // ─── icon / button helpers ──────────────────────────────────────────

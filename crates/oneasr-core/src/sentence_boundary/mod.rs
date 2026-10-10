@@ -50,11 +50,9 @@ pub use types::{
 // crate-wide rather than public: it is an answer about *these* words, not a
 // promise to anyone outside.
 pub(crate) use util::{join_words, spacing_pieces};
-// Test-only: the karaoke renderer's fixture builds the token list the aligners
-// would hand over, which means asking the same question about the same scripts
-// that the joiner asks. Nothing outside a test needs the answer.
+// 排版和字幕美化都要问「这个字属不属于不空格的书写系统」。美化在汉字和
+// 英文、数字之间插空格，用的是同一份范围，避免两处各写一遍。
 pub use line_break::break_long_lines;
-#[cfg(test)]
 pub(crate) use util::is_no_space_script;
 
 /// Word token with timestamps (same shape as VoxTrans `WordTokenDto`).

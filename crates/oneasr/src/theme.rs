@@ -17,6 +17,8 @@ pub const PANEL: Rgba = rgba_hex(0xffffff);
 pub const LINE: Rgba = rgba_hex(0xe2e8f0);
 /// Softer border for inputs (less harsh on white)
 pub const LINE_SOFT: Rgba = rgba_hex(0xecf0f4);
+/// Hairline inside a gray card. LINE_SOFT disappears on BG; MUTED_SOFT reads as a cut.
+pub const DIVIDER: Rgba = rgba_hex(0xcbd5e1);
 /// Primary text
 pub const TEXT: Rgba = rgba_hex(0x0f172a);
 /// Secondary text

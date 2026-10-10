@@ -457,6 +457,7 @@ fn cmd_render(args: &[String]) -> Result<(), i32> {
             srt: want_srt,
             txt: want_txt,
             ass: want_ass,
+            beautify: false,
         },
     )
     .map_err(|e| {
@@ -643,6 +644,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     settings.output_srt = !no_srt;
     settings.output_txt = want_txt;
     settings.output_ass = want_ass;
+    settings.subtitle_beautify = flag(args, "--beautify");
     if let Some(dir) = arg(args, "--demucs-model-dir") {
         settings.demucs_model_dir = PathBuf::from(dir);
     }
