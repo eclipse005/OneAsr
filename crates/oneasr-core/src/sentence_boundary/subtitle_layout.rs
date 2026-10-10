@@ -7,10 +7,13 @@
 //! artifacts.
 //!
 //! Length policy (quality first, readability second):
-//! 1) Within the word/char target → never split, even with VAD pauses inside.
-//! 2) Slightly over (grace band ≈ +2 units / +11 display chars): split ONLY at
-//!    linguistically good cut points (punctuation, connectors, phrase-closing
-//!    particles, real pauses); keep the whole line when no good cut exists.
+//! 1) Within the word/char target → keep intact unless a *strong* speaking
+//!    pause is present (VAD silence ≥ 0.55s or word gap ≥ 0.50s), both sides
+//!    of the cut meet a min-length floor, and grammar forbids do not apply.
+//!    Connectors / phrase particles alone are never enough inside budget.
+//! 2) Slightly over (grace band): split ONLY at linguistically good cut points
+//!    (punctuation, connectors, phrase-closing particles, real pauses); keep
+//!    the whole line when no good cut exists.
 //! 3) Far over: force cuts so every multi-token segment fits word AND display-
 //!    char hard limits; a single pathological token may stand alone.
 //!
@@ -42,8 +45,15 @@ use super::vad_align::SpeechSegmentIndex;
 const LENGTH_PENALTY_WEIGHT: f64 = 0.3;
 
 /// A VAD silence at least this wide (seconds) counts as a linguistically good
-/// cut point (a real pause, not a breath).
+/// cut point (a real pause, not a breath) in grace / force quality checks.
 const VAD_QUALITY_SILENCE_SEC: f64 = 0.5;
+
+/// Inside-budget speaking-rhythm cuts require a *stronger* pause than grace
+/// quality, so short breath gaps do not shatter under-target cues.
+const VAD_INSIDE_BUDGET_SILENCE_SEC: f64 = 0.55;
+
+/// Word-gap floor for inside-budget cuts (stricter than [`GOOD_SILENCE_SEC`]).
+const INSIDE_BUDGET_GAP_SEC: f64 = 0.50;
 
 /// One unit's acoustic timing, or `None` when the caller has none.
 ///
@@ -139,10 +149,15 @@ fn boundary_base_cost(
     if is_comma(&left.word) && !is_discourse_marker_comma(&left.word) {
         return COMMA_COST;
     }
-    // Genitive の + following head: not a cheap/quality cut. Force mode
-    // may still cut here as a last resort so の stays at line END (kinsoku)
-    // instead of starting the next cue.
+    // Genitive の/的 + following head: not a cheap/quality cut.
+    // Japanese の: WORD_COST so force may still cut as last resort (kinsoku).
+    // Chinese 的: much heavier — dangling `地球的 | 温度` is worse than a
+    // mid-content force cut, and commas earlier in the span should win.
     if is_open_genitive_link(&left.word, &right.word) {
+        let l = strip_token(&left.word);
+        if l.ends_with('的') {
+            return 15.0;
+        }
         return WORD_COST;
     }
     // で/に/を/と immediately before their predicate: not a cheap cut.
@@ -295,6 +310,121 @@ fn is_quality_cut_boundary(
     false
 }
 
+/// Strong acoustic pause only — used when the span is still inside the length
+/// budget (speaking-rhythm path).
+///
+/// Grammar forbids still block a cut (function words, Japanese binds, open
+/// genitive, …). Connectors / phrase particles alone are intentionally **not**
+/// enough: this path is acoustic, not an oral-connector word list.
+///
+/// `left_units` / `right_units` are the language-aware lengths of the would-be
+/// fragments on each side of the cut (within the current semantic span).
+fn is_strong_silence_cut_boundary(
+    words: &[WordTokenDto],
+    i: usize,
+    profile: &dyn LanguageProfile,
+    vad_index: &SpeechSegmentIndex,
+    left_units: f64,
+    right_units: f64,
+) -> bool {
+    let Some(left) = words.get(i) else {
+        return false;
+    };
+    let Some(right) = words.get(i + 1) else {
+        return false;
+    };
+
+    let min_side = if profile.is_char_based() { 6.0 } else { 4.0 };
+    if left_units < min_side || right_units < min_side {
+        return false;
+    }
+
+    if ends_with_opening_punctuation(&left.word) || starts_with_closing_punctuation(&right.word) {
+        return false;
+    }
+    if is_numeric_continuation(&left.word, &right.word) {
+        return false;
+    }
+    if is_japanese_lexical_bind(&left.word, &right.word) {
+        return false;
+    }
+    let next2 = peek_word(words, i + 2);
+    if is_line_start_bound_particle(&right.word) && !is_split_hai(&right.word, next2) {
+        return false;
+    }
+    if is_open_genitive_link(&left.word, &right.word)
+        || is_case_particle_before_predicate(&left.word, &right.word)
+    {
+        return false;
+    }
+    if is_function_word_left(&left.word, profile.function_words_left()) {
+        return false;
+    }
+    // Do not open a cue on a bare continuation determiner/preposition after a
+    // non-punct left ("week | of a ninety-year life").
+    if is_inside_budget_continuation_start(&right.word)
+        && !left.word.chars().any(|c| {
+            matches!(
+                c,
+                ',' | '，'
+                    | '、'
+                    | ';'
+                    | '；'
+                    | ':'
+                    | '：'
+                    | '.'
+                    | '。'
+                    | '!'
+                    | '！'
+                    | '?'
+                    | '？'
+                    | '…'
+            )
+        })
+    {
+        return false;
+    }
+    if is_time_glued_content(&left.word, &right.word, gap_at(words, i)) {
+        return false;
+    }
+    if let Some((l_end, r_start)) = boundary_at(words, i)
+        && vad_index.crosses_silence(l_end, r_start)
+        && vad_index.silence_duration_sec(l_end, r_start) >= VAD_INSIDE_BUDGET_SILENCE_SEC
+    {
+        return true;
+    }
+    if let Some(gap) = gap_at(words, i)
+        && gap >= INSIDE_BUDGET_GAP_SEC
+    {
+        return true;
+    }
+    false
+}
+
+fn is_inside_budget_continuation_start(token: &str) -> bool {
+    let t = strip_token(token).to_lowercase();
+    matches!(
+        t.as_str(),
+        "of" | "which"
+            | "that"
+            | "who"
+            | "whom"
+            | "whose"
+            | "a"
+            | "an"
+            | "the"
+            | "and"
+            | "or"
+            | "but"
+            | "to"
+            | "for"
+            | "with"
+            | "from"
+            | "into"
+            | "onto"
+    )
+}
+
 /// Split overlong semantic spans into subtitle-length segments via DP.
 /// Returns absolute word indices with the dominant `SplitReason` for each cut.
 pub(super) fn build_subtitle_layout_split_points(
@@ -351,6 +481,7 @@ pub(super) fn build_subtitle_layout_split_points_text_only(
     // with `false` (it needs ≥2 segments), which is the honest "no acoustic
     // information" answer rather than "no silence here".
     let no_vad = SpeechSegmentIndex::new(Vec::new());
+    // Text-only has no acoustic timing; inside-budget VAD cuts are a no-op.
     build_subtitle_layout_split_points(&words, semantic_spans, profile, preset, &no_vad)
 }
 
@@ -473,16 +604,18 @@ fn dp_split_span(
     let total_units = prefix[n];
     let total_chars = char_of(0, n - 1);
 
-    // ① Within target → keep whole (core guarantee: short sentences are
-    // never fragmented, even with VAD pauses inside).
-    if total_units <= hard.target && (!hard.char_limited() || total_chars <= hard.char) {
-        return Some(Vec::new());
-    }
+    // ① Within target → speaking-rhythm mode (strong silence only), else keep
+    // whole when no strong pause exists.
+    let within_target =
+        total_units <= hard.target && (!hard.char_limited() || total_chars <= hard.char);
 
     // ② Grace band: only good cuts, fall back to keeping the whole line.
+    // Within-target → VadInsideBudget (strong silence only).
     let in_grace = total_units <= hard.target + budget.grace
         && (!hard.char_limited() || total_chars <= hard.char + LENGTH_GRACE_CHARS);
-    let mode = if in_grace {
+    let mode = if within_target {
+        DpMode::VadInsideBudget
+    } else if in_grace {
         DpMode::Quality
     } else {
         DpMode::Force
@@ -497,9 +630,22 @@ fn dp_split_span(
         &advisor,
         &byte_offset,
     );
-    // quality_ok[k] == cutting after word start+k-1 is linguistically good.
+    // quality_ok[k] == cutting after word start+k-1 is allowed in this mode.
     let quality_ok: Vec<bool> = (1..n)
-        .map(|k| is_quality_cut_boundary(words, start + k - 1, profile, vad_index))
+        .map(|k| {
+            let i = start + k - 1;
+            match mode {
+                DpMode::VadInsideBudget => is_strong_silence_cut_boundary(
+                    words,
+                    i,
+                    profile,
+                    vad_index,
+                    prefix[k],
+                    prefix[n] - prefix[k],
+                ),
+                _ => is_quality_cut_boundary(words, i, profile, vad_index),
+            }
+        })
         .collect();
 
     let mut dp = vec![f64::INFINITY; n + 1];
@@ -523,12 +669,13 @@ fn dp_split_span(
             if base_cost[j].is_infinite() || dp[j].is_infinite() {
                 continue;
             }
-            if mode == DpMode::Quality && j > 0 && j < n && !quality_ok[j - 1] {
+            if mode.quality_gated() && j > 0 && j < n && !quality_ok[j - 1] {
                 continue;
             }
-            // Grace is "only split at good cuts", not "pack until 28".
-            // If a good interior cut exists, do not keep the whole span.
-            if mode == DpMode::Quality && j == 0 && i == n && quality_ok.iter().any(|ok| *ok) {
+            // Grace / VAD-inside-budget: "only split at allowed cuts", not
+            // "pack until budget". If an allowed interior cut exists, do not
+            // keep the whole span.
+            if mode.quality_gated() && j == 0 && i == n && quality_ok.iter().any(|ok| *ok) {
                 continue;
             }
             let length_penalty =
@@ -556,8 +703,8 @@ fn dp_split_span(
     }
 
     if dp[n].is_infinite() {
-        if mode == DpMode::Quality {
-            return Some(Vec::new()); // no good cut → keep the whole line
+        if mode.quality_gated() {
+            return Some(Vec::new()); // no allowed cut → keep the whole line
         }
         // Force mode without a DP solution: fall back to greedy first-fit.
         return Some(greedy_cuts_by_hard_limit(
@@ -577,10 +724,21 @@ fn dp_split_span(
     cuts_rel.reverse();
 
     absorb_short_fragments(&mut cuts_rel, &prefix, &*char_of, n, &hard, &|cut_k| {
+        // Inside-budget VAD cuts must survive absorb when both sides still meet
+        // the min-length floor (speaking-rhythm breath groups).
         should_keep_short_cut(words, start, cut_k, profile)
+            || (mode == DpMode::VadInsideBudget
+                && is_strong_silence_cut_boundary(
+                    words,
+                    start + cut_k - 1,
+                    profile,
+                    vad_index,
+                    prefix[cut_k],
+                    prefix[n] - prefix[cut_k],
+                ))
     });
 
-    if mode == DpMode::Quality && !all_cuts_quality(&cuts_rel, &quality_ok) {
+    if mode.quality_gated() && !all_cuts_quality(&cuts_rel, &quality_ok) {
         return Some(Vec::new());
     }
 
@@ -597,8 +755,19 @@ fn dp_split_span(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DpMode {
-    Quality, // grace band: only good cuts, else keep whole
+    /// Under target: only strong VAD / gap silences (speaking rhythm).
+    VadInsideBudget,
+    /// Grace band: only linguistically good cuts, else keep whole.
+    Quality,
     Force,
+}
+
+impl DpMode {
+    /// Quality and VadInsideBudget both refuse non-whitelisted cuts and keep
+    /// the whole span when none exist.
+    fn quality_gated(self) -> bool {
+        matches!(self, Self::Quality | Self::VadInsideBudget)
+    }
 }
 
 fn compute_base_costs(

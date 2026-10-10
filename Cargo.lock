@@ -1484,7 +1484,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -1601,7 +1601,7 @@ dependencies = [
 [[package]]
 name = "ctc-forced-aligner-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=0de349c4655f7e6931193e1bd912a85248b324ee#0de349c4655f7e6931193e1bd912a85248b324ee"
+source = "git+https://github.com/eclipse005/ctc-forced-aligner-wgpu.git?rev=1915e577c63f74cfe1c2194e05fa01b332a13ce6#1915e577c63f74cfe1c2194e05fa01b332a13ce6"
 dependencies = [
  "anyhow",
  "ash",
@@ -2068,7 +2068,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2853,7 +2853,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.62.2",
+ "windows 0.57.0",
 ]
 
 [[package]]
@@ -5631,7 +5631,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5646,7 +5646,7 @@ dependencies = [
 [[package]]
 name = "qwen3-aligner-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/eclipse005/qwen3-aligner-wgpu.git?rev=d50f2554a3b222fccb049c93700f5c787e6d9525#d50f2554a3b222fccb049c93700f5c787e6d9525"
+source = "git+https://github.com/eclipse005/qwen3-aligner-wgpu.git?rev=f990f8e136687600a65d4f3477dcc6f7ee02d4f6#f990f8e136687600a65d4f3477dcc6f7ee02d4f6"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -6320,7 +6320,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7266,7 +7266,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8436,7 +8436,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -9065,7 +9065,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

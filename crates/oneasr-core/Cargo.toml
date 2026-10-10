@@ -24,11 +24,11 @@ punkt = { git = "https://github.com/eclipse005/rust-punkt.git", rev = "ca9187276
 # 取默认分支当时的最新提交 —— 同样一份源码能构建出两套不同的引擎代码，
 # 出了问题也无法复现。rev 钉死在一次提交上，不跟默认分支漂。
 qwen3-asr-wgpu = { git = "https://github.com/eclipse005/qwen3-asr-wgpu.git", rev = "28d4ec7510a057d50273af340de228a145d34e23" }
-qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.git", rev = "d50f2554a3b222fccb049c93700f5c787e6d9525" }
+qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.git", rev = "f990f8e136687600a65d4f3477dcc6f7ee02d4f6" }
 # CTC 强制对齐（omniASR-CTC-300M-v2），与 Qwen 对齐器并存可选 —— 见
 # docs/ctc-aligner-adoption-analysis.md。`AlignOutput::words` 已是成品对齐单元
 # （CJK 逐字、空格语言逐词），上层不再自己做分组。
-ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "0de349c4655f7e6931193e1bd912a85248b324ee" }
+ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "1915e577c63f74cfe1c2194e05fa01b332a13ce6" }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
 # HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
 demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "ca8359aca0b890fcf71dd1a475f8c2675261a51b" }
