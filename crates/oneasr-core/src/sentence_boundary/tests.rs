@@ -262,8 +262,7 @@ fn hard_pause_does_not_split_short_sentence_without_punctuation() {
 /// cut, so an overlong unpunctuated Japanese span splits after the particle.
 #[test]
 fn japanese_particle_guides_force_cuts() {
-    // Short cap 16, JA bunsetsu grace +6 → force only when over 22.
-    // This span is well over 22, so DP still prefers particle cuts.
+    // Short cap 16 (= Force ceiling). Span is well over, so DP prefers particle cuts.
     let tokens = [
         "それ",
         "は",
@@ -328,8 +327,7 @@ fn japanese_particle_guides_force_cuts() {
     );
     let n = response.translation_sentences.len();
     for (idx, s) in response.translation_sentences.iter().enumerate() {
-        // Watchability may re-glue a 3-char particle orphan, using the same
-        // grace band DP already allowed (short 16 + 2).
+        // Watchability may re-glue a particle orphan within quality grace.
         assert!(s.text.chars().count() <= 22, "cue over cap: {:?}", s.text);
         if idx + 1 < n {
             let last = s.text.chars().last().unwrap_or_default();

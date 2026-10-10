@@ -587,15 +587,26 @@ pub(super) fn is_te_auxiliary_bind(left: &str, right: &str) -> bool {
     )
 }
 
-/// Kanji/kana stem + following hiragana (盛りだくさん) is one lexical word.
-/// Particles, copula, and する are handled by more specific binds.
+/// Kanji/kana stem + following hiragana (盛りだくさん / 立|ち) is one lexical
+/// word. Particles, copula tails, and する are handled by more specific binds.
+///
+/// Char-level ASR emits 1-mora tokens, so okurigana after kanji must bind at
+/// length 1. A secondary hiragana|hiragana bind keeps conjugation chains
+/// (だ|ったら, て|いく) together when left is not a case/topic particle.
 pub(super) fn is_hiragana_continuation_bind(left: &str, right: &str) -> bool {
     let l = strip_token(left);
     let r = strip_token(right);
-    if l.is_empty() || r.chars().count() < 2 {
+    if l.is_empty() || r.is_empty() {
         return false;
     }
-    if is_line_start_bound_particle(right) || is_ja_bare_particle(r) {
+    // Never glue across clause/sentence punctuation still attached to left
+    // (な。|すごい must remain a legal hard-split boundary).
+    if left.chars().any(|c| {
+        matches!(
+            c,
+            '。' | '.' | '！' | '!' | '？' | '?' | '…' | '，' | '、' | ',' | '；' | ';' | '：' | ':'
+        )
+    }) {
         return false;
     }
     // Discourse/turn words are new moves, not okurigana.
@@ -619,9 +630,48 @@ pub(super) fn is_hiragana_continuation_bind(left: &str, right: &str) -> bool {
     if !r.chars().all(|c| is_hiragana(c) || c == 'ー' || c == 'ｰ') {
         return false;
     }
-    // Okurigana follows a kanji stem. Pure-hiragana copula ます|あの is a
-    // new move, not 盛りだくさん.
-    l.chars().any(is_kanji)
+    // Okurigana after kanji — including 1-mora (立|ち, 向|か).
+    // Case/topic after a noun stays cuttable (私|は); か after kanji is
+    // okurigana, not the question particle (です|か is handled elsewhere).
+    if l.chars().any(is_kanji) {
+        return !is_ja_case_topic_particle(r);
+    }
+    // Pure-hiragana left: do not glue onto a particle / line-start form.
+    if is_line_start_bound_particle(right) || is_ja_bare_particle(r) {
+        return false;
+    }
+    // Better bind for char-level ASR: keep non-case hiragana glued to a
+    // following hiragana run (だ|ったら, て|い, た|ら). Case/topic particles
+    // stay cuttable (を|し, が|ある); です/ます stay breakable before a new move.
+    if l.chars().all(|c| is_hiragana(c) || c == 'ー' || c == 'ｰ')
+        && !is_ja_case_topic_particle(l)
+        && !matches!(l, "です" | "ます")
+    {
+        return true;
+    }
+    false
+}
+
+/// Case/topic particles that must remain legal cut points after them.
+fn is_ja_case_topic_particle(token: &str) -> bool {
+    matches!(
+        token,
+        "は" | "が"
+            | "を"
+            | "に"
+            | "の"
+            | "と"
+            | "で"
+            | "も"
+            | "へ"
+            | "や"
+            | "から"
+            | "まで"
+            | "より"
+            | "ので"
+            | "のに"
+            | "って"
+    )
 }
 
 /// Spoken turn / new-move starters. Cutting BEFORE these is a hard
@@ -1272,6 +1322,13 @@ mod tests {
     #[test]
     fn japanese_lexical_binds_are_generic() {
         assert!(is_hiragana_continuation_bind("盛り", "だくさん"));
+        assert!(is_hiragana_continuation_bind("立", "ち"));
+        assert!(is_hiragana_continuation_bind("向", "か"));
+        assert!(is_hiragana_continuation_bind("だ", "ったら"));
+        assert!(is_hiragana_continuation_bind("て", "いく"));
+        assert!(is_hiragana_continuation_bind("て", "い"));
+        assert!(!is_hiragana_continuation_bind("を", "し"));
+        assert!(!is_hiragana_continuation_bind("が", "ある"));
         assert!(is_suru_compound_bind("対", "する"));
         assert!(is_suru_compound_bind("人対", "する"));
         assert!(is_ja_name_suffix_bind("皆", "さん"));
