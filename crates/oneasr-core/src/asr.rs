@@ -1124,6 +1124,7 @@ impl<'a> Pipeline<'a> {
                 srt: self.settings.output_srt,
                 txt: self.settings.output_txt,
                 ass: self.settings.output_ass,
+                beautify: self.settings.subtitle_beautify,
             },
         )
         .map_err(AsrError::Other)?;

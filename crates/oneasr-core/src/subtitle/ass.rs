@@ -86,6 +86,15 @@ impl Default for KaraokeStyle {
 
 /// The karaoke rendering of finished sentences, one `\k` per aligned unit.
 pub fn to_ass(sentences: &SourceSentences, style: &KaraokeStyle) -> String {
+    to_ass_with(sentences, style, false)
+}
+
+/// [`to_ass`]，`polish` 为真时正文走字幕美化，扫光仍按原来的对齐单元。
+pub(crate) fn to_ass_with(
+    sentences: &SourceSentences,
+    style: &KaraokeStyle,
+    polish: bool,
+) -> String {
     // The same times the SRT will carry, monotonicity included. Sentences come
     // out of the assembler in time order, which is what `enforce_monotonic`
     // assumes.
@@ -111,10 +120,12 @@ pub fn to_ass(sentences: &SourceSentences, style: &KaraokeStyle) -> String {
         else {
             continue;
         };
-        let body = cue_body(
-            cue,
-            &sentences.words[sentence.word_start..=sentence.word_end],
-        );
+        let tokens = &sentences.words[sentence.word_start..=sentence.word_end];
+        let body = if polish {
+            cue_body_polished(cue, tokens)
+        } else {
+            cue_body(cue, tokens)
+        };
         if body.is_empty() {
             continue;
         }
@@ -173,6 +184,89 @@ fn cue_body(cue: &Cue, tokens: &[WordTokenDto]) -> String {
         body.push_str(&format!("{{\\k{tail}}}"));
     }
     body
+}
+
+/// 美化后的卡拉 OK。扫光仍按对齐单元，不按美化插进去的空格再切一刀。
+/// 空格一律写成 `\h`：普通空格是换行点，会把已经定好的一条字幕拆开。
+fn cue_body_polished(cue: &Cue, tokens: &[WordTokenDto]) -> String {
+    let units: Vec<&WordTokenDto> = tokens
+        .iter()
+        .filter(|t| !t.word.trim().is_empty())
+        .collect();
+    let pieces = spacing_pieces(units.iter().map(|t| t.word.as_str()));
+    let mut original = String::new();
+    let mut owners: Vec<Option<usize>> = Vec::new();
+    for (pi, piece) in pieces.iter().enumerate() {
+        if piece.space_before {
+            original.push(' ');
+            owners.push(None);
+        }
+        for _ in piece.text.chars() {
+            owners.push(Some(pi));
+        }
+        original.push_str(&piece.text);
+    }
+
+    let mapped = crate::subtitle::polish::polish_mapped(&original);
+    let mut body = String::new();
+    let mut at = cue.start_ms as i64;
+    let line_end = cue.end_ms as i64;
+    let line_start = at;
+    let onset = |pi: usize| -> i64 {
+        units
+            .get(pi)
+            .map(|u| (u.start * 1000.0).round() as i64)
+            .unwrap_or(line_start)
+    };
+    // 插进去的空格 src 指向它右边的字，所以和那个字同一个对齐单元。
+    let owner = |src: usize| owners.get(src).copied().flatten();
+
+    let mut i = 0;
+    while i < mapped.len() {
+        let piece = owner(mapped[i].src);
+        if piece.is_none() {
+            push_ass_char(&mut body, mapped[i].ch);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < mapped.len() && owner(mapped[i].src) == piece {
+            i += 1;
+        }
+        let mut j = i;
+        while j < mapped.len() && owner(mapped[j].src).is_none() {
+            j += 1;
+        }
+        let next_at = if j < mapped.len() {
+            owner(mapped[j].src).map(onset).unwrap_or(line_end)
+        } else {
+            line_end
+        }
+        .max(at);
+        let cs = (next_at - at) / 10;
+        if cs > 0 {
+            body.push_str(&format!("{{\\k{cs}}}"));
+        }
+        at = at.max(next_at);
+        for m in &mapped[start..i] {
+            push_ass_char(&mut body, m.ch);
+        }
+    }
+    let tail = (line_end - at) / 10;
+    if tail > 0 {
+        body.push_str(&format!("{{\\k{tail}}}"));
+    }
+    body
+}
+
+/// 空格写成硬空格，换行写成 `\N`。两者都不是播放器可以再折行的普通空格。
+fn push_ass_char(body: &mut String, ch: char) {
+    match ch {
+        ' ' => body.push_str("\\h"),
+        '\n' => body.push_str("\\N"),
+        _ => body.push(ch),
+    }
 }
 
 fn header(out: &mut String, st: &KaraokeStyle) {
@@ -362,6 +456,69 @@ mod tests {
                 "ASS 与 SRT 的文字不一致：{text}"
             );
         }
+    }
+
+    /// 美化打开后，卡拉 OK 去掉标记仍要和美化过的 SRT 逐字相同。
+    #[test]
+    fn polished_karaoke_text_matches_polished_srt() {
+        let mut sentences = sentences_of("使用Whisper模型，共123人。");
+        let ass = to_ass_with(&sentences, &KaraokeStyle::default(), true);
+        for sentence in &mut sentences.translation_sentences {
+            sentence.text = crate::subtitle::polish::polish_cue_text(&sentence.text);
+        }
+        sentences
+            .translation_sentences
+            .retain(|sentence| !sentence.text.trim().is_empty());
+        let srt = crate::sentence_boundary::source_sentences_to_srt(&sentences);
+        assert_eq!(plain_lines(&ass), srt_texts(&srt));
+    }
+
+    /// 数字和汉字被粘成一个对齐单元时，美化插进去的空格不能把扫光切碎，
+    /// 也不能变成播放器可以折行的普通空格。
+    #[test]
+    fn polished_space_inside_a_glued_token_stays_one_sweep() {
+        for text in ["1500人", "8月29日"] {
+            let sentences = sentences_of(text);
+            let ass = to_ass_with(&sentences, &KaraokeStyle::default(), true);
+            let body = ass
+                .lines()
+                .find(|l| l.starts_with("Dialogue:"))
+                .unwrap_or_else(|| panic!("no dialogue for {text}"));
+            let payload = body.splitn(10, ',').nth(9).unwrap_or("");
+            assert_eq!(sweeps(&ass).len(), 1, "{text} 应只有一次扫光：{body}");
+            assert!(
+                payload.contains("\\h"),
+                "{text} 的空格应是硬空格：{payload}"
+            );
+            assert!(
+                !ass_body_has_breakable_space(payload),
+                "{text} 不能有普通空格：{payload}"
+            );
+            let sum: i64 = sweeps(&ass).into_iter().sum();
+            let sentence = &sentences.translation_sentences[0];
+            let span_cs = (sentence.end_ms as i64 - sentence.start_ms as i64).div_euclid(10);
+            assert!(
+                (sum - span_cs).abs() <= 1,
+                "{text}: 扫光合计 {sum}cs 与行时长 {span_cs}cs 对不上"
+            );
+        }
+    }
+
+    fn ass_body_has_breakable_space(body: &str) -> bool {
+        let mut chars = body.chars().peekable();
+        let mut in_tag = false;
+        while let Some(ch) = chars.next() {
+            match ch {
+                '{' => in_tag = true,
+                '}' => in_tag = false,
+                '\\' if !in_tag => {
+                    chars.next();
+                }
+                ' ' if !in_tag => return true,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// A sweep per character in Chinese, per word in Latin — the granularity the

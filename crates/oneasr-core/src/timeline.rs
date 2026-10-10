@@ -257,6 +257,9 @@ pub struct RenderOptions {
     pub txt: bool,
     /// Karaoke ASS: the same cues, a sweep per aligned unit.
     pub ass: bool,
+    /// 成稿字幕美化。不看语言选项：每一句按自己的字符决定改不改标点、补不补空格。
+    /// 不重新断行，也不改时间。
+    pub beautify: bool,
 }
 
 /// The presented subtitle, and the sentences it came from.
@@ -307,13 +310,25 @@ pub fn render(timeline: &Timeline, opts: &RenderOptions) -> Result<Rendered, Str
             s
         }
     };
+    let mut sentences = sentences;
+    if opts.beautify {
+        // 断句已经定稿。这里只改每条字幕的文字：标点、全角半角、汉字和
+        // 英文/数字之间的空格。不增删字幕条的时间，空条（只剩标点）丢掉。
+        for sentence in &mut sentences.translation_sentences {
+            sentence.text = crate::subtitle::polish::polish_cue_text(&sentence.text);
+        }
+        sentences
+            .translation_sentences
+            .retain(|sentence| !sentence.text.trim().is_empty());
+        sentences.sentence_total = sentences.translation_sentences.len();
+    }
 
     Ok(Rendered {
         srt: opts.srt.then(|| source_sentences_to_srt(&sentences)),
         txt: opts.txt.then(|| source_sentences_to_txt(&sentences)),
-        ass: opts
-            .ass
-            .then(|| crate::subtitle::ass::to_ass(&sentences, &KaraokeStyle::default())),
+        ass: opts.ass.then(|| {
+            crate::subtitle::ass::to_ass_with(&sentences, &KaraokeStyle::default(), opts.beautify)
+        }),
         sentences,
     })
 }
@@ -351,6 +366,7 @@ mod tests {
             srt: true,
             txt: true,
             ass: false,
+            beautify: false,
         }
     }
 
@@ -546,5 +562,74 @@ mod tests {
                 .sum()
         };
         assert_eq!(letters(&loose), letters(&tight), "切分不增删任何字");
+    }
+
+    /// 美化只改文字。字幕条数和时间不动，也不新插一行。
+    #[test]
+    fn beautify_rewrites_cue_text_without_moving_times_or_adding_breaks() {
+        let tl = timeline_of(vec![
+            word("你", 0.0, 0.2),
+            word("好", 0.2, 0.4),
+            word("，", 0.4, 0.4),
+            word("世", 0.4, 0.6),
+            word("界", 0.6, 0.8),
+            word("。", 0.8, 0.8),
+        ]);
+        let off = render(&tl, &all_options()).unwrap();
+        let on = render(
+            &tl,
+            &RenderOptions {
+                beautify: true,
+                ..all_options()
+            },
+        )
+        .unwrap();
+        let times = |r: &Rendered| -> Vec<(u64, u64)> {
+            r.sentences
+                .translation_sentences
+                .iter()
+                .map(|s| (s.start_ms, s.end_ms))
+                .collect()
+        };
+        assert_eq!(times(&off), times(&on));
+        let shown = on
+            .sentences
+            .translation_sentences
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!shown.contains('，') && !shown.contains('。'), "{shown}");
+        assert!(!shown.contains("\n\n"));
+        assert_eq!(on.sentences.translation_sentences.len(), 1);
+        assert_eq!(on.sentences.translation_sentences[0].text, "你好 世界");
+    }
+
+    #[test]
+    fn beautify_leaves_an_english_cue_unchanged() {
+        let tl = Timeline::from_words(
+            "clip.mp4",
+            "en",
+            "standard",
+            vec![(0.0, 60.0)],
+            vec![word("Hello,", 0.0, 0.4), word("world.", 0.5, 1.0)],
+        );
+        let on = render(
+            &tl,
+            &RenderOptions {
+                beautify: true,
+                ..all_options()
+            },
+        )
+        .unwrap();
+        let text = on
+            .sentences
+            .translation_sentences
+            .iter()
+            .map(|s| s.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Hello,"), "{text}");
+        assert!(text.contains("world."), "{text}");
     }
 }

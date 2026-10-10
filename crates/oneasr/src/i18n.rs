@@ -144,17 +144,29 @@ pub mod L {
 
     // ---- 设置：默认语言 / 字幕长度 ----
     pub const DEFAULT_LANGUAGE: Str = Str::new("默认语言", "Default language");
+    pub const TIP_DEFAULT_LANGUAGE: Str = Str::new(
+        "新建任务的默认识别语言。各任务可单独更改",
+        "Default recognition language for new tasks. Each task can be set separately",
+    );
     /// 语言 id 非法（settings.json 被手改坏）时下拉框显示的兜底标签——
     /// 未知语言没有对应的 [`oneasr_core::lang::SourceLanguage`]，不能退回某项的
     /// 固定 endonym（那会把中文标签塞进英文界面）。
     pub const LANGUAGE_FALLBACK: Str = Str::new("中文普通话", "Mandarin Chinese");
     pub const SUBTITLE_LENGTH: Str = Str::new("字幕长度", "Subtitle length");
+    pub const TIP_SUBTITLE_LENGTH: Str = Str::new(
+        "单条字幕的长度上限。中文为短 16 字、标准 22 字、宽松 28 字",
+        "Maximum length of one subtitle. Chinese: 16, 22, or 28 characters",
+    );
     pub const LEN_SHORT: Str = Str::new("短", "Short");
     pub const LEN_STANDARD: Str = Str::new("标准", "Standard");
     pub const LEN_LOOSE: Str = Str::new("宽松", "Loose");
 
     // ---- 设置：分段时长 ----
     pub const CHUNK_DURATION: Str = Str::new("分段时长", "Segment length");
+    pub const TIP_CHUNK_DURATION: Str = Str::new(
+        "转写时单段音频的目标时长，与字幕长度无关",
+        "Target duration of each audio segment during transcription, not the subtitle length",
+    );
     pub const CHUNK_4GB_HINT: Str = Str::new(
         "建议 4GB 显存使用 60 秒分段时长",
         "60-second segments recommended for 4 GB of VRAM",
@@ -162,16 +174,37 @@ pub mod L {
 
     // ---- 设置：输出 ----
     pub const OUTPUT_FORMAT: Str = Str::new("输出格式", "Output format");
+    pub const TIP_OUTPUT_FORMAT: Str = Str::new(
+        "SRT 为字幕，TXT 为纯文本，ASS 为带逐字扫光的字幕",
+        "SRT is subtitles, TXT is plain text, ASS is karaoke",
+    );
     pub const KEEP_ONE_FORMAT: Str =
         Str::new("至少保留一种输出格式", "Keep at least one output format");
     pub const CHINESE_OUTPUT: Str = Str::new("中文输出", "Chinese script");
+    pub const TIP_CHINESE_OUTPUT: Str = Str::new(
+        "仅将中文与粤语转为简体或繁体，其余语言保持原文",
+        "Converts Chinese and Cantonese to simplified or traditional. Other languages stay unchanged",
+    );
     pub const ZH_YUE_ONLY: Str = Str::new("仅中文/粤语", "Chinese & Cantonese only");
+    pub const SUBTITLE_BEAUTIFY: Str = Str::new("字幕美化", "Subtitle polish");
+    pub const TIP_SUBTITLE_BEAUTIFY: Str = Str::new(
+        "将句号、逗号替换为空格，并在汉字与英文、数字之间加入空格",
+        "Replaces periods and commas with spaces, and spaces Han from English and digits",
+    );
     pub const OUTPUT_LOCATION: Str = Str::new("字幕输出位置", "Subtitle output location");
+    pub const TIP_OUTPUT_LOCATION: Str = Str::new(
+        "保存至视频所在目录，或保存至指定目录",
+        "Save beside the video, or to a chosen folder",
+    );
     pub const NEXT_TO_VIDEO: Str = Str::new("视频同目录", "Next to video");
     pub const CUSTOM_DIR: Str = Str::new("指定目录", "Custom folder");
 
     // ---- 设置：模型与后端 ----
     pub const ASR_MODEL: Str = Str::new("语音识别模型", "ASR model");
+    pub const TIP_ASR_MODEL: Str = Str::new(
+        "选择用于将语音转为文字的模型尺寸",
+        "Selects the model size used for transcription",
+    );
     pub const ASR_DL_BUSY_RESIZE: Str = Str::new(
         "ASR 下载进行中，请稍后再切换尺寸",
         "ASR download in progress — try switching size later",
@@ -262,16 +295,40 @@ pub mod L {
     pub const TRANSCRIPT_PASTED: Str = Str::new("粘贴的文稿", "pasted transcript");
     /// 英文侧跟术语表（`量化 quantization(int8)`）对齐，不再只写 `int8`。
     pub const QUANT: Str = Str::new("量化", "Quantization");
+    pub const TIP_QUANT: Str = Str::new(
+        "使用同尺寸的 int8 模型，占用更小",
+        "Uses the int8 model of the same size. Smaller on disk",
+    );
     pub const ALIGNER_MODEL: Str = Str::new("对齐模型", "Aligner model");
+    pub const TIP_ALIGNER_MODEL: Str = Str::new(
+        "为文字标注起止时间。默认 CTC，亦可选用 Qwen",
+        "Assigns start and end times to the text. CTC is the default; Qwen is the alternative",
+    );
     pub const VOCAL_SEPARATION: Str = Str::new("人声分离", "Vocal separation");
+    pub const TIP_VOCAL_SEPARATION: Str = Str::new(
+        "转写前去除背景音乐，仅保留人声",
+        "Removes background music before transcription and keeps the vocals",
+    );
     pub const SEP_DEFAULT_ON: Str = Str::new("默认启用", "On by default");
+    pub const TIP_SEP_DEFAULT_ON: Str = Str::new(
+        "新建任务默认启用人声分离。单个任务仍可关闭",
+        "Vocal separation is enabled for new tasks. Each task can turn it off",
+    );
     pub const SEP_NEEDS_MODEL: Str = Str::new(
         "请先下载人声分离模型",
         "Download the vocal-separation model first",
     );
     pub const BACKEND: Str = Str::new("推理后端", "Inference backend");
+    pub const TIP_BACKEND: Str = Str::new(
+        "自动优先使用显卡，不可用时改用 CPU。指定 GPU 或 CPU 后固定该设备",
+        "Auto uses the GPU when available, otherwise the CPU. GPU or CPU stays on the selected device",
+    );
     pub const BACKEND_AUTO: Str = Str::new("自动", "Auto");
     pub const SOUND: Str = Str::new("提示音", "Sounds");
+    pub const TIP_SOUND: Str = Str::new(
+        "操作时播放点击音，任务结束时播放提示音",
+        "Plays a click for actions, and a chime when a run finishes",
+    );
 
     // ---- 统计面板 ----
     pub const STATS_EMPTY: Str = Str::new(

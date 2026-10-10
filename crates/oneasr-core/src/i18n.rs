@@ -613,6 +613,8 @@ align options:
   --txt                    Also write {stem}.txt (your transcript)
   --ass                    Also write {stem}.ass (karaoke)
   --no-srt                 Suppress the .srt file (requires --txt or --ass)
+  --beautify               Polish finished cues (punctuation; spaces beside Han
+                           and English or digits, not beside punctuation)
 
 render options:
   --timeline <path>        Measured timeline written by transcribe (required)
@@ -695,6 +697,7 @@ align 选项：
   --txt                    额外写出 {stem}.txt（你的文稿）
   --ass                    额外写出 {stem}.ass（卡拉OK）
   --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
+  --beautify               成稿字幕美化（标点；汉字与英文、数字之间加空格，标点旁边不加）
 
 render 选项：
   --timeline <路径>        transcribe 写出的已测时间轴（必填）

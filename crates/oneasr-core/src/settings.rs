@@ -122,6 +122,10 @@ pub struct Settings {
     /// Write a karaoke `.ass`: the same cues, a colour sweep per aligned unit.
     #[serde(default)]
     pub output_ass: bool,
+    /// 成稿字幕美化。默认关。不看语言选项，按每一句字幕自己的字符处理标点、
+    /// 全角半角，以及汉字和英文、数字之间的空格。不重新断行。
+    #[serde(default)]
+    pub subtitle_beautify: bool,
     /// Chinese output script: `simplified` (default) | `traditional`.
     /// Applies to `zh` / `yue` sources; other languages ignore it.
     #[serde(default = "default_text_script")]
@@ -241,6 +245,7 @@ impl Default for Settings {
             output_srt: default_output_srt(),
             output_txt: false,
             output_ass: false,
+            subtitle_beautify: false,
             text_script: default_text_script(),
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
@@ -845,6 +850,12 @@ mod tests {
             s.resolved_ui_language(),
             i18n::UiLang::Zh | i18n::UiLang::En
         ));
+    }
+
+    #[test]
+    fn subtitle_beautify_missing_key_defaults_off() {
+        let s: Settings = serde_json::from_str("{}").expect("empty settings object");
+        assert!(!s.subtitle_beautify);
     }
 
     #[test]
