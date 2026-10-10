@@ -31,7 +31,7 @@ qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.g
 ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "1915e577c63f74cfe1c2194e05fa01b332a13ce6" }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
 # HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
-demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "ca8359aca0b890fcf71dd1a475f8c2675261a51b" }
+demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "bc2ec615f0f8beb66c6a2c31e7b1b34d455f312b" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
 
 [[bin]]
