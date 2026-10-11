@@ -93,8 +93,8 @@ fn main() {
                             app.ui_font = font_plan;
                             app.focus_handle.focus(window);
                             // 关窗流程统一接管：should_close 永远返回 false，
-                            // 窗口不被 gpui 默认销毁；退出只发生在
-                            // `request_close` 决定退出后的 `cx.quit()`。
+                            // 窗口不被 gpui 默认销毁；退出由 `request_close`
+                            // → `exit_app` 异步调度 `cx.quit()`（见 close.rs）。
                             let weak = cx.weak_entity();
                             window.on_window_should_close(cx, move |window, cx| {
                                 let _ = weak.update(cx, |this, cx| {
