@@ -8,7 +8,7 @@
 //!   「点退出没反应」的来源。
 //!
 //! gpui 的 `should_close` 回调永远返回 `false`（窗口不被默认销毁），真正的
-//! 退出只发生在 [`OneAsrApp::exit_app`] 的 `cx.quit()`。
+//! 退出只发生在 [`OneAsrApp::exit_app`] 调度的 `cx.quit()`。
 
 use crate::app::prelude::*;
 
@@ -54,9 +54,22 @@ impl OneAsrApp {
         cx.notify();
     }
 
-    /// 全进程退出。唯一调用 gpui 退出的地方——关窗入口都不直接 quit。
+    /// 全进程退出。唯一调度 gpui 退出的地方——关窗入口都不直接 quit。
+    ///
+    /// **必须异步**：Windows / macOS 的 `Platform::quit` 本身就异步
+    /// （`PostQuitMessage` / `dispatch_async`），macOS 注释里写明是为了避免
+    /// 在持有 app 状态时同步 quit 导致重入借用。Linux/X11 却是同步
+    /// `signal.stop()`，而且 `ClientMessage(WM_DELETE)` 在持有
+    /// `X11Client` 的 `RefCell` 时才调 `should_close`——回调里同步
+    /// `cx.quit()` → `with_common` → 再 `borrow_mut` 就会
+    /// `RefCell already borrowed`（Wayland 在调 `should_close` 前已经
+    /// `drop(state)`，所以只有 X11 这条路径炸）。用 foreground `spawn`
+    /// 把 quit 推到当前事件栈卸掉之后，与 Win/mac 对齐。
     fn exit_app(&mut self, cx: &mut Context<Self>) {
-        cx.quit();
+        cx.spawn(async move |_this, cx| {
+            cx.update(|cx| cx.quit()).ok();
+        })
+        .detach();
     }
 
     /// 托盘 tooltip 跟随任务阶段。内容没变时 [`crate::tray::set_tooltip`]
