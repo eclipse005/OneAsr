@@ -4,6 +4,8 @@
 //! `app` so they can read its private state without widening visibility.
 
 use crate::DismissMenus;
+use crate::RequestClose;
+use crate::app::close::CloseSource;
 use crate::app::prelude::*;
 
 pub(crate) mod chrome;
@@ -54,6 +56,11 @@ impl Render for OneAsrApp {
             .font(self.ui_font.font.clone())
             .on_action(cx.listener(|this, _: &DismissMenus, _, cx| {
                 this.dismiss_menus(cx);
+            }))
+            // Linux 自绘红叉派发过来的统一关窗请求（Windows / macOS 的原生
+            // 红叉走 should_close，同样落到 request_close）。
+            .on_action(cx.listener(|this, _: &RequestClose, window, cx| {
+                this.request_close(window, CloseSource::WindowButton, cx);
             }))
             .child(self.render_titlebar())
             .child(self.render_toolbar(cx))

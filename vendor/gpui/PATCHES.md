@@ -19,9 +19,17 @@ the upstream original.
    warns on every build — and because `gpui` is a path dependency, cargo does
    not cap its lints, so the warning shows up in OneAsr's own build log. The
    lint is future-incompatible: it becomes a hard error in a later Rust release.
+4. `src/platform.rs` + `src/window.rs` + the four platform window impls —
+   `PlatformWindow::set_visible(bool)` (default no-op) and
+   `Window::set_window_visible(bool)`. gpui 0.2.2 has no way to hide a window
+   without destroying it, which the tray feature needs: Windows
+   `ShowWindowAsync(SW_HIDE/SW_SHOW)`, macOS `orderOut:` /
+   `makeKeyAndOrderFront:`, X11 `UnmapWindow`/`MapWindow` + flush, Wayland
+   degrades to `set_minimized()` / xdg-activation (the protocol cannot unmap a
+   toplevel without destroying it).
 
 Revert to crates.io `gpui = "0.2.2"` (and drop the `[patch.crates-io]` entry in
-the workspace `Cargo.toml`) once a released version contains all three fixes.
+the workspace `Cargo.toml`) once a released version contains all four fixes.
 
 ## Removed from the package
 

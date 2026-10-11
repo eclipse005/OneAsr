@@ -18,6 +18,13 @@ anyhow = { workspace = true }
 rfd = "0.15"
 # Cross-platform native audio output; WAV assets stay embedded in the binary.
 rodio = { version = "0.22.2", default-features = false, features = ["playback", "hound"] }
+# 系统托盘（关窗到托盘）：Windows/macOS 用系统原语；Linux 走 ksni
+# （SNI/DBus，纯 Rust）。不开默认的 libappindicator——那会拖 GTK3 C 依赖
+# 进供应链与 CI。菜单用 muda 构建，事件统一从 MenuEvent 通道收。
+tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
+# 把 assets/icons/app-icon-32.png 解成 RGBA 喂托盘图标（纯 Rust png，不引
+# image 全家桶；Linux/macOS 上与 tray-icon 自带的同版本去重）。
+png = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 # Used by `crashlog` for human-readable local timestamps in `oneasr-error.log`.

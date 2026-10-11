@@ -1341,6 +1341,24 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    fn set_visible(&self, visible: bool) {
+        let window = self.0.lock().native_window;
+        if visible {
+            let executor = self.0.lock().executor.clone();
+            executor
+                .spawn(async move {
+                    unsafe {
+                        let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+                    }
+                })
+                .detach();
+        } else {
+            unsafe {
+                let _: () = msg_send![window, orderOut: nil];
+            }
+        }
+    }
+
     fn zoom(&self) {
         let this = self.0.lock();
         let window = this.native_window;

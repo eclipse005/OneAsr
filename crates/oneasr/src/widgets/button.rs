@@ -56,7 +56,10 @@ pub fn caption_btn(
     let button = match action {
         CaptionAction::Minimize => button.on_click(|_, window, _| window.minimize_window()),
         CaptionAction::Maximize => button.on_click(|_, window, _| window.zoom_window()),
-        CaptionAction::Close => button.on_click(|_, _, cx| cx.quit()),
+        // 关闭不直接 quit：派发 RequestClose，由 app 的统一关窗流程按
+        // close_to_tray 开关决定退出或最小化到托盘（与原生红叉同一条路）。
+        CaptionAction::Close => button
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::RequestClose), cx)),
     };
     #[cfg(not(target_os = "linux"))]
     let _ = action;

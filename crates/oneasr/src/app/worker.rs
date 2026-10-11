@@ -67,6 +67,9 @@ pub(crate) enum AsrJob {
 impl OneAsrApp {
     pub(crate) fn poll_worker(&mut self, cx: &mut Context<Self>) {
         self.tick_status_hint(cx);
+        // 托盘 tooltip 同泵更新（事件本身见 start_worker_poller 的两拍：
+        // 实体租借内不能 window.update，托盘动作推迟到泵外执行）。
+        self.refresh_tray_tooltip();
         loop {
             match self.rx.try_recv() {
                 Ok(WorkerMsg::FilesPicked(paths)) => self.handle_files_picked(paths, cx),

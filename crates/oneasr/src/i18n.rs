@@ -185,7 +185,6 @@ pub mod L {
         "仅将中文与粤语转为简体或繁体，其余语言保持原文",
         "Converts Chinese and Cantonese to simplified or traditional. Other languages stay unchanged",
     );
-    pub const ZH_YUE_ONLY: Str = Str::new("仅中文/粤语", "Chinese & Cantonese only");
     pub const SUBTITLE_BEAUTIFY: Str = Str::new("字幕美化", "Subtitle polish");
     pub const TIP_SUBTITLE_BEAUTIFY: Str = Str::new(
         "将句号、逗号替换为空格，并在汉字与英文、数字之间加入空格",
@@ -328,6 +327,17 @@ pub mod L {
     pub const TIP_SOUND: Str = Str::new(
         "操作时播放点击音，任务结束时播放提示音",
         "Plays a click for actions, and a chime when a run finishes",
+    );
+
+    // ---- 托盘菜单 ----
+    pub const TRAY_OPEN: Str = Str::new("打开 OneAsr", "Open OneAsr");
+    pub const TRAY_QUIT: Str = Str::new("退出 OneAsr", "Quit OneAsr");
+
+    // ---- 设置：关窗到托盘（与提示音同卡） ----
+    pub const CLOSE_TO_TRAY: Str = Str::new("关闭时隐藏到托盘", "Hide to tray on close");
+    pub const TIP_CLOSE_TO_TRAY: Str = Str::new(
+        "开启：点窗口关闭按钮收进托盘，任务继续，从托盘或任务栏唤回；关闭：直接退出",
+        "On: the close button hides OneAsr to the tray and tasks keep running — reopen from the tray or taskbar. Off: closing quits",
     );
 
     // ---- 统计面板 ----
@@ -570,5 +580,14 @@ pub fn run_complete_with_saved(msg: &str, saved: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("{msg} · 已省 {saved} · 左下角看统计"),
         UiLang::En => format!("{msg} · {saved} saved · see Stats at the bottom left"),
+    }
+}
+
+/// 托盘 tooltip：`OneAsr · {stage}`（stage 由管线按界面语言出词，两种语言
+/// 同构）。空闲时传 `None`，只显示程序名。
+pub fn tray_tooltip(stage: Option<&str>) -> String {
+    match stage {
+        Some(stage) => format!("OneAsr · {stage}"),
+        None => "OneAsr".into(),
     }
 }
