@@ -637,7 +637,19 @@ pub(super) fn is_hiragana_continuation_bind(left: &str, right: &str) -> bool {
     if left.chars().any(|c| {
         matches!(
             c,
-            '。' | '.' | '！' | '!' | '？' | '?' | '…' | '，' | '、' | ',' | '；' | ';' | '：' | ':'
+            '。' | '.'
+                | '！'
+                | '!'
+                | '？'
+                | '?'
+                | '…'
+                | '，'
+                | '、'
+                | ','
+                | '；'
+                | ';'
+                | '：'
+                | ':'
         )
     }) {
         return false;

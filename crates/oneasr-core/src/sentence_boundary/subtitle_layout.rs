@@ -36,9 +36,9 @@ use super::boundary_rules::{
     is_closing_punctuation, is_connector_like, is_discourse_marker_comma, is_function_word_left,
     is_japanese_lexical_bind, is_japanese_orthographic_bind, is_japanese_spoken_end,
     is_line_start_bound_particle, is_numeric_continuation, is_open_genitive_link,
-    is_opening_punctuation, is_phrase_close_particle, is_soft_punctuation,
-    is_split_connector_pair, is_split_hai, is_time_glued_content, is_to_binding_left,
-    is_weak_cue_ending, lexical_cut_cost, strip_token,
+    is_opening_punctuation, is_phrase_close_particle, is_soft_punctuation, is_split_connector_pair,
+    is_split_hai, is_time_glued_content, is_to_binding_left, is_weak_cue_ending, lexical_cut_cost,
+    strip_token,
 };
 use super::profile::{Advisor, LanguageProfile};
 use super::types::SplitReason;
@@ -726,8 +726,8 @@ fn dp_split_span(
                 let sub_n = b - a;
                 let sub_units = prefix[b] - prefix[a];
                 let sub_chars = char_of(a, b - 1);
-                let still_over = sub_units > hard.max_unit
-                    || (hard.char_limited() && sub_chars > hard.char);
+                let still_over =
+                    sub_units > hard.max_unit || (hard.char_limited() && sub_chars > hard.char);
                 if !still_over {
                     continue;
                 }
@@ -785,7 +785,13 @@ fn dp_split_span(
             &*char_of,
             &hard,
             &compute_base_costs(
-                words, start, end, vad_index, profile, &advisor, &byte_offset,
+                words,
+                start,
+                end,
+                vad_index,
+                profile,
+                &advisor,
+                &byte_offset,
             ),
             &advisor,
             &byte_offset,
@@ -950,6 +956,7 @@ impl DpMode {
 /// Ungated Force pass: any non-forbidden cut, ranked by `boundary_base_cost`
 /// (soft punct cheapest; weak endings expensive). Used when the preferred
 /// clause-boundary pass cannot meet the preset Force ceiling.
+#[allow(clippy::too_many_arguments)]
 fn dp_split_span_ungated_force(
     words: &[WordTokenDto],
     start: usize,
@@ -1219,13 +1226,12 @@ fn greedy_cuts_by_hard_limit(
         let mut punct_cut: Option<usize> = None;
         for k in (seg_start + 1..=i).rev() {
             let left = words[start + k - 1].word.as_str();
-            if ends_with_soft_punctuation(left) || is_comma(left) {
-                if !is_discourse_marker_comma(left)
-                    && !is_weak_cue_ending(left, profile.connectors())
-                {
-                    punct_cut = Some(k);
-                    break;
-                }
+            if (ends_with_soft_punctuation(left) || is_comma(left))
+                && !is_discourse_marker_comma(left)
+                && !is_weak_cue_ending(left, profile.connectors())
+            {
+                punct_cut = Some(k);
+                break;
             }
         }
         // Cut back from i while the boundary is structurally bad / weak.

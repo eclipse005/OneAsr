@@ -270,10 +270,11 @@ fn japanese_force_prefers_clause_punct_over_particle_end() {
         "収めました。",
     ];
     // Char-level-ish tokens with an early comma in a long fused span:
-    let chars: Vec<String> = "第二次世界大戦当時、ナチスドイツは大戦車自走砲とする改造でそこそこの成功作業を収めました"
-        .chars()
-        .map(|c| c.to_string())
-        .collect();
+    let chars: Vec<String> =
+        "第二次世界大戦当時、ナチスドイツは大戦車自走砲とする改造でそこそこの成功作業を収めました"
+            .chars()
+            .map(|c| c.to_string())
+            .collect();
     let words = chars
         .iter()
         .enumerate()
@@ -295,7 +296,9 @@ fn japanese_force_prefers_clause_punct_over_particle_end() {
     // Prefer cutting at 、 rather than ending a non-final cue on a particle.
     let non_final = &texts[..texts.len() - 1];
     assert!(
-        non_final.iter().any(|t| t.ends_with('、') || t.ends_with('，')),
+        non_final
+            .iter()
+            .any(|t| t.ends_with('、') || t.ends_with('，')),
         "Force should prefer clause punct; cues={texts:?}"
     );
     for t in non_final {
@@ -364,8 +367,6 @@ fn force_cuts_over_budget_without_punct_stay_under_ceiling() {
     }
 }
 
-
-
 #[test]
 fn chinese_force_prefers_comma_not_de_le_zhe_ending() {
     // Over Short (16) with an early comma: must cut at ， not after 的/了/着.
@@ -386,7 +387,9 @@ fn chinese_force_prefers_comma_not_de_le_zhe_ending() {
     assert!(texts.len() >= 2, "expected Force split: {texts:?}");
     let non_final = &texts[..texts.len() - 1];
     assert!(
-        non_final.iter().any(|t| t.ends_with('，') || t.ends_with(',')),
+        non_final
+            .iter()
+            .any(|t| t.ends_with('，') || t.ends_with(',')),
         "Force should cut at comma; cues={texts:?}"
     );
     for t in non_final {
