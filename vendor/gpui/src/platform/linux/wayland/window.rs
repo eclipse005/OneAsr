@@ -956,6 +956,16 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().toplevel.set_minimized();
     }
 
+    fn set_visible(&self, visible: bool) {
+        // Wayland 无法在不销毁 toplevel 的前提下 unmap；隐藏降级为最小化，
+        // 从任务栏或托盘菜单都能恢复（activate 走 xdg-activation）。
+        if visible {
+            self.activate();
+        } else {
+            self.borrow().toplevel.set_minimized();
+        }
+    }
+
     fn zoom(&self) {
         let state = self.borrow();
         if !state.maximized {

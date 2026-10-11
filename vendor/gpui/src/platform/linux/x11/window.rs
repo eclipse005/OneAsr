@@ -1405,6 +1405,23 @@ impl PlatformWindow for X11Window {
         .log_err();
     }
 
+    fn set_visible(&self, visible: bool) {
+        if visible {
+            check_reply(
+                || "X11 MapWindow failed.",
+                self.0.xcb.map_window(self.0.x_window),
+            )
+            .log_err();
+        } else {
+            check_reply(
+                || "X11 UnmapWindow failed.",
+                self.0.xcb.unmap_window(self.0.x_window),
+            )
+            .log_err();
+        }
+        xcb_flush(&self.0.xcb);
+    }
+
     fn zoom(&self) {
         let state = self.0.state.borrow();
         self.set_wm_hints(

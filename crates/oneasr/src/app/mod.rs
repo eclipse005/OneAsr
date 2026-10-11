@@ -10,6 +10,7 @@ use crate::app::prelude::*;
 use crate::app::ui::status_bar::StatusBarTextCache;
 use crate::app::ui::transcript_card::TranscriptCardView;
 
+pub(crate) mod close;
 pub(crate) mod downloads;
 pub(crate) mod overlays;
 pub(crate) mod prelude;
@@ -272,6 +273,12 @@ impl OneAsrApp {
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(Duration::from_millis(80)).await;
+                // 托盘事件的两拍都在这个循环里（见 tray.rs 模块注释）：
+                // 先排水入队——不碰实体；再进实体泵 worker 消息；最后在
+                // `this.update` 的租借**结束之后**执行托盘动作。第二拍不能
+                // 挪进 `poll_worker`：gpui 禁止对同一实体嵌套 update，而
+                // 恢复/退出窗口恰恰要从这里再 `window.update` 一次。
+                crate::tray::drain_events();
                 // `WeakEntity::update` 的失败只有两种可能：实体已释放，或 app 已
                 // 释放（见 vendor/gpui `entity_map.rs` 的 `"entity released"` 和
                 // `async_context.rs` 的 `"app was released"`）。两者都意味着没有
@@ -280,6 +287,7 @@ impl OneAsrApp {
                 if this.update(cx, |app, cx| app.poll_worker(cx)).is_err() {
                     break;
                 }
+                crate::tray::apply_pending(cx);
             }
         })
         .detach();

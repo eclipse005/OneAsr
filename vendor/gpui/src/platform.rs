@@ -484,6 +484,11 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
     fn minimize(&self);
+    /// Show or hide the window without destroying it (tray-style hide).
+    /// The default is a no-op so niche platforms keep compiling.
+    fn set_visible(&self, visible: bool) {
+        let _ = visible;
+    }
     fn zoom(&self);
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;

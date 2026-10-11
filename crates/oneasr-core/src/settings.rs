@@ -140,6 +140,11 @@ pub struct Settings {
     /// reminder together.
     #[serde(default = "default_sound")]
     pub sound: bool,
+    /// 关窗行为开关：开 = 点窗口关闭按钮隐藏到托盘（任务继续，托盘/任务栏
+    /// 唤回）；关（默认）= 直接退出进程。托盘菜单「退出」不受它影响，总是
+    /// 真退出。
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
     /// 首次启动欢迎卡是否已经看过（看过 = 永不再弹）。
     ///
     /// serde 字段默认是 `true`：老配置里没有这个字段，升级用户不该再看一遍
@@ -221,6 +226,12 @@ fn default_welcome_done() -> bool {
     true
 }
 
+/// `close_to_tray` 默认关：老用户的关窗语义不变（直接退出），要托盘的显式
+/// 打开一次开关。
+fn default_close_to_tray() -> bool {
+    false
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -250,6 +261,7 @@ impl Default for Settings {
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
             sound: default_sound(),
+            close_to_tray: default_close_to_tray(),
             // 全新安装要弹欢迎卡；serde 字段默认（老配置）是 true 不弹。
             welcome_done: false,
             legacy_ui_sound: None,
@@ -887,6 +899,14 @@ mod tests {
         s.normalize_with_notes(&mut notes);
         assert_eq!(s.ui_language, "en");
         assert!(!notes.iter().any(|n| n.contains("ui_language")));
+    }
+
+    #[test]
+    fn close_to_tray_defaults_off() {
+        // 关窗语义向后兼容：缺字段（老配置）= 关窗直接退出，要托盘显式打开。
+        let s: Settings = serde_json::from_str("{}").expect("empty settings object");
+        assert!(!s.close_to_tray);
+        assert!(!Settings::default().close_to_tray);
     }
 
     #[test]

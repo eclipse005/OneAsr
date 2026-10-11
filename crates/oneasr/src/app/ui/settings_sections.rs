@@ -1,4 +1,4 @@
-//! The ten sections of the settings drawer.
+//! The eleven sections of the settings drawer.
 //!
 //! Each builder renders one `section(..)` card. They take [`SettingsFormState`]
 //! by reference so the drawer's snapshot is read, never re-derived, and return
@@ -134,7 +134,9 @@ impl OneAsrApp {
                             t(L::TIP_SUBTITLE_LENGTH),
                         ))
                         .child(
-                            div().flex().gap_1p5().children(
+                            // flex_wrap：英文档位名更宽，半栏放不下时换行而不是
+                            // 被抽屉边缘裁掉。
+                            div().flex().flex_wrap().gap_1p5().children(
                                 [
                                     ("short", t(L::LEN_SHORT)),
                                     ("standard", t(L::LEN_STANDARD)),
@@ -320,43 +322,39 @@ impl OneAsrApp {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    // 侧注（zh_yue_only）删掉：英文 "Chinese & Cantonese only"
+                    // 比整栏还宽，把标题挤出抽屉；这层意思悬停 tooltip 里已有。
+                    .child(setting_title(
+                        "tip-chinese-output",
+                        t(L::CHINESE_OUTPUT),
+                        t(L::TIP_CHINESE_OUTPUT),
+                    ))
                     .child(
+                        // flex_wrap：英文 Original / Simplified / Traditional 比中文宽。
                         div()
                             .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(setting_title(
-                                "tip-chinese-output",
-                                t(L::CHINESE_OUTPUT),
-                                t(L::TIP_CHINESE_OUTPUT),
-                            ))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(MUTED)
-                                    .whitespace_nowrap()
-                                    .child(t(L::ZH_YUE_ONLY)),
-                            ),
-                    )
-                    .child(div().flex().gap_1().children(TextScript::ALL.map(|script| {
-                        let active = form.text_script == script;
-                        btn(
-                            script.label(ui_lang()),
-                            if active {
-                                BtnKind::Primary
-                            } else {
-                                BtnKind::Secondary
-                            },
-                            true,
-                            cx.listener(move |this, _, _, cx| {
-                                if this.settings.text_script == script.id() {
-                                    return;
-                                }
-                                this.settings.text_script = script.id().into();
-                                this.mark_settings_dirty(cx);
-                            }),
-                        )
-                    }))),
+                            .flex_wrap()
+                            .gap_1()
+                            .children(TextScript::ALL.map(|script| {
+                                let active = form.text_script == script;
+                                btn(
+                                    script.label(ui_lang()),
+                                    if active {
+                                        BtnKind::Primary
+                                    } else {
+                                        BtnKind::Secondary
+                                    },
+                                    true,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if this.settings.text_script == script.id() {
+                                            return;
+                                        }
+                                        this.settings.text_script = script.id().into();
+                                        this.mark_settings_dirty(cx);
+                                    }),
+                                )
+                            })),
+                    ),
             );
         let body = div()
             .flex()
@@ -927,7 +925,8 @@ impl OneAsrApp {
         settings_section(body)
     }
 
-    /// 提示音：一行一个开关，点亮即开启。
+    /// 提示音 + 关窗到托盘：一张卡两行开关，同为「一行一开关」的最简语义。
+    /// 关窗开关：开 = 点红叉收进托盘（任务继续），关 = 直接退出。
     pub(super) fn render_settings_sound(
         &mut self,
         form: &SettingsFormState,
@@ -935,22 +934,47 @@ impl OneAsrApp {
     ) -> impl IntoElement + use<> {
         let body = div()
             .flex()
-            .items_center()
-            .justify_between()
-            .child(setting_title("tip-sound", t(L::SOUND), t(L::TIP_SOUND)))
-            .child(switch(
-                "switch-sound",
-                form.sound,
-                cx.listener(|this, _, _, cx| {
-                    let enabling = !this.settings.sound;
-                    this.settings.sound = enabling;
-                    // Audible the moment it comes back on.
-                    if enabling {
-                        this.play_ui(sfx::Sfx::Click);
-                    }
-                    this.mark_settings_dirty(cx);
-                }),
-            ));
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(setting_title("tip-sound", t(L::SOUND), t(L::TIP_SOUND)))
+                    .child(switch(
+                        "switch-sound",
+                        form.sound,
+                        cx.listener(|this, _, _, cx| {
+                            let enabling = !this.settings.sound;
+                            this.settings.sound = enabling;
+                            // Audible the moment it comes back on.
+                            if enabling {
+                                this.play_ui(sfx::Sfx::Click);
+                            }
+                            this.mark_settings_dirty(cx);
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(setting_title(
+                        "tip-close-to-tray",
+                        t(L::CLOSE_TO_TRAY),
+                        t(L::TIP_CLOSE_TO_TRAY),
+                    ))
+                    .child(switch(
+                        "switch-close-to-tray",
+                        self.settings.close_to_tray,
+                        cx.listener(|this, _, _, cx| {
+                            this.settings.close_to_tray = !this.settings.close_to_tray;
+                            this.mark_settings_dirty(cx);
+                        }),
+                    )),
+            );
         settings_section(body.into_any_element())
     }
 }

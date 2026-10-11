@@ -4118,6 +4118,14 @@ impl Window {
         self.platform_window.minimize();
     }
 
+    /// Show or hide the window without closing it (tray-style hide).
+    ///
+    /// 进程与事件循环照常运行；托盘或恢复入口用 `set_window_visible(true)`
+    /// 唤回。Wayland 上以最小化近似（协议无法不销毁地 unmap 一个 toplevel）。
+    pub fn set_window_visible(&self, visible: bool) {
+        self.platform_window.set_visible(visible);
+    }
+
     /// Toggle full screen status on the current window at the platform level.
     pub fn toggle_fullscreen(&self) {
         self.platform_window.toggle_fullscreen();
