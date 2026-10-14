@@ -1,4 +1,4 @@
-# 提交 / PR 门禁：格式、lint、测试、跨平台编译、版本一致性、供应链。
+# 提交 / PR 门禁：格式、lint、测试、跨平台编译、版本一致性、界面文案双语、供应链。
 #
 # 与 release.yml 的分工：
 #   本文件 —— 每次提交都验证，只读权限，不做任何发布动作。
@@ -83,16 +83,29 @@ jobs:
       - name: test
         run: cargo test --locked -p oneasr-core -p oneasr
 
-  # ── 3. 版本一致性：Cargo.toml 是唯一来源，两份 README 必须跟它一致 ──────
+  # ── 3. 静态断言：版本一致性 + 界面文案双语 ─────────────────────────────
+  # 三样都只用 Python 标准库、不碰 Rust 工具链，所以这个 job 秒完。
   version:
-    name: version consistency
+    name: version + i18n consistency
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # 只跑 Python 标准库，不需要 Rust 工具链，所以这个 job 秒完。
+      # Cargo.toml 是唯一来源，两份 README 必须跟它一致。
       - name: Version consistency
         run: python3 scripts/verify-version.py
+      # 界面文案双语规则的机器化（AGENTS.md 的「代码风格」）：渲染层不许
+      # 绕过双语表硬编码单语字符串、中文不许落进 UiLang::En 臂、
+      # Str::new 两侧占位符必须成对且英文侧非空、expand 的 key 必须与条目
+      # 占位符对齐。五样编译器都看不见。
+      #
+      # 门禁自己也要有测试：改坏它的一条正则，它会**静默地永远放绿**，
+      # 那比门禁本身的红更危险——连「被拦住过」都不是了。所以先证明校验
+      # 本身有效，再让它去校验别人。
+      - name: i18n gate self-test
+        run: python3 scripts/test_verify_i18n.py
+      - name: i18n consistency
+        run: python3 scripts/verify-i18n.py
 
   # ── 4. 供应链：外部二进制的哈希 + 依赖漏洞与来源 ───────────────────────
   supply-chain:

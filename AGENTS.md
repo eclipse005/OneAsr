@@ -8,10 +8,17 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 
 - 开发编译：`cargo build -p oneasr`
 - 发版编译：`cargo build -p oneasr --release`
-- 检查（三条都要干净，CI 会拦）：`cargo check -p oneasr` 目标 **0 警告**、
-  `cargo clippy --locked -p oneasr --all-targets -- -D warnings`、`cargo fmt --all --check`
-- 测试：`cargo test -p oneasr-core`、`cargo test -p oneasr`（改动引擎或设置模型时必跑）
+- 检查（三条都要干净，CI 会拦）：`cargo check --locked --workspace --all-targets` 目标 **0 警告**、
+  `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`
+  （两条 cargo 命令都必须带 `--workspace --all-targets`：只写 `-p oneasr` 时，
+  `oneasr-core` 的 tests / examples 根本进不了 lint 视野——那正是 ci.yml 里留着的教训）
+- 测试：`cargo test --locked -p oneasr-core -p oneasr`（改动引擎或设置模型时必跑）
 - 版本一致性：`python3 scripts/verify-version.py`（加 `--tag v<版本>` 可一并断言 tag）
+- 界面文案双语：`python3 scripts/verify-i18n.py`（改动 UI 文案后跑，CI 会拦）
+- 双语门禁的自测：`python3 scripts/test_verify_i18n.py`（改了门禁或它的测试就跑；CI 也跑）
+- 门禁的断骨验证：`python3 scripts/bonebreak-verify-i18n.py` —— 把 11 处检查逐个还原，
+  确认对应用例真的变红。**改过 `verify-i18n.py` 之后必跑**；它不进 CI（锚点是源码
+  片段，实现一重构工具就会自己过期），是维护者手工用的
 - 打包（Windows）：`./scripts/pack-release.ps1` —— 版本号从 `Cargo.toml` 读，**没有 `-Version` 参数了**
   （以前会写回 `Cargo.toml`，等于两处真相）；开关只有 `-SkipBuild` / `-SkipInstaller`
 - 打包（Linux / macOS）：`./scripts/pack-unix.sh --os macos --arch arm64` —— 同样没有 `--version`，可加 `--skip-build`
@@ -27,20 +34,43 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - `crates/oneasr/src/i18n.rs` —— GUI 界面标签的双语表（复用 core 机制）
 - `vendor/gpui/` —— 打过补丁的 gpui；每处改动都要登记进 `vendor/gpui/PATCHES.md`
 - `installer/` —— Windows Inno Setup 脚本；`installer/macos/` 是 macOS 的安装说明与安装脚本源文件
-- `scripts/` —— 打包脚本与图标生成，外加三道校验：`verify-version.py`（版本一致性）、
-  `verify-ffmpeg-manifest.py`（ffmpeg 哈希清单）、`ffmpeg-checksums.txt`（清单本体）
-- `.github/workflows/` —— `ci.yml`（每次提交的门禁：格式 / clippy+测试 / 版本 / 供应链）
+- `scripts/` —— 打包脚本与图标生成，外加四道校验与它们的自测：
+  `verify-version.py`（版本一致性）、`verify-i18n.py`（界面文案双语）、
+  `verify-ffmpeg-manifest.py`（ffmpeg 哈希清单）、`ffmpeg-checksums.txt`（清单本体）；
+  以及 `test_verify_i18n.py`（双语门禁自己的单测）、
+  `bonebreak-verify-i18n.py`（门禁的断骨验证）、`_verify_common.py`
+  （三个校验脚本共用的输出编码处理 —— 同一件事只写一份，改一次三处都跟着）
+- `.github/workflows/` —— `ci.yml`（每次提交的门禁：格式 / clippy+测试 / 版本+双语 / 供应链）
   与 `release.yml`（tag 触发的打包发版）
 - `rust-toolchain.toml` —— 工具链的唯一来源；`deny.toml` —— 依赖漏洞与来源规则
 - `docs/release-notes/` —— 每个版本的发布说明（见下）
+- `docs/lessons.md` —— 从已合并的改动里学到的规则：每条带**为什么**与**证据**
+  （哪次提交、哪个 issue、哪天），并记 Seen N×；第 3 次被撞上的才迁进本文，
+  两边都要读。改代码前先读它——那是本文这些规矩的出处
 - 运行期布局：`bin/ffmpeg`、`models/`、`output/`、`runs/` 都在 app_root 下
 
 ## 代码风格
 
+下面带 **粗体** 的几条规矩不是审美偏好，每一条底下都有一次具体的翻车；
+来历与证据在 `docs/lessons.md`，动笔前值得先扫一眼。
+
 - 提交信息用 conventional commits + 中文描述，例如 `fix(settings): 每个 ASR 尺寸各记一个模型目录`
 - 提交正文写清"为什么"和用户能感知的影响，不写"优化代码"这类空话
+- 大的改动（新行为、跨模块）在正文里记一行**验证边界**：跑了哪些检查、
+  手动试了什么、什么没试（例：`验证：cargo test -p oneasr-core -p oneasr 全绿；
+  未验：macOS 打包路径（本地无环境）`）。事后 review 或 CI 红了，
+  一眼知道当时验到哪——没验的明说，别让"假绿"变成"没人知道"。跟
+  `#[ignore]` 比静默 early-return 好是同一条原则
 - 注释与文档用中文，术语跟 README 保持一致；`.rs` 在仓库里是 CRLF（Windows 检出）
 - 新增行为要带单测，`crates/oneasr-core/src/settings.rs`、`crates/oneasr/src/app/rows.rs` 有现成的纯函数单测可参照
+- **测试要断骨验证**：新测试写完，把被测的修复还原（或手动破坏它守护的行为）跑一遍，
+  **测试必须变红**才算有效；在旧代码上照样绿的测试等于没写。别只写"加了测试"，
+  说清哪个测试在坏代码上失败、失败信息是什么
+- **修一类，不修一个**：改 bug 前先 grep 同构的兄弟位置，一次修完。本仓库的高发区：
+  `settings.rs` / `rows.rs` 的同构纯函数、两份 i18n.rs 的同款文案、
+  `crates/oneasr-core/src/asr/model_check.rs` 与 `crates/oneasr-core/src/model/download.rs`
+  里按 ASR 尺寸×模型角色展开的逻辑——
+  这些形状都是"修一个漏一串"。只修报告里那一个，用户下一个场景就会带着同一个 bug 回来
 - **单测必须跨平台**（CI 只在 ubuntu 上跑，本地是 Windows，两边不一致时以 CI 为准）：
   - 路径一律用 `join` 构造，**不许写死 `r"D:\..."` 当期望值**。`Path::join` 在 Linux
     用的是 `/`，写死字面量的话断言比的是分隔符、不是被测的规则
@@ -73,9 +103,11 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
    （发布构建一律 `--locked`，锁文件没跟上的话 CI 与打包都会失败）
 2. 更新 **两份** README 顶部的当前版本号与三平台下载链接：`README.md`（英文）与 `README.zh-CN.md`（中文），内容保持同构
 3. **写发布说明** `docs/release-notes/v<版本>.md`（格式见下，这一步不能省）
-4. 本地自检全绿再推：`cargo fmt --all --check`、
-   `cargo clippy --locked -p oneasr --all-targets -- -D warnings`、
-   `cargo test --locked -p oneasr-core -p oneasr`、`python3 scripts/verify-version.py --tag v<版本>`
+4. 本地自检全绿再推（**与 ci.yml 的实际门禁逐条对齐**，少跑一条就等于给自己少一道）：
+   `cargo fmt --all --check`、
+   `cargo clippy --locked --workspace --all-targets -- -D warnings`、
+   `cargo test --locked -p oneasr-core -p oneasr`、
+   `python3 scripts/verify-version.py --tag v<版本>`、`python3 scripts/verify-i18n.py`
 5. `git commit` → `git push origin master` → `git tag v<版本>` → `git push origin v<版本>`
 6. tag 触发 `.github/workflows/release.yml`：三平台打包 + 自动建 release 并挂上全部产物
    （打包前先跑同一个 `verify-version.py --tag`，tag 与 `Cargo.toml` 不一致就直接失败）
@@ -136,7 +168,7 @@ CI 只在 `push: master` 与 PR 上跑，直接提交到 `master` 同样会拿�
 - 依赖来源与漏洞由 `deny.toml` + CI 的 `cargo deny check advisories sources` 把关：
   git 依赖只许来自白名单里的仓库、且必须带 tag/rev。已知的 6 条「已停维护」通告都是传递依赖，
   记在配置注释里；真实漏洞仍然是硬错误
-- 打包前确认 `cargo check -p oneasr` 是 0 警告——这件事现在由 CI 保证，不再靠人记
+- 打包前确认 `cargo check --locked --workspace --all-targets` 是 0 警告——这件事现在由 CI 保证，不再靠人记
 
 ## 不要提交的东西
 

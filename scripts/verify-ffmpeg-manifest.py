@@ -40,6 +40,8 @@ import sys
 import urllib.error
 import urllib.request
 
+from _verify_common import utf8_when_redirected
+
 MANIFEST = pathlib.Path(__file__).resolve().with_name("ffmpeg-checksums.txt")
 
 # 接受 `https://github.com/<owner>/<repo>/releases/download/<tag>[/]`，
@@ -208,6 +210,7 @@ def verify(
 
 
 def main() -> int:
+    utf8_when_redirected()
     parser = argparse.ArgumentParser(description="校验 ffmpeg 归档哈希清单")
     parser.add_argument(
         "--print-manifest",

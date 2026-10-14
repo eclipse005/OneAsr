@@ -27,6 +27,8 @@ import pathlib
 import re
 import sys
 
+from _verify_common import utf8_when_redirected
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CARGO_TOML = ROOT / "Cargo.toml"
 READMES = ("README.md", "README.zh-CN.md")
@@ -110,6 +112,7 @@ def check_readme(name: str, version: str, problems: list[str]) -> None:
 
 
 def main() -> int:
+    utf8_when_redirected()
     parser = argparse.ArgumentParser(description="校验版本号一致性")
     parser.add_argument("--tag", default="", help="要一并断言的 git tag，例如 v1.1.0")
     args = parser.parse_args()
