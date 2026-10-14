@@ -38,6 +38,40 @@ pub(super) fn settings_section(body: AnyElement) -> impl IntoElement + use<> {
         .child(body)
 }
 
+/// 「对齐模型」标题右侧状态点的三态。
+///
+/// 纯数据，不含颜色——渲染处把它映射到 theme 令牌，好让三态能在单测里
+/// 被断言，而不必去比 Rgba。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlignerDot {
+    /// 需要对齐器，且所选模型已就绪（绿）。
+    Ready,
+    /// 需要对齐器，但所选模型还没下好（红）。
+    Missing,
+    /// 当前输出格式用不到对齐器（灰）。
+    NotNeeded,
+}
+
+/// 当前暂存的输出格式是否需要对齐器：SRT / ASS 带时间轴，得靠打轴才写得
+/// 出来；TXT 只是纯文本，没有起止时间可标。
+///
+/// 文稿匹配任务天然要对齐器，但它被闸门要求至少勾一个 SRT / ASS，所以
+/// 「按输出格式判断」与「按任务判断」在实际可跑的组合上是一致的。
+pub(crate) fn aligner_needed(output_srt: bool, output_ass: bool) -> bool {
+    output_srt || output_ass
+}
+
+/// 标题右侧那颗点的三态：需要 → 就绪绿 / 未就绪红，不需要 → 灰。
+pub(crate) fn aligner_dot_state(output_srt: bool, output_ass: bool, ready: bool) -> AlignerDot {
+    if !aligner_needed(output_srt, output_ass) {
+        AlignerDot::NotNeeded
+    } else if ready {
+        AlignerDot::Ready
+    } else {
+        AlignerDot::Missing
+    }
+}
+
 impl OneAsrApp {
     /// 默认语言 + 字幕长度
     pub(super) fn render_settings_language(
@@ -662,11 +696,14 @@ impl OneAsrApp {
                         t(L::ALIGNER_MODEL),
                         t(L::TIP_ALIGNER_MODEL),
                     ))
-                    .child(div().size(px(8.)).rounded_full().bg(if form.align_ready {
-                        ACCENT
-                    } else {
-                        DANGER
-                    })),
+                    .child(div().size(px(8.)).rounded_full().bg(
+                        match aligner_dot_state(form.output_srt, form.output_ass, form.align_ready)
+                        {
+                            AlignerDot::Ready => ACCENT,
+                            AlignerDot::Missing => DANGER,
+                            AlignerDot::NotNeeded => MUTED,
+                        },
+                    )),
             )
             .child({
                 // 对齐引擎选择：CTC 在前、默认 CTC（与 ASR 尺寸 chip 同款交互）。
@@ -976,5 +1013,38 @@ impl OneAsrApp {
                     )),
             );
         settings_section(body.into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subtitle_outputs_need_the_aligner_but_plain_text_does_not() {
+        assert!(aligner_needed(true, false), "SRT carries timestamps");
+        assert!(aligner_needed(false, true), "ASS carries timestamps");
+        assert!(aligner_needed(true, true));
+        assert!(
+            !aligner_needed(false, false),
+            "TXT only: nothing to align, gray dot regardless of the model"
+        );
+    }
+
+    #[test]
+    fn a_required_aligner_reports_green_or_red() {
+        assert_eq!(aligner_dot_state(true, false, true), AlignerDot::Ready);
+        assert_eq!(aligner_dot_state(false, true, true), AlignerDot::Ready);
+        assert_eq!(aligner_dot_state(true, true, false), AlignerDot::Missing);
+        assert_eq!(aligner_dot_state(false, true, false), AlignerDot::Missing);
+    }
+
+    #[test]
+    fn txt_only_stays_gray_even_when_the_model_is_missing() {
+        assert_eq!(
+            aligner_dot_state(false, false, false),
+            AlignerDot::NotNeeded
+        );
+        assert_eq!(aligner_dot_state(false, false, true), AlignerDot::NotNeeded);
     }
 }

@@ -300,8 +300,8 @@ pub mod L {
     );
     pub const ALIGNER_MODEL: Str = Str::new("对齐模型", "Aligner model");
     pub const TIP_ALIGNER_MODEL: Str = Str::new(
-        "为文字标注起止时间。默认 CTC，亦可选用 Qwen",
-        "Assigns start and end times to the text. CTC is the default; Qwen is the alternative",
+        "为文字标注起止时间。默认 CTC，亦可选用 Qwen。灰点=只导出 TXT 时用不到",
+        "Assigns start and end times to the text. CTC is the default; Qwen is the alternative. Gray dot: not needed when only TXT is exported",
     );
     pub const VOCAL_SEPARATION: Str = Str::new("人声分离", "Vocal separation");
     pub const TIP_VOCAL_SEPARATION: Str = Str::new(
