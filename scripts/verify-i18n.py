@@ -191,6 +191,9 @@ def lang_arm(lines: list[str], ln: int) -> tuple[bool, str | None]:
     `UiLang::Zh => format!("…")` 单行臂，也能认 `UiLang::Zh => {` 开头、
     跨十几行、内层还有 `if` 块的块臂（如 ui/text.rs 的拼接）。
     `fn` 边界兜住「别的函数里恰好有 UiLang::」的假阴性。
+    **不设行数上限**：`fn` 边界已经兜住了跨函数误判，再加一个「只看 40 行」的
+    上限，只会让比上限更长的合法块臂被误报成「绕过双语表」——那是假阳性，会让
+    人开始忽略这个门禁。一路向上到 `fn` 或文件头为止。
 
     臂名要有返回值而不是只回一个 bool：只知道「在某个臂里」就分不出
     `UiLang::Zh => "中文"` 与 `UiLang::En => "中文"` —— 后者正是改 i18n 时
@@ -198,7 +201,7 @@ def lang_arm(lines: list[str], ln: int) -> tuple[bool, str | None]:
     却长得像合规写法。命中 `UiLang::` 的其它变体时臂名为 None，保守放行。
     """
     skip = 0
-    for i in range(ln, max(0, ln - 40), -1):
+    for i in range(ln, 0, -1):
         line = lines[i - 1]
         # 向上回看时「净闭括号数」统一是 `}` 减 `{`：skip>0 表示正在找
         # 某个已闭合块的开括号，每见到一个 `{` 就吃掉一层，归零即跳完。

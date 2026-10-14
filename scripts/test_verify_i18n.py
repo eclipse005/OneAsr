@@ -138,6 +138,35 @@ def En臂跨十几行的块臂也要认出来():
 
 
 @case
+def 超长块臂里的中文必须放行():
+    """回看不能设行数上限：块臂比上限长时，臂内的合法中文会被误判成硬编码。
+
+    断骨锚点：把 `lang_arm` 的 `range(ln, 0, -1)` 换回带上限的写法
+    （曾经是 `max(0, ln - 40)`），这条立刻变红。
+    """
+    filler = "".join('            s.push_str("x%d");\n' % i for i in range(60))
+    src = (
+        "pub fn l(lang: UiLang) -> String {\n"
+        "    match lang {\n"
+        "        UiLang::Zh => {\n"
+        "            let mut s = String::new();\n"
+        f"{filler}"
+        '            s.push_str("请先添加文件");\n'
+        "            s\n"
+        "        }\n"
+        "        UiLang::En => {\n"
+        "            let mut s = String::new();\n"
+        '            s.push_str("Import first");\n'
+        "            s\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    p = scan(gui={"app.rs": src})
+    quiet(p, "超长 Zh 块臂里的中文")
+
+
+@case
 def 硬编码英文目前放行且被本用例锁住():
     """已知的同类漏洞：英文界面里混进单语英文串。
 
