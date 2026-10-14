@@ -817,21 +817,25 @@ pub fn cli_transcript_read_failed(e: &str) -> String {
     }
 }
 
-/// `未知的对齐引擎：{raw}（可选 ctc | qwen）`
-/// / `Unknown aligner engine: {raw} (choose ctc | qwen)`。
+/// `未知的对齐引擎：{raw}（可选 ctc | qwen，或完整目录名）`
+/// / `Unknown aligner engine: {raw} (choose ctc | qwen, or an exact directory name)`。
 pub fn cli_aligner_unknown(raw: &str) -> String {
     match ui_lang() {
-        UiLang::Zh => format!("未知的对齐引擎：{raw}（可选 ctc | qwen）"),
-        UiLang::En => format!("Unknown aligner engine: {raw} (choose ctc | qwen)"),
+        UiLang::Zh => format!("未知的对齐引擎：{raw}（可选 ctc | qwen，或完整目录名）"),
+        UiLang::En => {
+            format!("Unknown aligner engine: {raw} (choose ctc | qwen, or an exact directory name)")
+        }
     }
 }
 
-/// `未知的识别模型：{raw}（可选 0.6b | 1.7b）`
-/// / `Unknown ASR model: {raw} (choose 0.6b | 1.7b)`。
+/// `未知的识别模型：{raw}（可选 0.6b | 1.7b，或完整目录名）`
+/// / `Unknown ASR model: {raw} (choose 0.6b | 1.7b, or an exact directory name)`。
 pub fn cli_asr_unknown(raw: &str) -> String {
     match ui_lang() {
-        UiLang::Zh => format!("未知的识别模型：{raw}（可选 0.6b | 1.7b）"),
-        UiLang::En => format!("Unknown ASR model: {raw} (choose 0.6b | 1.7b)"),
+        UiLang::Zh => format!("未知的识别模型：{raw}（可选 0.6b | 1.7b，或完整目录名）"),
+        UiLang::En => {
+            format!("Unknown ASR model: {raw} (choose 0.6b | 1.7b, or an exact directory name)")
+        }
     }
 }
 

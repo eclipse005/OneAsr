@@ -604,13 +604,16 @@ fn apply_app_root_paths(
     // 候选怎么排由 `AsrPick` 给：短别名（尺寸级）fp16 与 int8 都试，fp16 优先；
     // 完整目录名（具体级）只认它自己。两个变体都没装才退回钉死并报缺。
     if let Some(pick) = asr_override {
+        // 候选在外层：fp16 优先是**全局**规则，不能被 root 顺序截胡。反过来写
+        // （root 在外）时，`--data-root` 里只装了 int8 就会盖过 `--app-root` 里的
+        // fp16。同一个候选仍按 root 顺序取（data_root 优先）。
         let candidates = pick.candidates();
-        let found = roots.iter().find_map(|root| {
-            let models = root.join("models");
-            candidates
+        let found = candidates.iter().find_map(|id| {
+            roots
                 .iter()
-                .find(|id| models.join(id.as_str()).is_dir())
-                .map(|id| (models.join(id.as_str()), *id))
+                .map(|root| root.join("models").join(id.as_str()))
+                .find(|dir| dir.is_dir())
+                .map(|dir| (dir, *id))
         });
         match found {
             Some((dir, id)) => {
@@ -626,16 +629,17 @@ fn apply_app_root_paths(
     } else {
         // 没指定：按 ASR_CHOICES 顺序（0.6B 先）再带上两个 int8 变体扫描
         // 安装布局，fp16 优先于 int8。都没有就保留默认路径让模型检查报缺目录。
+        // 候选同样在外层，理由见上面那支。
         let candidates: Vec<ModelId> = ModelId::ASR_CHOICES
             .into_iter()
             .chain([ModelId::Qwen3Asr06BInt8, ModelId::Qwen3Asr17BInt8])
             .collect();
-        let found = roots.iter().find_map(|root| {
-            let models = root.join("models");
-            candidates
+        let found = candidates.iter().find_map(|id| {
+            roots
                 .iter()
-                .find(|id| models.join(id.as_str()).is_dir())
-                .map(|id| (models.join(id.as_str()), *id))
+                .map(|root| root.join("models").join(id.as_str()))
+                .find(|dir| dir.is_dir())
+                .map(|dir| (dir, *id))
         });
         if let Some((dir, id)) = found {
             settings.asr_model = id.as_str().into();
@@ -653,12 +657,14 @@ fn apply_app_root_paths(
             .find(|dir| dir.is_dir())
             .unwrap_or_else(|| roots[0].join("models").join(id.as_str()));
     } else {
-        let found = roots.iter().find_map(|root| {
-            let models = root.join("models");
-            ModelId::ALIGNER_CHOICES
+        // 与 ASR 那支同一个形状：候选在外层，引擎优先级（CTC 先）才是全局规则，
+        // 不被 root 顺序截胡；同一个候选仍按 root 顺序取。
+        let found = ModelId::ALIGNER_CHOICES.iter().find_map(|id| {
+            roots
                 .iter()
-                .find(|id| models.join(id.as_str()).is_dir())
-                .map(|id| (models.join(id.as_str()), *id))
+                .map(|root| root.join("models").join(id.as_str()))
+                .find(|dir| dir.is_dir())
+                .map(|dir| (dir, *id))
         });
         if let Some((dir, id)) = found {
             settings.aligner_model = id.as_str().into();
@@ -1069,6 +1075,55 @@ mod tests {
             root.join("models").join(ModelId::Qwen3Asr17B.as_str())
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// fp16 优先是**全局**规则，不被 root 顺序截胡：`--data-root` 只装了
+    /// 1.7B-int8、`--app-root` 只装了 1.7B-fp16 时，不管点不点名尺寸，都该绑
+    /// app_root 的 fp16。
+    /// 断骨锚点：把候选扫描的两层换回 root 在外，两条断言一起变红。
+    #[test]
+    fn fp16_preference_is_global_across_data_and_app_roots() {
+        let data = root_with_all_asr_variants("xroot-data");
+        let app = root_with_all_asr_variants("xroot-app");
+        // data_root 只留 1.7B-int8；app_root 只留 1.7B-fp16。
+        for id in [
+            ModelId::Qwen3Asr06B,
+            ModelId::Qwen3Asr17B,
+            ModelId::Qwen3Asr06BInt8,
+        ] {
+            std::fs::remove_dir_all(data.join("models").join(id.as_str())).unwrap();
+        }
+        for id in [
+            ModelId::Qwen3Asr06B,
+            ModelId::Qwen3Asr17BInt8,
+            ModelId::Qwen3Asr06BInt8,
+        ] {
+            std::fs::remove_dir_all(app.join("models").join(id.as_str())).unwrap();
+        }
+        let want = app.join("models").join(ModelId::Qwen3Asr17B.as_str());
+
+        let mut explicit = Settings::default();
+        apply_app_root_paths(
+            &mut explicit,
+            &app,
+            &data,
+            Some(AsrPick::Size(ModelId::Qwen3Asr17B)),
+            None,
+        );
+        assert_eq!(
+            explicit.asr_model_dir, want,
+            "点名尺寸：app_root 的 fp16 必须赢过 data_root 的 int8"
+        );
+
+        let mut scanned = Settings::default();
+        apply_app_root_paths(&mut scanned, &app, &data, None, None);
+        assert_eq!(
+            scanned.asr_model_dir, want,
+            "不带旗标：扫描同样要全局 fp16 优先"
+        );
+
+        let _ = std::fs::remove_dir_all(&data);
+        let _ = std::fs::remove_dir_all(&app);
     }
 
     #[test]
