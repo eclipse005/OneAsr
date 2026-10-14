@@ -586,7 +586,7 @@ fn apply_app_root_paths(
     settings: &mut Settings,
     app_root: &Path,
     data_root: &Path,
-    asr_override: Option<ModelId>,
+    asr_override: Option<AsrPick>,
     aligner_override: Option<ModelId>,
 ) {
     let roots: Vec<&Path> = if data_root == app_root {
@@ -600,13 +600,29 @@ fn apply_app_root_paths(
     // 里的默认模型路径，那等于**悄悄退回另一个已装的模型**跑（点名 1.7B 却
     // 跑成 0.6B，最难发现的一种）。所以显式指定时先把「要哪个」钉死，扫不到
     // 就指向那个确实不存在的目录，让模型检查报「你选的型号没装」。
-    if let Some(id) = asr_override {
-        settings.asr_model = id.as_str().into();
-        settings.asr_model_dir = roots
-            .iter()
-            .map(|root| root.join("models").join(id.as_str()))
-            .find(|dir| dir.is_dir())
-            .unwrap_or_else(|| roots[0].join("models").join(id.as_str()));
+    //
+    // 候选怎么排由 `AsrPick` 给：短别名（尺寸级）fp16 与 int8 都试，fp16 优先；
+    // 完整目录名（具体级）只认它自己。两个变体都没装才退回钉死并报缺。
+    if let Some(pick) = asr_override {
+        let candidates = pick.candidates();
+        let found = roots.iter().find_map(|root| {
+            let models = root.join("models");
+            candidates
+                .iter()
+                .find(|id| models.join(id.as_str()).is_dir())
+                .map(|id| (models.join(id.as_str()), *id))
+        });
+        match found {
+            Some((dir, id)) => {
+                settings.asr_model = id.as_str().into();
+                settings.asr_model_dir = dir;
+            }
+            None => {
+                let id = pick.primary();
+                settings.asr_model = id.as_str().into();
+                settings.asr_model_dir = roots[0].join("models").join(id.as_str());
+            }
+        }
     } else {
         // 没指定：按 ASR_CHOICES 顺序（0.6B 先）再带上两个 int8 变体扫描
         // 安装布局，fp16 优先于 int8。都没有就保留默认路径让模型检查报缺目录。
@@ -799,20 +815,52 @@ fn parse_aligner_arg(raw: &str) -> Option<ModelId> {
     ModelId::try_parse_aligner(s)
 }
 
-/// `--asr` 旗标值 → 目录 id。接受短别名 `0.6b` / `1.7b` 与完整目录名。
+/// `--asr` 点名的粒度：**尺寸**（`1.7b`）还是**具体权重目录**（`Qwen3-ASR-1.7B-int8`）。
 ///
-/// 与 [`parse_aligner_arg`] 一一对应：短别名只是尺寸，落到具体是 fp16 还是
-/// int8 交给目录扫描决定——短别名选中的那个尺寸若两个变体都没装，就不绑定，
-/// 让模型检查报缺目录，而不是悄悄换一个尺寸跑。
-fn parse_asr_arg(raw: &str) -> Option<ModelId> {
+/// 两者扫不到时的兜底规则不一样，所以不能都压成一个 `ModelId`：
+/// - 尺寸：fp16 与 int8 都算候选（fp16 优先）——同尺寸的量化版不算「换了模型」；
+/// - 具体目录名：就认它自己，没装就报缺，不许换成同尺寸的另一个变体。
+///
+/// 之前两种写法都返回 `ModelId`，尺寸级因此被当成目录级钉死：`--asr 1.7b`
+/// 只找 `Qwen3-ASR-1.7B-hf`，机器上只装了 `-int8` 就报「模型目录不存在」，
+/// 明明有 1.7B 却用不了（2026-10-14 真机冒烟撞到）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsrPick {
+    Size(ModelId),
+    Exact(ModelId),
+}
+
+impl AsrPick {
+    /// 扫不到时要指给用户看的那一个：尺寸级取 fp16 名，报错文案里才有型号。
+    fn primary(self) -> ModelId {
+        match self {
+            Self::Size(id) | Self::Exact(id) => id,
+        }
+    }
+
+    /// 目录扫描的候选 id，按优先级排。
+    fn candidates(self) -> Vec<ModelId> {
+        match self {
+            Self::Size(id) => vec![id.asr_base(), id.with_quant(true)],
+            Self::Exact(id) => vec![id],
+        }
+    }
+}
+
+/// `--asr` 旗标值 → [`AsrPick`]。接受短别名 `0.6b` / `1.7b` 与完整目录名。
+///
+/// 与 [`parse_aligner_arg`] 的差别：对齐器没有量化变体，`ctc` / `qwen` 指的
+/// 就是引擎本身，两种写法一个意思；识别模型是「尺寸 × fp16/int8」两维，
+/// 短别名只点了其中一维，所以得把粒度一起带下去（见 [`AsrPick`]）。
+fn parse_asr_arg(raw: &str) -> Option<AsrPick> {
     let s = raw.trim();
     if s.eq_ignore_ascii_case("0.6b") {
-        return Some(ModelId::Qwen3Asr06B);
+        return Some(AsrPick::Size(ModelId::Qwen3Asr06B));
     }
     if s.eq_ignore_ascii_case("1.7b") {
-        return Some(ModelId::Qwen3Asr17B);
+        return Some(AsrPick::Size(ModelId::Qwen3Asr17B));
     }
-    ModelId::try_parse_asr(s)
+    ModelId::try_parse_asr(s).map(AsrPick::Exact)
 }
 
 /// `--data-root`：给了就必须是目录（可以还不存在——第一次运行会在那里建
@@ -923,7 +971,13 @@ mod tests {
     fn an_explicit_asr_flag_beats_the_installed_scan() {
         let root = root_with_all_asr_variants("explicit");
         let mut s = Settings::default();
-        apply_app_root_paths(&mut s, &root, &root, Some(ModelId::Qwen3Asr17BInt8), None);
+        apply_app_root_paths(
+            &mut s,
+            &root,
+            &root,
+            Some(AsrPick::Exact(ModelId::Qwen3Asr17BInt8)),
+            None,
+        );
         // 断骨锚点：把 `asr_override` 那段 match 改成无条件扫描，这条立刻红。
         assert_eq!(s.asr_model, ModelId::Qwen3Asr17BInt8.as_str());
         assert_eq!(
@@ -958,11 +1012,84 @@ mod tests {
             std::fs::remove_dir_all(root.join("models").join(id.as_str())).unwrap();
         }
         let mut s = Settings::default();
-        apply_app_root_paths(&mut s, &root, &root, Some(ModelId::Qwen3Asr17B), None);
+        apply_app_root_paths(
+            &mut s,
+            &root,
+            &root,
+            Some(AsrPick::Size(ModelId::Qwen3Asr17B)),
+            None,
+        );
         assert_eq!(
             s.asr_model_dir,
             root.join("models").join(ModelId::Qwen3Asr17B.as_str()),
             "没装就该保留它自己的路径报错，而不是回退去跑已装的 0.6B"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_asr_size_alias_falls_back_to_the_installed_int8_sibling() {
+        // 只装了 1.7B 的 int8 变体（量化版换 fp16 不算「换了模型」，同一个尺寸），
+        // `--asr 1.7b` 必须绑到它，而不是报「模型目录不存在」。
+        // 断骨锚点：把 `candidates()` 的 Size 分支改回只给一个 id，这条立刻红。
+        let root = root_with_all_asr_variants("int8-only");
+        std::fs::remove_dir_all(root.join("models").join(ModelId::Qwen3Asr17B.as_str())).unwrap();
+        let mut s = Settings::default();
+        apply_app_root_paths(
+            &mut s,
+            &root,
+            &root,
+            Some(AsrPick::Size(ModelId::Qwen3Asr17B)),
+            None,
+        );
+        assert_eq!(s.asr_model, ModelId::Qwen3Asr17BInt8.as_str());
+        assert_eq!(
+            s.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr17BInt8.as_str()),
+            "尺寸级指定：同尺寸的 int8 装了就该用它，而不是报缺目录"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_asr_size_alias_prefers_fp16_when_both_variants_are_installed() {
+        // 两个变体都装时仍是 fp16 优先，与不带旗标的扫描顺序一致。
+        // 断骨锚点：把 `candidates()` 的两个候选反过来，这条立刻红。
+        let root = root_with_all_asr_variants("fp16-first");
+        let mut s = Settings::default();
+        apply_app_root_paths(
+            &mut s,
+            &root,
+            &root,
+            Some(AsrPick::Size(ModelId::Qwen3Asr17B)),
+            None,
+        );
+        assert_eq!(
+            s.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr17B.as_str())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_exact_asr_directory_name_never_falls_back_to_another_variant() {
+        // 点名了具体权重（int8），机器上只有 fp16：同尺寸也不换——换了就等于
+        // 「跑出来的不是我点名的那份权重」，与默默换尺寸一样是骗人。
+        let root = root_with_all_asr_variants("exact-no-fallback");
+        std::fs::remove_dir_all(root.join("models").join(ModelId::Qwen3Asr17BInt8.as_str()))
+            .unwrap();
+        let mut s = Settings::default();
+        apply_app_root_paths(
+            &mut s,
+            &root,
+            &root,
+            Some(AsrPick::Exact(ModelId::Qwen3Asr17BInt8)),
+            None,
+        );
+        assert_eq!(
+            s.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr17BInt8.as_str()),
+            "具体目录名只认它自己：宁可报缺，也不能悄悄用同尺寸的 fp16"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -987,13 +1114,37 @@ mod tests {
     }
 
     #[test]
-    fn parse_asr_arg_takes_size_aliases_and_exact_names() {
-        assert_eq!(parse_asr_arg("1.7b"), Some(ModelId::Qwen3Asr17B));
-        assert_eq!(parse_asr_arg("0.6B"), Some(ModelId::Qwen3Asr06B));
-        assert_eq!(parse_asr_arg(" 1.7B "), Some(ModelId::Qwen3Asr17B));
+    fn parse_asr_arg_keeps_the_granularity_the_user_typed() {
+        // 尺寸级：别名落到 Size，候选含 fp16 + int8。
+        assert_eq!(
+            parse_asr_arg("1.7b"),
+            Some(AsrPick::Size(ModelId::Qwen3Asr17B))
+        );
+        assert_eq!(
+            parse_asr_arg("0.6B"),
+            Some(AsrPick::Size(ModelId::Qwen3Asr06B))
+        );
+        assert_eq!(
+            parse_asr_arg(" 1.7B "),
+            Some(AsrPick::Size(ModelId::Qwen3Asr17B))
+        );
+        // 目录级：完整名字只认它自己，哪怕它是量化变体。
         assert_eq!(
             parse_asr_arg(ModelId::Qwen3Asr17BInt8.as_str()),
-            Some(ModelId::Qwen3Asr17BInt8)
+            Some(AsrPick::Exact(ModelId::Qwen3Asr17BInt8))
+        );
+        assert_eq!(
+            ModelId::Qwen3Asr17BInt8.as_str(),
+            "Qwen3-ASR-1.7B-int8",
+            "完整目录名走的是目录级，夹具依赖这个字面名"
+        );
+        assert_eq!(
+            AsrPick::Size(ModelId::Qwen3Asr17B).candidates(),
+            vec![ModelId::Qwen3Asr17B, ModelId::Qwen3Asr17BInt8]
+        );
+        assert_eq!(
+            AsrPick::Exact(ModelId::Qwen3Asr17BInt8).candidates(),
+            vec![ModelId::Qwen3Asr17BInt8]
         );
         assert_eq!(parse_asr_arg("ctc"), None, "对齐器的别名不该被认成识别模型");
         assert_eq!(parse_asr_arg("nope"), None);
