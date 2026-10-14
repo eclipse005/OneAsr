@@ -134,6 +134,11 @@ pub const ERR_EMPTY_SENTENCE_BOUNDARY: Str = Str::new(
     "断句后字幕为空",
     "Subtitle is empty after sentence segmentation",
 );
+/// TXT 不走断句・字幕那条链，空结果只说转写为空。
+pub const ERR_EMPTY_TXT_BODY: Str = Str::new(
+    "转写结果为空，没有可写出的文本",
+    "Transcription is empty; there is no text to write",
+);
 pub const ERR_READ_DURATION: Str = Str::new(
     "无法读取转码后音频时长",
     "Cannot read the converted audio duration",
@@ -581,9 +586,13 @@ transcribe options:
   --aligner <ctc|qwen>     Forced-aligner engine (default: scan CTC first, then Qwen)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy the primary result (SRT, else TXT) to this path
-  --txt                    Also write {stem}.txt (one transcript line per cue)
+  --txt                    Also write {stem}.txt (one sentence per line; split on
+                           sentence punctuation, never on the subtitle timeline)
   --ass                    Also write {stem}.ass (karaoke: a sweep per word / CJK char)
   --no-srt                 Suppress the .srt file (requires --txt or --ass)
+  --no-timeline            Suppress the .timeline.json sidecar. With no timed output
+                           left the aligner is not loaded at all
+                           (--txt --no-srt --no-timeline = transcription only)
   --script <simplified|traditional>
                            Chinese output script for zh / yue (default: simplified)
   --vocal-separation       Run HTDemucs vocal separation before ASR
@@ -610,7 +619,7 @@ align options:
   --backend <gpu|cpu|auto> Inference backend (default: auto)
   --chunk-seconds <30-180> Kept for parity with transcribe; the aligner windows
                            the audio itself
-  --txt                    Also write {stem}.txt (your transcript)
+  --txt                    Also write {stem}.txt (one sentence per line)
   --ass                    Also write {stem}.ass (karaoke)
   --no-srt                 Suppress the .srt file (requires --txt or --ass)
   --beautify               Polish finished cues (punctuation; spaces beside Han
@@ -625,7 +634,7 @@ render options:
                            (default: the one the timeline was measured with)
   --script <simplified|traditional>
                            Chinese output script, as in transcribe
-  --txt                    Also write {stem}.txt
+  --txt                    Also write {stem}.txt (one sentence per line)
   --ass                    Also write {stem}.ass (karaoke)
   --no-srt                 Suppress the .srt file (requires --txt or --ass)
 
@@ -666,9 +675,12 @@ transcribe 选项：
   --aligner <ctc|qwen>     对齐引擎（默认按 CTC→Qwen 顺序扫描已装目录）
   --max-new-tokens <n>     转写解码上限（默认取设置 / 2048）
   --output <路径>          把主产物（SRT，没有则 TXT）复制到该路径
-  --txt                    额外写出 {stem}.txt（每条字幕一行转写）
+  --txt                    额外写出 {stem}.txt（一行一句；按句末标点断句，
+                           不看字幕时间轴）
   --ass                    额外写出 {stem}.ass（卡拉OK：逐词 / 中日韩逐字扫光）
   --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
+  --no-timeline            不写 .timeline.json 边车文件。只有没有任何定时产物时
+                           对齐器才不加载（--txt --no-srt --no-timeline = 纯转录）
   --script <simplified|traditional>
                            zh / yue 的中文字形（默认 simplified）
   --vocal-separation       转写前先做人声分离
@@ -694,7 +706,7 @@ align 选项：
   --language <代码>        zh|en|yue|ja|ko|...（默认 zh）
   --backend <gpu|cpu|auto> 推理后端，默认 auto
   --chunk-seconds <30-180> 与 transcribe 保持一致；对齐器自己会开窗
-  --txt                    额外写出 {stem}.txt（你的文稿）
+  --txt                    额外写出 {stem}.txt（一行一句）
   --ass                    额外写出 {stem}.ass（卡拉OK）
   --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
   --beautify               成稿字幕美化（标点；汉字与英文、数字之间加空格，标点旁边不加）
@@ -708,7 +720,7 @@ render 选项：
                            （默认沿用测量时的那个）
   --script <simplified|traditional>
                            中文字形，同 transcribe
-  --txt                    额外写出 {stem}.txt
+  --txt                    额外写出 {stem}.txt（一行一句）
   --no-srt                 不写 .srt 文件（需配合 --txt）
 
 环境变量：
@@ -1152,6 +1164,49 @@ mod tests {
         );
         assert!(en.contains("transcribe"));
         assert_ne!(zh, en);
+    }
+
+    #[test]
+    fn cli_help_states_the_txt_and_no_timeline_contract() {
+        // 整篇 `contains` 会被 transcribe / align 的同款文案满足，看不出 render
+        // 那行有没有改；先切出 render 小节（标题到下一个空行），断言只锚在
+        // 这一节里。
+        fn section<'a>(help: &'a str, header: &str) -> &'a str {
+            let start = help
+                .find(header)
+                .unwrap_or_else(|| panic!("help has no {header} section"));
+            let rest = &help[start..];
+            let end = rest.find("\n\n").unwrap_or(rest.len());
+            &rest[..end]
+        }
+
+        let zh = with_ui_lang(UiLang::Zh, cli_help);
+        let en = with_ui_lang(UiLang::En, cli_help);
+        // render 的 `--txt` 与 transcribe / align 同一个口径：一行一句。
+        let zh_render = section(zh, "render 选项：");
+        assert!(
+            zh_render.contains("--txt") && zh_render.contains("额外写出 {stem}.txt（一行一句）"),
+            "render options must say one sentence per line: {zh_render}"
+        );
+        let en_render = section(en, "render options:");
+        assert!(
+            en_render.contains("--txt")
+                && en_render.contains("Also write {stem}.txt (one sentence per line)"),
+            "render options must say one sentence per line: {en_render}"
+        );
+        // `--no-timeline` 不能说满：只有没有任何定时产物时才不加载对齐器。
+        assert!(
+            zh.contains("只有没有任何定时产物时"),
+            "zh help must scope the aligner skip: {zh}"
+        );
+        assert!(
+            en.contains("With no timed output"),
+            "en help must scope the aligner skip: {en}"
+        );
+        assert!(
+            !en.contains("Nothing consumes the"),
+            "the old overstated wording must be gone: {en}"
+        );
     }
 
     #[test]

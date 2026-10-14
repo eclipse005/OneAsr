@@ -40,7 +40,7 @@ use types::SourceSentenceStep2;
 use util::{from_core_words, to_core_words};
 use watchability_merge::merge_watchability_spans;
 
-pub use assembly::{source_sentences_to_srt, source_sentences_to_txt};
+pub use assembly::source_sentences_to_srt;
 pub use types::{
     BoundaryDecisionKind, SentenceBoundaryRequest, SourceSentence,
     SourceSentenceStep2 as SourceSentences,
@@ -48,7 +48,8 @@ pub use types::{
 // The karaoke renderer has to place a hard space exactly where the cue text has
 // a space, so it reads the same decision `join_words` is made of. Exposed
 // crate-wide rather than public: it is an answer about *these* words, not a
-// promise to anyone outside.
+// promise to anyone outside. TXT reads `join_words` too (`crate::txt`), for
+// the same reason: one space rule for cue text and for transcript words.
 pub(crate) use util::{join_words, spacing_pieces};
 // 排版和字幕美化都要问「这个字属不属于不空格的书写系统」。美化在汉字和
 // 英文、数字之间插空格，用的是同一份范围，避免两处各写一遍。

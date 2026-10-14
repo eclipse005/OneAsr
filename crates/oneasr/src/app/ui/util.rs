@@ -39,9 +39,10 @@ pub(crate) fn saved_tale(secs: f64, lang: UiLang) -> Option<&'static str> {
     }
 }
 
-/// Sentence/line count from an exported subtitle file: SRT cue blocks are
-/// bare index lines, TXT is one non-empty line per sentence — both come
-/// from the same sentence list, so either file yields the same number.
+/// Line count from an exported deliverable: SRT cue blocks are bare index
+/// lines, TXT is one non-empty line per sentence. They are counted
+/// independently — TXT is no longer derived from the subtitle cues, so the two
+/// numbers legitimately differ.
 /// 0 when the file cannot be read: the ledger tolerates gaps, never invents.
 pub(crate) fn count_output_lines(path: &std::path::Path) -> u32 {
     let Ok(text) = std::fs::read_to_string(path) else {

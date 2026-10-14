@@ -3,8 +3,10 @@
 //!
 //! The ASR transcript itself is never rewritten: alignment, punctuation
 //! restore, and sentence boundary all run on the raw model output. Conversion
-//! happens on the finished subtitle text, right before SRT / TXT assembly, so
-//! word timings cannot move. See [`convert_sentences`].
+//! happens on the finished subtitle text, right before SRT / ASS assembly, so
+//! word timings cannot move. See [`convert_sentences`]. TXT is not aligned and
+//! stays out of the timeline: its chunks are converted by [`convert`] before
+//! sentence splitting ([`crate::txt`]).
 //!
 //! [`TextScript::Original`] is the product default: a subtitle tool should not
 //! silently re-write what the model heard unless the user asks for it.

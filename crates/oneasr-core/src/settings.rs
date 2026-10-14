@@ -116,7 +116,9 @@ pub struct Settings {
     /// Write finished `.srt` files. At least one of SRT / TXT stays on.
     #[serde(default = "default_output_srt")]
     pub output_srt: bool,
-    /// Write a plain-text `.txt` transcript (one cue per line, no timestamps).
+    /// Write a plain-text `.txt` transcript: one sentence per line, split on
+    /// sentence punctuation. Never derived from the subtitle timeline — see
+    /// [`crate::txt`].
     #[serde(default)]
     pub output_txt: bool,
     /// Write a karaoke `.ass`: the same cues, a colour sweep per aligned unit.
@@ -766,9 +768,16 @@ impl Settings {
     }
 
     /// True when ASR + Aligner model dirs look complete enough to load.
+    ///
+    /// The aligner is only required when a **timed** format is on. TXT is built
+    /// from the text alone (`crate::txt`), so a TXT-only task must not be forced
+    /// to download a checkpoint whose output nothing consumes.
     pub fn can_start(&self) -> Result<(), String> {
         crate::asr::check_asr_model_dir(&self.asr_model_dir).map_err(|e| e.to_string())?;
-        crate::asr::check_aligner_model_dir(&self.aligner_model_dir).map_err(|e| e.to_string())?;
+        if self.output_srt || self.output_ass {
+            crate::asr::check_aligner_model_dir(&self.aligner_model_dir)
+                .map_err(|e| e.to_string())?;
+        }
         if self.vocal_separation {
             crate::asr::check_demucs_model_dir(&self.resolved_demucs_model_dir())
                 .map_err(|e| e.to_string())?;

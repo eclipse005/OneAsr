@@ -22,6 +22,7 @@ pub mod subtitle;
 pub mod text_script;
 pub mod timeline;
 pub mod transcript;
+pub mod txt;
 pub mod vad;
 
 pub use asr::{

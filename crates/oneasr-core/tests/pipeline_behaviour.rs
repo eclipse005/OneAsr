@@ -172,6 +172,19 @@ fn tokens() -> Vec<AlignedToken> {
     ]
 }
 
+/// One aligned token per character — enough structure for the subtitle DP to
+/// lay out an unpunctuated sentence, without having to hand-count timings.
+fn long_tokens(text: &str) -> Vec<AlignedToken> {
+    text.chars()
+        .enumerate()
+        .map(|(i, c)| AlignedToken {
+            text: c.to_string(),
+            start_sec: i as f64 * 0.30,
+            end_sec: i as f64 * 0.30 + 0.25,
+        })
+        .collect()
+}
+
 #[test]
 fn engines_are_used_one_at_a_time() {
     let run = Run::new("one_at_a_time", false);
@@ -277,6 +290,160 @@ fn txt_only_writes_no_srt() {
         !run.app_root.join("output/sample.srt").exists(),
         "SRT must not be written when it is switched off"
     );
+}
+
+/// TXT 不带时间轴，所以只勾 TXT 的任务根本不碰对齐器：引擎生命周期里没有
+/// 它的加载与对齐，阶段列表里也没有那两个标签。
+#[test]
+fn txt_only_never_touches_the_aligner() {
+    let mut run = Run::new("txt_no_align", false);
+    run.settings.output_srt = false;
+    run.settings.output_txt = true;
+    let provider = FakeProvider::new("你好世界。", tokens());
+    let (stages, result) = run.run(&provider);
+    result.expect("pipeline should succeed");
+
+    assert_eq!(
+        provider.log().entries(),
+        vec!["asr.load", "asr.transcribe", "asr.drop"],
+        "TXT-only must not load or run the aligner"
+    );
+    assert!(
+        provider.align_inputs().is_empty(),
+        "nothing should have been aligned: {:?}",
+        provider.align_inputs()
+    );
+    for stage in [
+        oneasr_core::AsrStage::LoadingAligner,
+        oneasr_core::AsrStage::Aligning,
+    ] {
+        assert!(
+            !stages.iter().any(|s| s.stage == stage),
+            "{stage:?} must not be reported on a TXT-only run"
+        );
+    }
+}
+
+/// TXT-only 连对齐模型都不校验：把它指向一个空目录，任务照样跑完。
+#[test]
+fn txt_only_does_not_require_the_aligner_model() {
+    let mut run = Run::new("txt_no_align_model", false);
+    run.settings.output_srt = false;
+    run.settings.output_txt = true;
+    // A path that exists but holds none of the files `check_aligner_model_dir`
+    // asks for — the check must not even be attempted.
+    let bogus = run.app_root.join("models").join("aligner-absent");
+    std::fs::create_dir_all(&bogus).unwrap();
+    run.settings.aligner_model_dir = bogus;
+    assert!(
+        run.settings.can_start().is_ok(),
+        "TXT-only must not require the aligner model"
+    );
+
+    let provider = FakeProvider::new("你好世界。", tokens());
+    let (_stages, result) = run.run(&provider);
+    let txt = result.expect("pipeline should succeed without an aligner model");
+    assert_eq!(std::fs::read_to_string(&txt).unwrap(), "你好世界。\n");
+}
+
+/// CLI 的默认形状 `--txt --no-srt` 仍写 timeline 侧车，所以对齐器是需要的。
+/// 缺对齐模型必须在任何昂贵阶段（转码 / VAD / ASR）之前报出来，而不是等
+/// 识别跑完才在打轴阶段失败——那是明显的 UX 回退。
+#[test]
+fn txt_with_timeline_checks_the_aligner_before_any_stage() {
+    let mut run = Run::new("txt_timeline_no_aligner", false);
+    run.settings.output_srt = false;
+    run.settings.output_txt = true;
+    let bogus = run.app_root.join("models").join("aligner-absent");
+    std::fs::create_dir_all(&bogus).unwrap();
+    run.settings.aligner_model_dir = bogus;
+
+    let provider = FakeProvider::new("你好世界。", tokens());
+    let (stages, result) = run.run_with_export(
+        &provider,
+        ProcessExportOptions {
+            words_json: None,
+            timeline_json: true,
+        },
+    );
+
+    let err = result.expect_err("缺对齐模型必须立即失败");
+    assert!(err.contains("不完整"), "{err}");
+    assert!(
+        provider.log().entries().is_empty(),
+        "失败必须发生在任何引擎加载之前: {:?}",
+        provider.log().entries()
+    );
+    assert!(stages.is_empty(), "失败必须发生在任何阶段之前: {stages:?}");
+}
+
+/// 文稿路径永远要打轴，它的对齐器校验同样提前：缺模型连转码都不开始。
+#[test]
+fn transcript_matching_checks_the_aligner_before_any_stage() {
+    let mut run = Run::new("transcript_no_aligner", false);
+    let bogus = run.app_root.join("models").join("aligner-absent");
+    std::fs::create_dir_all(&bogus).unwrap();
+    run.settings.aligner_model_dir = bogus;
+
+    let provider = FakeProvider::new("你好世界。", tokens());
+    let (stages, result) = run.run_with_transcript(&provider, "你好世界。");
+
+    let err = result.expect_err("缺对齐模型必须立即失败");
+    assert!(err.contains("不完整"), "{err}");
+    assert!(
+        provider.log().entries().is_empty(),
+        "失败必须发生在任何引擎加载之前: {:?}",
+        provider.log().entries()
+    );
+    assert!(stages.is_empty(), "失败必须发生在任何阶段之前: {stages:?}");
+}
+
+/// 同一段文字：字幕按 22 字切成多条，TXT 一行到底。
+///
+/// 这条是 TXT 与字幕分家的正面证据 —— 两边不再共用一套断行。
+#[test]
+fn txt_lines_are_sentences_not_subtitle_cues() {
+    let spoken = "这是一个很长的句子里面一个标点都没有所以字幕会把它切成好几段但是纯文本只要一行";
+    assert!(
+        spoken.chars().count() > 22,
+        "样本要长过字幕行长上限才有意义"
+    );
+
+    let mut run = Run::new("txt_vs_cue", false);
+    run.settings.output_srt = true;
+    run.settings.output_txt = true;
+    let provider = FakeProvider::new(spoken, long_tokens(spoken));
+    let (_stages, result) = run.run(&provider);
+    result.expect("pipeline should succeed");
+
+    let txt = std::fs::read_to_string(run.app_root.join("output/sample.txt")).unwrap();
+    assert_eq!(
+        txt.lines().count(),
+        1,
+        "无标点的长句在 TXT 里必须只有一行：{txt}"
+    );
+    assert_eq!(txt, format!("{spoken}\n"));
+
+    // 同一段文字进了字幕就是多条 cue：两边确实各走各的。
+    let srt = std::fs::read_to_string(run.app_root.join("output/sample.srt")).unwrap();
+    assert!(
+        srt.matches("-->").count() > 1,
+        "字幕应当切成多条 cue：{srt}"
+    );
+}
+
+/// 同时选 TXT 与 SRT 时，TXT 仍然按句末标点断，不因为有字幕就改口径。
+#[test]
+fn txt_keeps_punctuation_split_alongside_srt() {
+    let mut run = Run::new("txt_with_srt", false);
+    run.settings.output_srt = true;
+    run.settings.output_txt = true;
+    let provider = FakeProvider::new("第一句。第二句。", tokens());
+    let (_stages, result) = run.run(&provider);
+    result.expect("pipeline should succeed");
+
+    let txt = std::fs::read_to_string(run.app_root.join("output/sample.txt")).unwrap();
+    assert_eq!(txt, "第一句。\n第二句。\n");
 }
 
 #[test]

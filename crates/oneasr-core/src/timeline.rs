@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sentence_boundary::{
     SentenceBoundaryRequest, SourceSentences, WordTokenDto, build_sentences_from_transcript,
-    build_source_sentences_from_words, source_sentences_to_srt, source_sentences_to_txt,
+    build_source_sentences_from_words, source_sentences_to_srt,
 };
 use crate::subtitle::ass::KaraokeStyle;
 use crate::subtitle::segmenter::WordToken;
@@ -254,7 +254,6 @@ pub struct RenderOptions {
     pub transcript: Option<String>,
     /// `None` = do not produce this format.
     pub srt: bool,
-    pub txt: bool,
     /// Karaoke ASS: the same cues, a sweep per aligned unit.
     pub ass: bool,
     /// 成稿字幕美化。不看语言选项：每一句按自己的字符决定改不改标点、补不补空格。
@@ -263,10 +262,12 @@ pub struct RenderOptions {
 }
 
 /// The presented subtitle, and the sentences it came from.
+///
+/// TXT is deliberately absent: it is not a subtitle without timestamps, it is
+/// built straight from the text by [`crate::txt`] and never enters this path.
 pub struct Rendered {
     pub sentences: SourceSentences,
     pub srt: Option<String>,
-    pub txt: Option<String>,
     pub ass: Option<String>,
 }
 
@@ -325,7 +326,6 @@ pub fn render(timeline: &Timeline, opts: &RenderOptions) -> Result<Rendered, Str
 
     Ok(Rendered {
         srt: opts.srt.then(|| source_sentences_to_srt(&sentences)),
-        txt: opts.txt.then(|| source_sentences_to_txt(&sentences)),
         ass: opts.ass.then(|| {
             crate::subtitle::ass::to_ass_with(&sentences, &KaraokeStyle::default(), opts.beautify)
         }),
@@ -364,7 +364,6 @@ mod tests {
             transcript: None,
             script: TextScript::Original,
             srt: true,
-            txt: true,
             ass: false,
             beautify: false,
         }
@@ -489,7 +488,6 @@ mod tests {
             "字幕里的每个字都必须来自对齐结果"
         );
         assert!(rendered.srt.as_deref().is_some_and(|s| !s.is_empty()));
-        assert!(rendered.txt.as_deref().is_some_and(|t| !t.is_empty()));
     }
 
     /// Phase B is a pure function: the same timeline and the same options give
@@ -510,16 +508,15 @@ mod tests {
         let a = render(&tl, &all_options()).unwrap();
         let b = render(&tl, &all_options()).unwrap();
         assert_eq!(a.srt, b.srt);
-        assert_eq!(a.txt, b.txt);
+        assert_eq!(a.ass, b.ass);
 
         // Asking for no format at all is legal and empty, not an error.
         let none = RenderOptions {
             srt: false,
-            txt: false,
             ..all_options()
         };
         let empty = render(&tl, &none).unwrap();
-        assert!(empty.srt.is_none() && empty.txt.is_none());
+        assert!(empty.srt.is_none() && empty.ass.is_none());
     }
 
     /// Changing the segment length changes the presentation, not the words.

@@ -62,9 +62,9 @@ pub struct StatsRecord {
     #[serde(default)]
     pub transcript: bool,
     pub ok: bool,
-    /// Sentence count of the exported subtitle. SRT cues and TXT lines both
-    /// derive from the same sentence list, so one number covers either format
-    /// (and both at once — counted once per task, not per file).
+    /// Line count of the primary deliverable. SRT cues and TXT sentences count
+    /// the same way — the caller counts lines in whichever file the run
+    /// produced, so the two no longer need a shared sentence list to agree.
     /// `0` when it could not be counted; the ledger tolerates gaps.
     #[serde(default)]
     pub cues: u32,

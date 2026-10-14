@@ -1,11 +1,15 @@
-//! ASR pipeline: prepare → VAD → transcribe → align → export.
+//! ASR pipeline: prepare → VAD → transcribe → [align] → export.
 //!
 //! ```text
 //! [optional vocal separation] → 16 kHz master
 //! load ASR once → all VAD chunks transcribed → unload ASR
-//! load Aligner once → all chunks aligned → unload Aligner
-//! word normalize → sentence_boundary → SRT / TXT
+//! load Aligner once → all chunks aligned → unload Aligner      ← 只有需要时间轴时才走
+//! word normalize → sentence_boundary → SRT / ASS
+//! text → 句末标点断句 → TXT                                   ← 不吃时间轴
 //! ```
+//!
+//! 打轴只在 SRT / ASS（或 CLI 的词级 sidecar）真的要产出时才有消费者；只勾
+//! TXT 的任务连对齐模型都不校验。见 [`crate::txt`]。
 //!
 //! Never keeps ASR and Aligner in VRAM at the same time. Engines come from a
 //! [`crate::engine::EngineProvider`], so this module states the policy
@@ -46,6 +50,7 @@ use crate::paths::media_stem;
 use crate::settings::Settings;
 use crate::subtitle::segmenter::{WordToken, normalize_word_tokens};
 use crate::timeline::{self, RenderOptions, Timeline};
+use crate::txt;
 use crate::vad;
 
 #[derive(Debug)]
@@ -59,6 +64,10 @@ pub enum AsrError {
     /// Transcript matching needs an output format that can store timecodes.
     TranscriptRequiresTimedOutput,
     EmptySentenceBoundary,
+    /// TXT-only export found no text to write. Unlike [`Self::EmptySentenceBoundary`]
+    /// this is not about subtitles: the TXT path has no sentence boundary or
+    /// timeline, so an empty body means the transcription itself was empty.
+    EmptyTxtBody,
     LoadAsr(String),
     LoadAligner(String),
     TranscribeChunk(usize, String),
@@ -99,6 +108,7 @@ impl fmt::Display for AsrError {
             Self::EmptySentenceBoundary => {
                 write!(f, "{}", t(i18n::ERR_EMPTY_SENTENCE_BOUNDARY))
             }
+            Self::EmptyTxtBody => write!(f, "{}", t(i18n::ERR_EMPTY_TXT_BODY)),
             Self::LoadAsr(e) => write!(f, "{}", i18n::load_asr_failed(e)),
             Self::LoadAligner(e) => write!(f, "{}", i18n::load_aligner_failed(e)),
             Self::TranscribeChunk(i, e) => write!(f, "{}", i18n::transcribe_chunk(*i, e)),
@@ -380,7 +390,10 @@ pub struct ProcessExportOptions {
     pub timeline_json: bool,
 }
 
-/// Full pipeline: convert → VAD plan → ASR all → unload → align all → SRT.
+/// Full pipeline: convert → VAD plan → ASR all → unload → [align all] → export.
+///
+/// The align stage runs only when something consumes the timeline — see
+/// [`needs_alignment`]. TXT is built from the text alone either way.
 ///
 /// `data_root` 是**数据目录**（`crate::paths::data_dir()`）：本次运行的临时目录
 /// 开在它下面。调用方传入而不是在这里重新解析，测试才能塞一个 scratch 目录。
@@ -536,6 +549,18 @@ struct VadPlan {
     multi_chunk: bool,
 }
 
+/// 打轴只在**时间轴真的要被写出去**时才跑。
+///
+/// TXT 不吃时间轴（见 [`crate::txt`]），所以只勾 TXT 的任务连对齐模型都不用校验：
+/// 打轴产物在这条路上没有任何消费者。CLI 的 words-json / timeline sidecar 是例外
+/// ——它们要的正是测量结果。
+fn needs_alignment(settings: &Settings, export: &ProcessExportOptions) -> bool {
+    settings.output_srt
+        || settings.output_ass
+        || export.words_json.is_some()
+        || export.timeline_json
+}
+
 /// Completed ASR transcription result.
 struct AsrOutput {
     transcripts: Vec<ChunkTranscript>,
@@ -544,6 +569,17 @@ struct AsrOutput {
 /// Completed ForcedAligner result.
 struct AlignOutput {
     words: Vec<WordToken>,
+}
+
+/// 呈现阶段需要的输入。与 [`AlignOutput`] 分开是因为**TXT 完全不看它**——
+/// 那部分输入在只勾 TXT 时甚至不需要生成。
+struct ExportInput<'a> {
+    input: &'a Path,
+    media_name: &'a str,
+    speech_segments: Vec<(f64, f64)>,
+    transcript: Option<&'a TranscriptInput>,
+    /// TXT 正文，已按句末标点断好句（见 [`crate::txt`]）。与字幕格式无关。
+    txt_body: Option<String>,
 }
 
 /// 线程安全的进度出口。
@@ -605,11 +641,63 @@ impl<'a> Pipeline<'a> {
         data_root: &Path,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
+        // 需要对齐产物的运行先确认模型在：转码、VAD、ASR 都可能很贵，缺模型
+        // 不该等它们跑完才报。TXT-only（无字幕、无侧车）不经过这里，所以它
+        // 仍然可以不装对齐器。
+        if needs_alignment(self.settings, &export) {
+            check_aligner_model_dir(&self.settings.aligner_model_dir)?;
+        }
         let conv = self.stage_prepare(input, data_root)?;
         let vad = self.stage_vad_plan(&conv)?;
         let asr = self.stage_transcribe_all(&conv, &vad)?;
+        let txt_body = self.txt_body(&asr);
+        if !needs_alignment(self.settings, &export) {
+            return self.stage_export_txt_only(input, media_name, txt_body);
+        }
         let align = self.stage_align_all(&conv, &vad, &asr)?;
-        self.stage_export(input, media_name, vad.speech_segments, None, align, export)
+        self.stage_export(
+            ExportInput {
+                input,
+                media_name,
+                speech_segments: vad.speech_segments,
+                transcript: None,
+                txt_body,
+            },
+            align,
+            export,
+        )
+    }
+
+    /// TXT 正文：**纯句末标点断句**，与打轴无关（见 [`crate::txt`]）。
+    fn txt_body(&self, asr: &AsrOutput) -> Option<String> {
+        if !self.settings.output_txt {
+            return None;
+        }
+        Some(txt::body_from_chunks(
+            asr.transcripts.iter().map(|t| t.text.as_str()),
+            self.settings
+                .text_script_for(&to_lang_key(&self.settings.language))
+                .unwrap_or(crate::text_script::TextScript::Original),
+        ))
+    }
+
+    /// TXT-only 的出口：不加载对齐器、不建时间轴，只把断好句的正文落盘。
+    fn stage_export_txt_only(
+        &self,
+        input: &Path,
+        media_name: &str,
+        txt_body: Option<String>,
+    ) -> Result<PathBuf, AsrError> {
+        self.emit(StageUpdate::new(AsrStage::Exporting));
+        let body = txt_body.ok_or_else(|| AsrError::Other(t(i18n::ERR_NO_OUTPUT_FORMAT).into()))?;
+        if body.trim().is_empty() {
+            // 这里没有「断句」可怪：TXT 走的是纯文本路，空就是转写本身没有字。
+            return Err(AsrError::EmptyTxtBody);
+        }
+        let fallback_dir = self.settings.resolved_output_dir();
+        let target_dir = self.settings.srt_target_dir(input);
+        let stem = media_stem(Path::new(media_name));
+        write_export_file(&target_dir, &fallback_dir, &stem, "txt", &body)
     }
     /// 文稿匹配：转码 → [人声分离] → **打轴整段文稿** → 呈现。
     ///
@@ -634,15 +722,27 @@ impl<'a> Pipeline<'a> {
         if transcript.text.trim().is_empty() {
             return Err(AsrError::EmptyTranscript);
         }
+        // 文稿路径永远要打轴，模型校验同样提前到转码之前；
+        // `stage_align_transcript` 里的原检查保留作防御。
+        check_aligner_model_dir(&self.settings.aligner_model_dir)?;
         let conv = self.stage_prepare(input, data_root)?;
         let align = self.stage_align_transcript(&conv, &transcript.text)?;
+        // TXT 同样是纯标点断句。文稿是用户自己写的，所以不做简繁转换——
+        // 与 SRT/ASS 那条「机器不碰你的字」的口径一致。
+        let txt_body = self
+            .settings
+            .output_txt
+            .then(|| txt::body(&transcript.text));
         // 文稿模式没有 VAD：speech segments 只喂给排版 DP 算间隔，而文稿分行
         // 根本不跑那个 DP。
         self.stage_export(
-            input,
-            media_name,
-            Vec::new(),
-            Some(transcript),
+            ExportInput {
+                input,
+                media_name,
+                speech_segments: Vec::new(),
+                transcript: Some(transcript),
+                txt_body,
+            },
             align,
             export,
         )
@@ -1082,13 +1182,17 @@ impl<'a> Pipeline<'a> {
     /// keep the timeline in memory and do not leave a sidecar behind.
     fn stage_export(
         &self,
-        input: &Path,
-        media_name: &str,
-        speech_segments: Vec<(f64, f64)>,
-        transcript: Option<&TranscriptInput>,
+        src: ExportInput<'_>,
         align: AlignOutput,
         export: ProcessExportOptions,
     ) -> Result<PathBuf, AsrError> {
+        let ExportInput {
+            input,
+            media_name,
+            speech_segments,
+            transcript,
+            txt_body,
+        } = src;
         let stem = media_stem(Path::new(media_name));
         self.emit(StageUpdate::new(AsrStage::Exporting));
 
@@ -1122,20 +1226,21 @@ impl<'a> Pipeline<'a> {
                     .text_script_for(&source_lang_key)
                     .unwrap_or(crate::text_script::TextScript::Original),
                 srt: self.settings.output_srt,
-                txt: self.settings.output_txt,
                 ass: self.settings.output_ass,
                 beautify: self.settings.subtitle_beautify,
             },
         )
         .map_err(AsrError::Other)?;
         let srt_body = rendered.srt;
-        let txt_body = rendered.txt;
         let ass_body = rendered.ass;
         if srt_body.as_deref().is_some_and(|b| b.trim().is_empty())
-            || txt_body.as_deref().is_some_and(|b| b.trim().is_empty())
             || ass_body.as_deref().is_some_and(|b| b.trim().is_empty())
         {
             return Err(AsrError::EmptySentenceBoundary);
+        }
+        // TXT 不过断句-字幕那条链：「断句后字幕为空」对它是错的说法。
+        if txt_body.as_deref().is_some_and(|b| b.trim().is_empty()) {
+            return Err(AsrError::EmptyTxtBody);
         }
 
         // Primary target: next to the source media when enabled; fall back to
@@ -1228,6 +1333,74 @@ mod tests {
         assert_eq!(output_stem("clip", None), "clip");
         assert_eq!(output_stem("clip", Some(&transcript)), "clip.aligned");
     }
+    /// TXT-only 的空结果有自己的成对文案，不冒充「断句后字幕为空」。
+    #[test]
+    fn empty_txt_body_message_is_bilingual_and_not_about_subtitles() {
+        for (lang, expected) in [
+            (UiLang::Zh, i18n::ERR_EMPTY_TXT_BODY.zh),
+            (UiLang::En, i18n::ERR_EMPTY_TXT_BODY.en),
+        ] {
+            crate::i18n::with_ui_lang(lang, || {
+                assert_eq!(AsrError::EmptyTxtBody.to_string(), expected);
+            });
+        }
+        assert_ne!(
+            i18n::ERR_EMPTY_TXT_BODY.zh,
+            i18n::ERR_EMPTY_SENTENCE_BOUNDARY.zh
+        );
+        assert_ne!(
+            i18n::ERR_EMPTY_TXT_BODY.en,
+            i18n::ERR_EMPTY_SENTENCE_BOUNDARY.en
+        );
+    }
+
+    /// TXT-only 的空正文在出口处返回 `EmptyTxtBody`，而不是伪装成字幕空。
+    /// 文案由上面那条双语测试盖；这条盖的是守卫 → 变体的映射。
+    #[test]
+    fn txt_only_empty_body_returns_empty_txt_body_error() {
+        let settings = Settings::default();
+        let provider = crate::engine::testing::FakeProvider::new("", Vec::new());
+        let pipeline = Pipeline::new(&settings, &provider, |_| {});
+        let err = pipeline
+            .stage_export_txt_only(Path::new("clip.mp4"), "clip.mp4", Some(String::new()))
+            .expect_err("空 TXT 正文必须报错");
+        assert!(matches!(err, AsrError::EmptyTxtBody), "{err:?}");
+    }
+
+    /// 混合导出里 TXT 为空的那支同样返回 `EmptyTxtBody`（只有字幕空才报
+    /// 「断句后字幕为空」）。
+    #[test]
+    fn mixed_export_empty_txt_body_returns_empty_txt_body_error() {
+        let settings = Settings {
+            output_srt: false,
+            output_ass: false,
+            output_txt: true,
+            ..Settings::default()
+        };
+        let provider = crate::engine::testing::FakeProvider::new("", Vec::new());
+        let pipeline = Pipeline::new(&settings, &provider, |_| {});
+        let err = pipeline
+            .stage_export(
+                ExportInput {
+                    input: Path::new("clip.mp4"),
+                    media_name: "clip.mp4",
+                    speech_segments: Vec::new(),
+                    transcript: None,
+                    txt_body: Some(String::new()),
+                },
+                AlignOutput {
+                    words: vec![WordToken {
+                        start: 0.0,
+                        end: 1.0,
+                        word: "你好".into(),
+                    }],
+                },
+                ProcessExportOptions::default(),
+            )
+            .expect_err("空 TXT 正文必须报错");
+        assert!(matches!(err, AsrError::EmptyTxtBody), "{err:?}");
+    }
+
     #[test]
     fn output_path_uses_stem() {
         let out = Path::new("Install").join("OneAsr").join("output");

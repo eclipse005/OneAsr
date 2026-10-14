@@ -93,7 +93,8 @@ ja 假名（含拗音/促音/长音）、ko 谚文、全角标点、数字：**�
 
 ## 3. 与 OneAsr 管线的兼容性
 
-管线：`convert → VAD → ASR(Qwen) → align → normalize_word_tokens → sentence_boundary → SRT/TXT`。
+管线：`convert → VAD → ASR(Qwen) → align → normalize_word_tokens → sentence_boundary → SRT/ASS`；
+TXT 不吃对齐，直接由 ASR 文本按句末标点断句产出（`ASR 文本 → 纯标点断句 → TXT`）。
 
 **集成后对齐逻辑与 Qwen 完全一致**（逐块对齐、块偏移、退化回退），仅两处分发：
 标点恢复只走 Qwen 路径；CTC 适配器在每次 `align()` 前重置 GPU scratch（见下）。
@@ -102,7 +103,7 @@ ja 假名（含拗音/促音/长音）、ko 谚文、全角标点、数字：**�
 |---|---|
 | `Aligner` port（engine trait） | 签名不变；新 adapter 忽略 `language`，tokens 1:1 映射 |
 | `attach_transcript_punctuation` | **仅 Qwen 路径需要**（CTC token 原生带标点），按所选模型分发 |
-| `normalize_word_tokens` / 断句 / SRT / TXT / words_json | **零改动**（输出形态同构已验证） |
+| `normalize_word_tokens` / 断句 / SRT / ASS / words_json | **零改动**（输出形态同构已验证；TXT 不经这条链） |
 | `MIN_ALIGN_SEC` / `has_alignable_word` 退化路径 | 两条路径一致保留 |
 | 后端选择 | CTC crate 自带同款 `DeviceSelector`；已接入 `ONEASR_DEVICE` |
 | words_json | schema 不变；可选增加 `score`/`inferred` 字段（见 §5） |

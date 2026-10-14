@@ -110,6 +110,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let want_txt = flag(args, "--txt");
     let want_ass = flag(args, "--ass");
     let no_srt = flag(args, "--no-srt");
+    let no_timeline = flag(args, "--no-timeline");
     let script = arg(args, "--script");
     let vocal_separation = flag(args, "--vocal-separation");
     let demucs_model_dir = arg(args, "--demucs-model-dir").map(PathBuf::from);
@@ -203,7 +204,10 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let t0 = Instant::now();
     let export = ProcessExportOptions {
         words_json: words_json.clone(),
-        timeline_json: true,
+        // The sidecar is what makes `render` possible, so it stays on by default.
+        // `--no-timeline` drops it — and with it the only reason a TXT-only run
+        // would need the aligner at all (see `needs_alignment`).
+        timeline_json: !no_timeline,
     };
     let result = process_media_file_with_export(
         &input_path,
@@ -380,6 +384,15 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     Ok(())
 }
 
+/// `render` 的 TXT 出口：已渲染的句子列表 → 纯文本正文。
+///
+/// 单独成函数，是为了让「句子 → TXT」这一步能被单测钉住（见文件末尾的
+/// `rendered_txt_body_keeps_english_sentences_separate`）：接线退回先
+/// `join("")` 再断句时，英文句子会粘成一行。
+fn rendered_txt_body(sentences: &[oneasr_core::sentence_boundary::SourceSentence]) -> String {
+    oneasr_core::txt::body_from_parts(sentences.iter().map(|s| s.text.as_str()))
+}
+
 /// `render` — Phase B on its own: present a measured timeline again, with no
 /// model, no ffmpeg and no audio in sight.
 ///
@@ -455,7 +468,6 @@ fn cmd_render(args: &[String]) -> Result<(), i32> {
             transcript,
             script,
             srt: want_srt,
-            txt: want_txt,
             ass: want_ass,
             beautify: false,
         },
@@ -475,9 +487,13 @@ fn cmd_render(args: &[String]) -> Result<(), i32> {
     let stem = stem.strip_suffix(".timeline").unwrap_or(&stem);
 
     let mut wrote_any = false;
+    // TXT 不进字幕渲染：它只由文字按句末标点断行产出（`oneasr_core::txt`），
+    // 与 SRT/ASS 是否同时产出无关。句子文本先按同一套空格规则拼接再整体断句
+    // ——`join("")` 会把 "Hello world." 与下一句粘成一行。
+    let txt_body = want_txt.then(|| rendered_txt_body(&rendered.sentences.translation_sentences));
     for (body, ext) in [
         (&rendered.srt, "srt"),
-        (&rendered.txt, "txt"),
+        (&txt_body, "txt"),
         (&rendered.ass, "ass"),
     ] {
         let Some(body) = body.as_deref() else {
@@ -812,4 +828,39 @@ fn require_arg(args: &[String], name: &str) -> Result<String, i32> {
 
 fn is_help(s: &str) -> bool {
     matches!(s, "--help" | "-h" | "help")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oneasr_core::sentence_boundary::SourceSentence;
+
+    fn sentence(id: usize, text: &str) -> SourceSentence {
+        SourceSentence {
+            sentence_id: id,
+            start_ms: id as u64 * 1000,
+            end_ms: id as u64 * 1000 + 900,
+            text: text.to_string(),
+            word_start: 0,
+            word_end: 1,
+            chunk_start: 0,
+            chunk_end: 1,
+        }
+    }
+
+    /// `render` 的三条英文句子各占一行。接线若退回先 `join("")` 再断句，
+    /// 三条会粘成一行，这条测试会红——它守的是 cmd_render 的接线，不只是
+    /// `body_from_parts` 本身。
+    #[test]
+    fn rendered_txt_body_keeps_english_sentences_separate() {
+        let sentences = [
+            sentence(1, "Hello world."),
+            sentence(2, "Second sentence."),
+            sentence(3, "Third one."),
+        ];
+        assert_eq!(
+            rendered_txt_body(&sentences),
+            "Hello world.\nSecond sentence.\nThird one.\n"
+        );
+    }
 }
