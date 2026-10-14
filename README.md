@@ -52,7 +52,7 @@ Current version **[v1.2.5](https://github.com/eclipse005/OneAsr/releases/tag/v1.
 ## Quick start
 
 1. Run the app (`oneasr.exe` on Windows, `oneasr` on Linux / macOS)
-2. **Settings** → download the **ASR** model (0.6B recommended first) + an **aligner** (required)
+2. **Settings** → download the **ASR** model (0.6B recommended first) + an **aligner** (required for SRT / ASS; a TXT-only run does not need it)
 3. Pick the source language → add audio/video → Start
 4. Grab the matching `.srt` from the output folder
 5. Already have a verified script? Pick it together with the media and Start — recognition is skipped and your lines are aligned directly (output: `video.aligned.srt`; enable SRT or ASS in Settings first)
@@ -77,6 +77,7 @@ Main window (empty state) and the task list + settings drawer (same window size,
 - **11 source languages**: 中文普通话, English, 粤语, 日本語, 한국어, Français, Deutsch, Italiano, Español, Português, Русский (set manually per task; no auto-detection)
 - **Two ASR sizes**: 0.6B (faster / less VRAM) · 1.7B (more accurate / more resources)
 - **Output options**: SRT / ASS / TXT, in any combination; saved next to the video by default
+- **Transcribe only**: tick TXT alone (no SRT / ASS) and the task stops at transcription — one sentence per line, cut on sentence punctuation; an aligner model is not needed at all
 - **Chinese script choice**: original / Simplified / Traditional (Chinese & Cantonese only; timing is unaffected)
 - **Vocal separation (optional)**: built-in HTDemucs v4 strips BGM / noise before transcribing
 - **GPU acceleration**: NVIDIA / AMD / Intel / Apple Silicon; falls back to CPU automatically when no discrete GPU is present
