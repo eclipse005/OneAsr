@@ -583,6 +583,7 @@ transcribe options:
   --language <code>        zh|en|yue|ja|ko|...  (default: zh)
   --chunk-seconds <30-180> VAD chunk target (default: 60)
   --backend <gpu|cpu|auto> Default: auto (GPU if a driver is present, else CPU)
+  --asr <0.6b|1.7b>         Recognition model (default: scan installed dirs, fp16 before int8)
   --aligner <ctc|qwen>     Forced-aligner engine (default: scan CTC first, then Qwen)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy the primary result (SRT, else TXT) to this path
@@ -605,6 +606,7 @@ asr-chunk options:
   --language <code>
   --app-root <dir>
   --data-root <dir>
+  --asr <0.6b|1.7b>         Recognition model (same flag as transcribe)
   --max-new-tokens <n>
   --out <path>             Write ASR text to file
   --backend <gpu|cpu|auto>
@@ -672,6 +674,7 @@ transcribe 选项：
   --language <代码>        zh|en|yue|ja|ko|...（默认 zh）
   --chunk-seconds <30-180> VAD 分段目标时长（默认 60）
   --backend <gpu|cpu|auto> 推理后端，默认 auto（有显卡驱动走 GPU，否则 CPU）
+  --asr <0.6b|1.7b>         识别模型（默认按 0.6B→1.7B、fp16 优先的顺序扫描已装目录）
   --aligner <ctc|qwen>     对齐引擎（默认按 CTC→Qwen 顺序扫描已装目录）
   --max-new-tokens <n>     转写解码上限（默认取设置 / 2048）
   --output <路径>          把主产物（SRT，没有则 TXT）复制到该路径
@@ -693,6 +696,7 @@ asr-chunk 选项：
   --language <代码>
   --app-root <目录>
   --data-root <目录>
+  --asr <0.6b|1.7b>         识别模型（与 transcribe 同一个旗标）
   --max-new-tokens <n>
   --out <路径>             把转写文本写入文件
   --backend <gpu|cpu|auto>
@@ -813,6 +817,15 @@ pub fn cli_aligner_unknown(raw: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("未知的对齐引擎：{raw}（可选 ctc | qwen）"),
         UiLang::En => format!("Unknown aligner engine: {raw} (choose ctc | qwen)"),
+    }
+}
+
+/// `未知的识别模型：{raw}（可选 0.6b | 1.7b）`
+/// / `Unknown ASR model: {raw} (choose 0.6b | 1.7b)`。
+pub fn cli_asr_unknown(raw: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("未知的识别模型：{raw}（可选 0.6b | 1.7b）"),
+        UiLang::En => format!("Unknown ASR model: {raw} (choose 0.6b | 1.7b)"),
     }
 }
 

@@ -142,6 +142,18 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         settings.text_script = s;
     }
     settings.vocal_separation = vocal_separation;
+    // `--asr 0.6b|1.7b|<目录名>`：显式指定只认那一个，否则按 0.6B→1.7B、
+    // fp16 优先的顺序扫描已装目录。与 `--aligner` 同一套优先级。
+    let asr_override = match arg(args, "--asr").as_deref() {
+        None => None,
+        Some(raw) => match parse_asr_arg(raw) {
+            Some(id) => Some(id),
+            None => {
+                eprintln!("{}", i18n::cli_asr_unknown(raw));
+                return Err(2);
+            }
+        },
+    };
     // `--aligner ctc|qwen|<目录名>`：显式指定只认那一个，否则按 CTC→Qwen 扫描。
     let aligner_override = match arg(args, "--aligner").as_deref() {
         None => None,
@@ -153,7 +165,13 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
             }
         },
     };
-    apply_app_root_paths(&mut settings, &app_root, &data_root, aligner_override);
+    apply_app_root_paths(
+        &mut settings,
+        &app_root,
+        &data_root,
+        asr_override,
+        aligner_override,
+    );
     if let Some(dir) = demucs_model_dir {
         settings.demucs_model_dir = dir;
     }
@@ -313,7 +331,18 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
     if let Some(n) = max_new_tokens {
         settings.max_new_tokens = n;
     }
-    apply_app_root_paths(&mut settings, &app_root, &data_root, None);
+    // 与 transcribe 同一个旗标：排查幻觉时能指定型号，才对得上 GUI 那边选的。
+    let asr_override = match arg(args, "--asr").as_deref() {
+        None => None,
+        Some(raw) => match parse_asr_arg(raw) {
+            Some(id) => Some(id),
+            None => {
+                eprintln!("{}", i18n::cli_asr_unknown(raw));
+                return Err(2);
+            }
+        },
+    };
+    apply_app_root_paths(&mut settings, &app_root, &data_root, asr_override, None);
     settings.normalize();
 
     let tmp = env::temp_dir().join(format!(
@@ -557,6 +586,7 @@ fn apply_app_root_paths(
     settings: &mut Settings,
     app_root: &Path,
     data_root: &Path,
+    asr_override: Option<ModelId>,
     aligner_override: Option<ModelId>,
 ) {
     let roots: Vec<&Path> = if data_root == app_root {
@@ -564,39 +594,60 @@ fn apply_app_root_paths(
     } else {
         vec![data_root, app_root]
     };
-    // Bind whichever catalog ASR variant is actually installed under the data
-    // root (fp16 preferred over its int8 sibling); otherwise keep the default
-    // path so the model check reports the missing directory.
-    let candidates = ModelId::ASR_CHOICES
-        .into_iter()
-        .chain([ModelId::Qwen3Asr06BInt8, ModelId::Qwen3Asr17BInt8]);
-    let found = roots.iter().find_map(|root| {
-        let models = root.join("models");
-        candidates
-            .clone()
-            .find(|id| models.join(id.as_str()).is_dir())
-            .map(|id| (models.join(id.as_str()), id))
-    });
-    if let Some((dir, id)) = found {
+    // 显式指定优先，扫描只是兜底 —— 两者对 ASR 与对齐器是同一套规则。
+    //
+    // 关键在「扫不到时怎么办」：不能什么都不做就留着 `Settings::default()`
+    // 里的默认模型路径，那等于**悄悄退回另一个已装的模型**跑（点名 1.7B 却
+    // 跑成 0.6B，最难发现的一种）。所以显式指定时先把「要哪个」钉死，扫不到
+    // 就指向那个确实不存在的目录，让模型检查报「你选的型号没装」。
+    if let Some(id) = asr_override {
         settings.asr_model = id.as_str().into();
-        settings.asr_model_dir = dir;
-    }
-    // 对齐模型：`--aligner` 显式指定只认那一个；否则按 ALIGNER_CHOICES 顺序
-    // （CTC 优先）扫描安装布局，都没有就保留默认路径让模型检查报缺目录。
-    let align_candidates: Vec<ModelId> = match aligner_override {
-        Some(id) => vec![id],
-        None => ModelId::ALIGNER_CHOICES.into_iter().collect(),
-    };
-    let align = roots.iter().find_map(|root| {
-        let models = root.join("models");
-        align_candidates
+        settings.asr_model_dir = roots
             .iter()
-            .find(|id| models.join(id.as_str()).is_dir())
-            .map(|id| (models.join(id.as_str()), *id))
-    });
-    if let Some((dir, id)) = align {
+            .map(|root| root.join("models").join(id.as_str()))
+            .find(|dir| dir.is_dir())
+            .unwrap_or_else(|| roots[0].join("models").join(id.as_str()));
+    } else {
+        // 没指定：按 ASR_CHOICES 顺序（0.6B 先）再带上两个 int8 变体扫描
+        // 安装布局，fp16 优先于 int8。都没有就保留默认路径让模型检查报缺目录。
+        let candidates: Vec<ModelId> = ModelId::ASR_CHOICES
+            .into_iter()
+            .chain([ModelId::Qwen3Asr06BInt8, ModelId::Qwen3Asr17BInt8])
+            .collect();
+        let found = roots.iter().find_map(|root| {
+            let models = root.join("models");
+            candidates
+                .iter()
+                .find(|id| models.join(id.as_str()).is_dir())
+                .map(|id| (models.join(id.as_str()), *id))
+        });
+        if let Some((dir, id)) = found {
+            settings.asr_model = id.as_str().into();
+            settings.asr_model_dir = dir;
+        }
+    }
+    // 对齐模型：与 ASR 同一套优先级 —— `--aligner` 显式指定只认那一个，
+    // 扫不到就指向那个不存在的目录报缺，而不是退回默认的 CTC；没指定才按
+    // ALIGNER_CHOICES 顺序（CTC 优先）扫描安装布局。
+    if let Some(id) = aligner_override {
         settings.aligner_model = id.as_str().into();
-        settings.aligner_model_dir = dir;
+        settings.aligner_model_dir = roots
+            .iter()
+            .map(|root| root.join("models").join(id.as_str()))
+            .find(|dir| dir.is_dir())
+            .unwrap_or_else(|| roots[0].join("models").join(id.as_str()));
+    } else {
+        let found = roots.iter().find_map(|root| {
+            let models = root.join("models");
+            ModelId::ALIGNER_CHOICES
+                .iter()
+                .find(|id| models.join(id.as_str()).is_dir())
+                .map(|id| (models.join(id.as_str()), *id))
+        });
+        if let Some((dir, id)) = found {
+            settings.aligner_model = id.as_str().into();
+            settings.aligner_model_dir = dir;
+        }
     }
     let demucs = roots
         .iter()
@@ -748,6 +799,22 @@ fn parse_aligner_arg(raw: &str) -> Option<ModelId> {
     ModelId::try_parse_aligner(s)
 }
 
+/// `--asr` 旗标值 → 目录 id。接受短别名 `0.6b` / `1.7b` 与完整目录名。
+///
+/// 与 [`parse_aligner_arg`] 一一对应：短别名只是尺寸，落到具体是 fp16 还是
+/// int8 交给目录扫描决定——短别名选中的那个尺寸若两个变体都没装，就不绑定，
+/// 让模型检查报缺目录，而不是悄悄换一个尺寸跑。
+fn parse_asr_arg(raw: &str) -> Option<ModelId> {
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case("0.6b") {
+        return Some(ModelId::Qwen3Asr06B);
+    }
+    if s.eq_ignore_ascii_case("1.7b") {
+        return Some(ModelId::Qwen3Asr17B);
+    }
+    ModelId::try_parse_asr(s)
+}
+
 /// `--data-root`：给了就必须是目录（可以还不存在——第一次运行会在那里建
 /// `models/`）；没给返回 `None`。
 fn data_root_arg(args: &[String]) -> Result<Option<PathBuf>, i32> {
@@ -834,6 +901,103 @@ fn is_help(s: &str) -> bool {
 mod tests {
     use super::*;
     use oneasr_core::sentence_boundary::SourceSentence;
+
+    /// 造一棵带模型的临时数据根。**四个变体全装上** —— 少建一个，
+    /// 「扫描顺序」就测不出来：只装 0.6B-hf 与 1.7B-int8 时把候选顺序反过来，
+    /// 第一个命中的仍然是 0.6B-hf，顺序断言会假绿。
+    fn root_with_all_asr_variants(tag: &str) -> std::path::PathBuf {
+        let root = env::temp_dir().join(format!("oneasr-asr-pick-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for id in [
+            ModelId::Qwen3Asr06B,
+            ModelId::Qwen3Asr17B,
+            ModelId::Qwen3Asr06BInt8,
+            ModelId::Qwen3Asr17BInt8,
+        ] {
+            std::fs::create_dir_all(root.join("models").join(id.as_str())).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn an_explicit_asr_flag_beats_the_installed_scan() {
+        let root = root_with_all_asr_variants("explicit");
+        let mut s = Settings::default();
+        apply_app_root_paths(&mut s, &root, &root, Some(ModelId::Qwen3Asr17BInt8), None);
+        // 断骨锚点：把 `asr_override` 那段 match 改成无条件扫描，这条立刻红。
+        assert_eq!(s.asr_model, ModelId::Qwen3Asr17BInt8.as_str());
+        assert_eq!(
+            s.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr17BInt8.as_str()),
+            "显式指定必须赢过扫描到的 0.6B"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_the_flag_the_installed_scan_still_runs() {
+        let root = root_with_all_asr_variants("scan");
+        let mut s = Settings::default();
+        apply_app_root_paths(&mut s, &root, &root, None, None);
+        // 显式指定之外的兜底没被改掉：ASR_CHOICES 里 0.6B 排在 1.7B 前面，
+        // 两者都装了，所以必须绑 0.6B。断骨锚点：把候选顺序反过来，这条变红。
+        assert_eq!(s.asr_model, ModelId::Qwen3Asr06B.as_str());
+        assert_eq!(
+            s.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr06B.as_str())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_asr_flag_naming_a_size_that_is_not_installed_is_not_silently_swapped() {
+        // 选了 1.7B，但两个变体都没装：宁可不绑定让模型检查报缺目录，
+        // 也不能悄悄换个型号跑——那正是「跑出来的不是我要的」最难发现的一种。
+        let root = root_with_all_asr_variants("missing");
+        for id in [ModelId::Qwen3Asr17B, ModelId::Qwen3Asr17BInt8] {
+            std::fs::remove_dir_all(root.join("models").join(id.as_str())).unwrap();
+        }
+        let mut s = Settings::default();
+        apply_app_root_paths(&mut s, &root, &root, Some(ModelId::Qwen3Asr17B), None);
+        assert_eq!(
+            s.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr17B.as_str()),
+            "没装就该保留它自己的路径报错，而不是回退去跑已装的 0.6B"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_aligner_flag_naming_a_missing_engine_is_not_silently_swapped() {
+        // 对齐器那边是同一个形状：点名 qwen 却没有它，不能悄悄退回 CTC 跑。
+        // 两边一起修，就得两边都有用例守着。
+        let root = env::temp_dir().join(format!("oneasr-align-pick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("models").join(ModelId::OmniAsrCtc300M.as_str()))
+            .unwrap();
+        let mut s = Settings::default();
+        apply_app_root_paths(&mut s, &root, &root, None, Some(ModelId::QwenAlign06B));
+        assert_eq!(s.aligner_model, ModelId::QwenAlign06B.as_str());
+        assert_eq!(
+            s.aligner_model_dir,
+            root.join("models").join(ModelId::QwenAlign06B.as_str()),
+            "没装就该指向它自己并报缺，而不是退回已装的 CTC"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_asr_arg_takes_size_aliases_and_exact_names() {
+        assert_eq!(parse_asr_arg("1.7b"), Some(ModelId::Qwen3Asr17B));
+        assert_eq!(parse_asr_arg("0.6B"), Some(ModelId::Qwen3Asr06B));
+        assert_eq!(parse_asr_arg(" 1.7B "), Some(ModelId::Qwen3Asr17B));
+        assert_eq!(
+            parse_asr_arg(ModelId::Qwen3Asr17BInt8.as_str()),
+            Some(ModelId::Qwen3Asr17BInt8)
+        );
+        assert_eq!(parse_asr_arg("ctc"), None, "对齐器的别名不该被认成识别模型");
+        assert_eq!(parse_asr_arg("nope"), None);
+    }
 
     fn sentence(id: usize, text: &str) -> SourceSentence {
         SourceSentence {
