@@ -25,14 +25,35 @@ use oneasr_core::{ProcessExportOptions, Settings, StageUpdate, process_media_fil
 use oneasr_core::{TranscriptInput, process_media_file_with_transcript};
 
 /// Per-test scratch root (`cargo test` runs tests in parallel threads).
-fn scratch_root(label: &str) -> PathBuf {
+///
+/// 目录在 [`ScratchRoot`] 被丢弃时删掉 —— 正常返回、断言失败、panic 都一样。
+/// 以前这里只建不删：每跑一次 `cargo test` 就在 `%TEMP%` 里漏下 14 个
+/// `oneasr_pipe_*` 目录（每个还带 models/ output/ runs/ 子树）。本地攒了
+/// 两个多月一千多个才被发现，而 CI 上看不见 —— runner 每次全新，进程一结束
+/// 临时目录跟着虚拟机一起没了，那种失效只有在反复跑测试的机器上才显形。
+struct ScratchRoot(PathBuf);
+
+impl std::ops::Deref for ScratchRoot {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch_root(label: &str) -> ScratchRoot {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let n = NEXT.fetch_add(1, Ordering::SeqCst);
     let dir =
         std::env::temp_dir().join(format!("oneasr_pipe_{}_{}_{n}", label, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch root");
-    dir
+    ScratchRoot(dir)
 }
 
 /// Write a 16 kHz mono PCM WAV (the pipeline's master format).
@@ -78,7 +99,7 @@ fn install_fake_models(root: &Path, with_demucs: bool) -> (PathBuf, PathBuf, Pat
 struct Run {
     settings: Settings,
     input: PathBuf,
-    app_root: PathBuf,
+    app_root: ScratchRoot,
 }
 
 impl Run {
@@ -582,4 +603,37 @@ fn a_denominator_less_stage_keeps_its_chunk_empty() {
             );
         }
     }
+}
+
+// ─── 临时目录不许留残余 ─────────────────────────────────────────────
+// 断骨锚点：把 `impl Drop for ScratchRoot` 整段删掉，这两条同时变红。
+
+#[test]
+fn a_scratch_root_is_removed_when_it_goes_out_of_scope() {
+    let dir = {
+        let s = scratch_root("cleanup_scope");
+        assert!(s.is_dir(), "夹具根应当先被建出来");
+        s.0.clone()
+    };
+    assert!(!dir.exists(), "离开作用域后临时目录必须已被删除：{dir:?}");
+}
+
+#[test]
+fn a_scratch_root_is_removed_even_when_the_test_panics() {
+    // 断言失败正是最该清理的时刻：本地反复跑测试的人，正是在失败之后才去看
+    // %TEMP% 里堆了什么的。靠 `Drop` 而不是靠每个测试体末尾手写一句。
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(PathBuf::new()));
+    let sink = kept.clone();
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {})); // 预期中的 panic，不让它污染输出
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let s = scratch_root("cleanup_panic");
+        *sink.lock().unwrap() = s.0.clone();
+        panic!("测试中途炸了");
+    }));
+    std::panic::set_hook(prev);
+
+    assert!(outcome.is_err(), "应当真的 panic 了才对");
+    let dir = kept.lock().unwrap().clone();
+    assert!(!dir.exists(), "panic 也必须把临时目录清掉：{dir:?}");
 }
