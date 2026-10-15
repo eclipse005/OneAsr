@@ -86,7 +86,6 @@ pub(super) fn task_row_view(
     let lang_current = row.language.clone();
     let id_sep = row.id.clone();
     let sep_on = row.vocal_separation;
-    let err = row.error.clone();
     let name = row.name.clone();
     let name_tip = row.name.clone();
     let size_l = row.size_label.clone();
@@ -910,24 +909,6 @@ pub(super) fn task_row_view(
                         ),
                 ),
         )
-        .when(err.is_some(), |el| {
-            el.child(
-                div()
-                    .px_3()
-                    .pb_2()
-                    .pl(px(48.))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .bg(DANGER_SOFT)
-                            .text_xs()
-                            .text_color(DANGER)
-                            .child(err.unwrap_or_default()),
-                    ),
-            )
-        })
 }
 
 #[cfg(test)]

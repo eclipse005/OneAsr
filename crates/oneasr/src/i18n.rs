@@ -72,6 +72,11 @@ pub mod L {
     pub const STATS: Str = Str::new("统计", "Stats");
     pub const MODEL_READY: Str = Str::new("模型就绪", "Models ready");
     pub const MODEL_NOT_READY: Str = Str::new("模型未就绪", "Models not ready");
+    /// 提示 chip 的悬停尾行：显示行是截断的，悬停出完整文案 + 这一行。
+    pub const TIP_HINT_COPY: Str = Str::new("点击复制", "Click to copy");
+    /// 点击提示 chip 复制成功后的回执（与 `PATH_COPIED` 同源：点击没有可见
+    /// 后果，用户要么不敢点第二次，要么回头去别处核对）。
+    pub const HINT_COPIED: Str = Str::new("已复制", "Copied");
 
     // ---- 任务列表空态 ----
     pub const ADD_FILES: Str = Str::new("添加文件", "Add files");

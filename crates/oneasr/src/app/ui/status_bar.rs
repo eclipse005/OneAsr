@@ -7,6 +7,17 @@ use crate::app::prelude::*;
 use crate::app::{ModelStatus, OneAsrApp};
 
 impl OneAsrApp {
+    /// 点击状态栏提示：把**完整**文案复制进剪贴板，并回一条绿色回执。
+    ///
+    /// 复制的是内存里的原串，不是画出来的那一截——状态栏只有一行，长路径
+    /// （错误多半是路径）在显示上必然被截断。回执顶掉原提示是有意的：文案
+    /// 已经进了剪贴板，而点击没有任何反馈的话，用户会以为没点上
+    /// （`PATH_COPIED` 立的规矩）。
+    fn copy_status_hint(&mut self, text: SharedString, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+        self.flash_good_hint_for(t(L::HINT_COPIED), Duration::from_secs(2), cx);
+    }
+
     /// Bottom status bar: queue/batch progress on the left with the persistent
     /// stats and guide chips, model/hint indicator on the right.
     pub(super) fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -49,7 +60,7 @@ impl OneAsrApp {
                 cx,
             ))
             // Right: model probe (常驻) OR transient interaction hint.
-            .child(status_bar_right(hint, hint_good, model))
+            .child(status_bar_right(hint, hint_good, model, cx))
     }
 }
 
@@ -219,11 +230,23 @@ fn status_bar_left(
         )
 }
 
+/// 提示 chip 的悬停文案：**完整**原文 + 「点击复制」两行。
+///
+/// 显示那一行是截断的（状态栏只有一行），悬停是读全的途径——所以这里的
+/// 原文一个字符都不能少，单测死死盯着这一点。
+fn status_hint_tooltip(msg: &str, lang: UiLang) -> String {
+    format!("{msg}\n{}", L::TIP_HINT_COPY.get(lang))
+}
+
 /// Transient interaction hint when there is one, otherwise the model probe.
+///
+/// 提示 chip 是**可点**的：悬停出完整文案，点击把完整文案写进剪贴板——
+/// 错误多半是路径，用户要的就是把原文拿走，而不是盯着截断的那一截猜。
 fn status_bar_right(
     hint: Option<SharedString>,
     hint_good: bool,
     model: ModelStatus,
+    cx: &mut Context<OneAsrApp>,
 ) -> impl IntoElement + use<> {
     let model_color = match model {
         ModelStatus::Ready => ACCENT,
@@ -234,31 +257,40 @@ fn status_bar_right(
         .items_center()
         .gap_2()
         .min_w_0()
-        .max_w(px(360.))
+        .max_w(px(480.))
         .child(match hint {
-            Some(h) => div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .min_w_0()
-                .bg(if hint_good { ACCENT_SOFT } else { WARN_SOFT })
-                .px_2()
-                .py_0p5()
-                .rounded_full()
-                .child(
-                    div()
-                        .size(px(7.))
-                        .rounded_full()
-                        .bg(if hint_good { ACCENT } else { WARN }),
-                )
-                .child(
-                    div()
-                        .text_color(if hint_good { ACCENT } else { WARN })
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(h),
-                )
-                .into_any_element(),
+            Some(h) => {
+                let tip: SharedString = status_hint_tooltip(&h, ui_lang()).into();
+                let full = h.clone();
+                div()
+                    .id("status-hint")
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .bg(if hint_good { ACCENT_SOFT } else { WARN_SOFT })
+                    .px_2()
+                    .py_0p5()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into())
+                    .child(div().size(px(7.)).rounded_full().bg(if hint_good {
+                        ACCENT
+                    } else {
+                        WARN
+                    }))
+                    .child(
+                        div()
+                            .text_color(if hint_good { ACCENT } else { WARN })
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .truncate()
+                            .child(h),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.copy_status_hint(full.clone(), cx);
+                    }))
+                    .into_any_element()
+            }
             None => div()
                 .flex()
                 .items_center()
@@ -417,5 +449,20 @@ mod tests {
             ..queue_key()
         };
         assert_ne!(zero, neg_zero);
+    }
+
+    #[test]
+    fn hint_tooltip_keeps_the_full_message_and_announces_the_click() {
+        // 显示行是截断的（状态栏只有一行），悬停必须给出**完整**原文：
+        // 这里少一个字符，用户就永远看不到那个字符。
+        let msg = "热词模型 模型目录不存在: C:\\Users\\ADMIN\\AppData\\Local\\Programs\\OneAsr\\models\\SenseVoiceSmall";
+        let zh = status_hint_tooltip(msg, UiLang::Zh);
+        assert!(zh.starts_with(msg), "悬停里丢了截断前的那截文案：{zh}");
+        assert!(zh.contains("点击复制"));
+
+        let en = status_hint_tooltip(msg, UiLang::En);
+        assert!(en.starts_with(msg));
+        assert!(en.contains("Click to copy"));
+        assert!(!en.contains("点击"), "英文侧混进了中文：{en}");
     }
 }

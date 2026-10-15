@@ -60,7 +60,6 @@ impl OneAsrApp {
                     vocal_separation: t.vocal_separation,
                     hotword_group: t.hotword_group.clone(),
                     hotword_group_label: hotword_label,
-                    error: t.error.clone(),
                     name: t.name.clone(),
                     size_label: t.size_label(),
                     duration_label: t.duration.label(),

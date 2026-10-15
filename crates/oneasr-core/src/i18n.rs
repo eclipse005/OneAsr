@@ -77,6 +77,17 @@ impl Str {
     pub const fn new(zh: &'static str, en: &'static str) -> Self {
         Self { zh, en }
     }
+
+    /// 显式语言取词：给不读全局语言的纯函数用。
+    ///
+    /// [`t`] 读进程级语言（渲染与文案构造边界用）；被单测引用的格式化函数
+    /// 必须显式收 `UiLang`（这样两种语言都能断言），那一类走这里。
+    pub fn get(self, lang: UiLang) -> &'static str {
+        match lang {
+            UiLang::Zh => self.zh,
+            UiLang::En => self.en,
+        }
+    }
 }
 
 /// 按当前界面语言取词。
@@ -1212,6 +1223,15 @@ mod tests {
         let s = Str::new("设置", "Settings");
         with_ui_lang(UiLang::Zh, || assert_eq!(t(s), "设置"));
         with_ui_lang(UiLang::En, || assert_eq!(t(s), "Settings"));
+    }
+
+    #[test]
+    fn str_get_reads_the_explicit_language_without_the_global() {
+        // 不经过进程级语言：两种语言在同一个测试里都能断言，
+        // 这正是显式取词存在的理由（GUI 的纯函数靠它写单测）。
+        let s = Str::new("设置", "Settings");
+        assert_eq!(s.get(UiLang::Zh), "设置");
+        assert_eq!(s.get(UiLang::En), "Settings");
     }
 
     #[test]

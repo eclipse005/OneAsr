@@ -703,7 +703,6 @@ pub(crate) struct TaskRowView {
     hotword_group: Option<String>,
     /// 上一条要显示的名字（`None` = 无）。名字在 `rows.rs` 里解析好，渲染不必再查表。
     hotword_group_label: Option<String>,
-    error: Option<String>,
     name: String,
     size_label: String,
     duration_label: String,
