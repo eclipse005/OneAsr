@@ -1285,7 +1285,7 @@ mod tests {
                 cli_input_not_found(path),
                 "找不到输入文件: C:/tmp/video.mp4"
             );
-            assert_eq!(cli_stage("转写中"), "[阶段] 转写中");
+            assert_eq!(cli_stage("转写"), "[阶段] 转写");
             assert_eq!(cli_kv(CLI_KV_INPUT, path), "输入:    C:/tmp/video.mp4");
             assert_eq!(t(CLI_ASR_TEXT_BEGIN), "--- 识别文本开始 ---");
         });

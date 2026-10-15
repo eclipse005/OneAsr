@@ -223,7 +223,7 @@ struct FakeAligner {
 
 impl Aligner for FakeAligner {
     /// 假引擎默认**不发**进度：它没有窗口可数。`stage_align_transcript` 那条路
-    /// 要在没有进度的情况下也跑通（界面退回「打轴中」文字），所以默认值是 0，
+    /// 要在没有进度的情况下也跑通（界面退回「打轴」文字），所以默认值是 0，
     /// 要测进度接线就 `FakeProvider::with_align_progress`。
     fn align(
         &self,

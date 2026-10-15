@@ -166,8 +166,9 @@ pub enum AsrStage {
     Planning,
     /// 热词第一趟：SenseVoice 粗转 + 逐块召回（只有选了热词组时出现）。
     ///
-    /// 界面标签叫「热词处理」——这一步对外只该是一个中性名字；「粗转」是内部的
-    /// 机制名（引擎 trait 也叫 [`crate::engine::RoughAsr`]），别把它抄进界面文案。
+    /// 界面标签叫「热词提取」——这一步的产出就是**从音频里挑出要注入的热词**，
+    /// 「提取」说的正是这件事；「粗转」是内部机制名（引擎 trait 也叫
+    /// [`crate::engine::RoughAsr`]），别把它抄进界面文案。
     RoughTranscribing,
     /// Load Qwen ASR weights.
     LoadingAsr,
@@ -190,15 +191,15 @@ impl AsrStage {
             (Self::Separating, UiLang::En) => "Separating vocals",
             (Self::Planning, UiLang::Zh) => "分段规划",
             (Self::Planning, UiLang::En) => "Planning segments",
-            (Self::RoughTranscribing, UiLang::Zh) => "热词处理",
-            (Self::RoughTranscribing, UiLang::En) => "Hotword processing",
+            (Self::RoughTranscribing, UiLang::Zh) => "热词提取",
+            (Self::RoughTranscribing, UiLang::En) => "Extracting hotwords",
             (Self::LoadingAsr, UiLang::Zh) => "加载识别模型",
             (Self::LoadingAsr, UiLang::En) => "Loading ASR model",
-            (Self::Transcribing, UiLang::Zh) => "转写中",
+            (Self::Transcribing, UiLang::Zh) => "转写",
             (Self::Transcribing, UiLang::En) => "Transcribing",
             (Self::LoadingAligner, UiLang::Zh) => "加载对齐模型",
             (Self::LoadingAligner, UiLang::En) => "Loading aligner model",
-            (Self::Aligning, UiLang::Zh) => "打轴中",
+            (Self::Aligning, UiLang::Zh) => "打轴",
             (Self::Aligning, UiLang::En) => "Aligning",
             (Self::Exporting, UiLang::Zh) => "导出字幕",
             (Self::Exporting, UiLang::En) => "Exporting subtitles",
@@ -1217,7 +1218,7 @@ impl<'a> Pipeline<'a> {
         // 进度是真的：分母由对齐器自己数——CTC 现在报的是**整条 run** 的刻度
         // （编码窗口 + Viterbi + 回溯 + 分数回放 + 时间线），所以 100% 意味着
         // 最后一步也做完了，而不是"窗口都提交上去了"（那会儿活还挂在设备上）。
-        // 用户给一份 21 分钟的文稿要对着一个不动的「打轴中」等二十几秒，
+        // 用户给一份 21 分钟的文稿要对着一个不动的「打轴」等二十几秒，
         // 那二十几秒里唯一能告诉他「还在动」的东西就是这条进度。
         //
         // 只捕获 `self.on_stage` 这一个字段：它是 `Sync` 的，所以这个闭包是
@@ -1574,9 +1575,13 @@ mod tests {
         assert_eq!(AsrStage::Planning.label(UiLang::Zh), "分段规划");
         assert_eq!(
             AsrStage::RoughTranscribing.label(UiLang::Zh),
-            "热词处理",
-            "这一步对外的名字是「热词处理」——「粗转」是内部机制名，不进界面"
+            "热词提取",
+            "这一步对外的名字是「热词提取」——「粗转」是内部机制名，不进界面"
         );
+        // 阶段名是一串名词短语（转码音频 / 分段规划 / …），不该混进「进行时」标记：
+        // 耗时卡片里的这些行是**做完的事**，不是「正在…中」。
+        assert_eq!(AsrStage::Transcribing.label(UiLang::Zh), "转写");
+        assert_eq!(AsrStage::Aligning.label(UiLang::Zh), "打轴");
         assert!(timing.has_breakdown());
     }
 

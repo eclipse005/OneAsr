@@ -541,7 +541,7 @@ fn separation_reports_progress_and_cpu_fallback() {
 }
 
 /// 文稿路径的那一段静默，是这个功能最贵的一处体验债：一份二十分钟的文稿要对着
-/// 一个不动的「打轴中」等二十几秒。分母由对齐器自己数（CTC 数编码窗口），这里
+/// 一个不动的「打轴」等二十几秒。分母由对齐器自己数（CTC 数编码窗口），这里
 /// 用假引擎把它数成 4 颗，钉住「引擎报的进度真的变成了阶段更新」。
 #[test]
 fn transcript_alignment_surfaces_the_aligners_own_progress() {
@@ -655,7 +655,7 @@ fn install_fake_sensevoice(root: &Path) -> PathBuf {
 }
 
 /// 选了热词组：先跑一趟粗转，把召回到的词拼成 `Vocabulary: …` 逐块交给正式
-/// ASR；粗转引擎用完即弃，阶段列表里出现「热词处理」。
+/// ASR；粗转引擎用完即弃，阶段列表里出现「热词提取」。
 ///
 /// 断骨锚点：把 `stage_rough_transcribe` 的召回结果当成 None（或不再传
 /// `context`），「热词必须进 context」那条断言立刻变红。
@@ -692,7 +692,7 @@ fn a_selected_hotword_group_runs_the_rough_pass_and_injects_context() {
         stages
             .iter()
             .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
-        "阶段列表里要有「热词处理」：{stages:?}"
+        "阶段列表里要有「热词提取」：{stages:?}"
     );
     let contexts = provider.asr_contexts();
     assert!(
@@ -733,7 +733,7 @@ fn without_a_hotword_group_the_rough_pass_never_runs() {
         !stages
             .iter()
             .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
-        "不该报告「热词处理」：{stages:?}"
+        "不该报告「热词提取」：{stages:?}"
     );
 }
 
@@ -800,7 +800,7 @@ fn a_hotword_row_without_usable_words_runs_as_if_there_were_none() {
         !stages
             .iter()
             .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
-        "不该报告「热词处理」：{stages:?}"
+        "不该报告「热词提取」：{stages:?}"
     );
 }
 

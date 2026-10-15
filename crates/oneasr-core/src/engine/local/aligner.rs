@@ -51,7 +51,7 @@ impl QwenAlignerAdapter {
 
 impl Aligner for QwenAlignerAdapter {
     /// 忽略 `on_progress`：这个对齐器一次算完一整段，没有分母可报。上层拿到
-    /// `None`，界面显示「打轴中」而不画条——给一条不动的条比没有条更糟。
+    /// `None`，界面显示「打轴」而不画条——给一条不动的条比没有条更糟。
     fn align(
         &self,
         req: AlignRequest<'_>,
