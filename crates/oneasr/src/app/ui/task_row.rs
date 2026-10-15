@@ -661,16 +661,21 @@ pub(super) fn task_row_view(
                                                                 })
                                                                 .child(hw_label),
                                                         )
-                                                        .child(
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(MUTED)
-                                                                .child(if hw_open {
-                                                                    "▴"
-                                                                } else {
-                                                                    "▾"
-                                                                }),
-                                                        ),
+                                                        // 不可点时不画下拉箭头：灰 chip 顶着一个「▾」
+                                                        // 会读成「还能点开」，而这里按下去什么都不会发生
+                                                        // （语言不是中/英，或任务在处理中）。
+                                                        .when(can_edit_hw, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(MUTED)
+                                                                    .child(if hw_open {
+                                                                        "▴"
+                                                                    } else {
+                                                                        "▾"
+                                                                    }),
+                                                            )
+                                                        }),
                                                 ),
                                         )
                                         .children(hw_menu_float),

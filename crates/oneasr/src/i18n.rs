@@ -338,16 +338,11 @@ pub mod L {
         "先用轻量模型转一遍、召回其中的热词，再交给识别模型；热词用逗号分隔",
         "Runs a lightweight first pass, recalls the hotwords it hears, then hands them to the ASR model. Separate hotwords with commas",
     );
-    /// 热词的语言门禁：**只接中文与英文的转录**，其他语言的任务不使用热词
-    /// （管线直接跳过粗转与注入，见 `lang::supports_hotwords`）。
-    ///
-    /// 做成**常驻可见**的灰字而不是塞进 tooltip——用户为其他语言填词之前就该知道
-    /// 这条线画在哪，「悬浮才发现」等于没说。
-    pub const HOTWORD_SCOPE_HINT: Str = Str::new(
-        "热词仅接入中文与英文的转录：中文按拼音、英文按拼写匹配；其他语言的任务不使用热词",
-        "Hotwords apply to Chinese and English transcription only: Chinese matches by pinyin, English by spelling. Tasks in other languages do not use hotwords",
-    );
     /// 不支持的语言上，任务行热词 chip 显示的字样（灰的、不可点）。
+    ///
+    /// 语言限制**不用常驻说明文**：语言不是中/英的任务，chip 就地灰掉并显示
+    /// 这个词、tooltip 解释原因（见 [`Self::TIP_HOTWORD_LANG_UNSUPPORTED`]）——
+    /// 被挡住的控件自己说明白，热词页不再重复一遍「仅支持中文与英文」。
     pub const HOTWORD_NOT_APPLICABLE: Str = Str::new("不适用", "N/A");
     /// 不支持的语言上，任务行热词 chip 的 tooltip：说清为什么不可点。
     pub const TIP_HOTWORD_LANG_UNSUPPORTED: Str = Str::new(
