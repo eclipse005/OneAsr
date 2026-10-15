@@ -102,6 +102,19 @@ pub fn normalize_source_language(raw: &str) -> String {
         .unwrap_or_else(default_source_language)
 }
 
+/// 这个源语言是否接入热词流程：**只支持中文与英文**。
+///
+/// 音素化只有两条真规则（见 [`crate::hotword::phoneme`]）：CJK 汉字走**普通话
+/// 拼音**、ASCII 字母走字母名展开；其余文字只能逐字符兜底比对。所以：
+/// - `zh` 按拼音、`en` 按拼写，都可召回；
+/// - `yue` **不支持**——粤语读音与普通话拼音对不上，汉字会被按普通话读音
+///   音素化，召回等于猜；
+/// - 其它语言同样不接入：流程上直接跳过（粗转不跑、context 不注入），
+///   不是「效果差一点」。
+pub fn supports_hotwords(raw: &str) -> bool {
+    matches!(to_lang_key(raw).as_str(), "zh" | "en")
+}
+
 /// Normalize free-form language labels to a short key used by sentence_boundary
 /// (`en`, `ja`, `zh`, …). Accepts Qwen labels (`English`, `Japanese`) and tags.
 pub fn to_lang_key(raw: &str) -> String {
@@ -183,5 +196,30 @@ mod tests {
         assert_eq!(to_qwen_language_label(""), "Chinese");
         assert_eq!(normalize_source_language("JA"), "ja");
         assert_eq!(normalize_source_language("nope"), "zh");
+    }
+
+    /// 热词门禁：只有中文与英文接入。
+    ///
+    /// 粤语刻意**不在**支持集里：音素化是普通话拼音，粤语读音对不上，
+    /// 「支持」只会给出骗人的召回。断骨锚点：把 `supports_hotwords` 的匹配集
+    /// 扩成 `"zh" | "en" | "yue"`，本测试立刻变红。
+    #[test]
+    fn hotwords_are_limited_to_chinese_and_english() {
+        for ok in ["zh", "en", "Chinese", "English", "mandarin", "EN", "cmn"] {
+            assert!(supports_hotwords(ok), "{ok} 应支持热词");
+        }
+        for no in [
+            "yue",
+            "Cantonese",
+            "ja",
+            "Japanese",
+            "ko",
+            "Korean",
+            "fr",
+            "de",
+            "ru",
+        ] {
+            assert!(!supports_hotwords(no), "{no} 不该接热词");
+        }
     }
 }

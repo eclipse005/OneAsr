@@ -243,9 +243,15 @@ impl OneAsrApp {
         // 热词组是**任务级**的运行时选择：在这里就把 id **解析成**词表 + 调参，
         // 管线那边从此只见解析结果、不再见组 id。组被删掉时 `resolve_run` 返回
         // `None`，这一行就真的按「无热词」跑——不会反过来要求粗转模型。
-        settings.hotword_run = self
-            .hotwords
-            .resolve_run(task_hotword.as_deref(), ui_lang());
+        //
+        // 语言门禁：热词只接中文与英文（`lang::supports_hotwords`）——其他语言的
+        // 任务在这里就不再解析绑定，与管线 / 开跑检查用的是同一道闸。
+        settings.hotword_run = if oneasr_core::lang::supports_hotwords(&settings.language) {
+            self.hotwords
+                .resolve_run(task_hotword.as_deref(), ui_lang())
+        } else {
+            None
+        };
         if task_transcript.is_some() {
             // 文稿任务固定用 CTC：整段一次对齐，块边界不伤词。这个闸门是
             // **任务级**的——全局 `align_ready` 问的是「设置里选中的对齐器就绪吗」，

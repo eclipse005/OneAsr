@@ -707,6 +707,52 @@ fn a_selected_hotword_group_runs_the_rough_pass_and_injects_context() {
     );
 }
 
+/// 语言门禁：日语任务即使绑了**可用**的热词组，也整趟不跑热词——粗转引擎不加载、
+/// 阶段列表里没有「热词提取」、正式 ASR 收不到 context。
+///
+/// 断骨锚点：把 `stage_rough_transcribe` 开头那道语言闸去掉，本测试立刻变红
+///（`rough.load` 会出现，context 里会有「窦神归来」）。
+#[test]
+fn an_unsupported_language_never_runs_the_rough_pass() {
+    let mut run = Run::new("hotword_ja", false);
+    run.settings.language = "ja".into();
+    run.settings.sensevoice_model_dir = install_fake_sensevoice(&run.app_root);
+    run.settings.hotword_run = Some(oneasr_core::HotwordRun {
+        group_id: "default".into(),
+        group_name: "测试".into(),
+        text: "窦神归来\n".into(),
+        top_k: 20,
+        threshold: 0.85,
+    });
+
+    // 粗转文本里带着会被召回的词——门禁失效时它会被召回并注入。
+    let provider =
+        FakeProvider::new("日本語のテスト。", tokens()).with_rough_text("今天讲逗神归来的故事");
+    let (stages, result) = run.run(&provider);
+    result.expect("pipeline should succeed");
+
+    assert!(
+        !provider
+            .log()
+            .entries()
+            .iter()
+            .any(|entry| entry.starts_with("rough.")),
+        "非中英语言不该碰粗转引擎：{:?}",
+        provider.log().entries()
+    );
+    assert!(
+        !stages
+            .iter()
+            .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
+        "阶段列表里不该有「热词提取」：{stages:?}"
+    );
+    assert!(
+        provider.asr_contexts().iter().all(Option::is_none),
+        "非中英语言不该有 context：{:?}",
+        provider.asr_contexts()
+    );
+}
+
 /// 没选热词组：粗转引擎一次都不加载，正式 ASR 也不该收到任何 context。
 #[test]
 fn without_a_hotword_group_the_rough_pass_never_runs() {

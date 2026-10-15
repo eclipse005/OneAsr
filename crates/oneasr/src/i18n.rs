@@ -338,13 +338,21 @@ pub mod L {
         "先用轻量模型转一遍、召回其中的热词，再交给识别模型；热词用逗号分隔",
         "Runs a lightweight first pass, recalls the hotwords it hears, then hands them to the ASR model. Separate hotwords with commas",
     );
-    /// 召回的语言范围：只有中文（拼音）与英文（拼写）做了优化。
+    /// 热词的语言门禁：**只接中文与英文的转录**，其他语言的任务不使用热词
+    /// （管线直接跳过粗转与注入，见 `lang::supports_hotwords`）。
     ///
     /// 做成**常驻可见**的灰字而不是塞进 tooltip——用户为其他语言填词之前就该知道
-    /// 效果会打折，「悬浮才发现」等于没说。
+    /// 这条线画在哪，「悬浮才发现」等于没说。
     pub const HOTWORD_SCOPE_HINT: Str = Str::new(
-        "热词召回仅针对中文与英文优化：中文按拼音、英文按拼写匹配；其他语言按原文比对，效果有限",
-        "Hotword recall is tuned for Chinese and English only: Chinese matches by pinyin, English by spelling. Other languages fall back to literal matching and are less reliable",
+        "热词仅接入中文与英文的转录：中文按拼音、英文按拼写匹配；其他语言的任务不使用热词",
+        "Hotwords apply to Chinese and English transcription only: Chinese matches by pinyin, English by spelling. Tasks in other languages do not use hotwords",
+    );
+    /// 不支持的语言上，任务行热词 chip 显示的字样（灰的、不可点）。
+    pub const HOTWORD_NOT_APPLICABLE: Str = Str::new("不适用", "N/A");
+    /// 不支持的语言上，任务行热词 chip 的 tooltip：说清为什么不可点。
+    pub const TIP_HOTWORD_LANG_UNSUPPORTED: Str = Str::new(
+        "热词仅接入中文与英文的转录（中文按拼音、英文按拼写匹配），其他语言的任务不使用热词",
+        "Hotwords apply to Chinese and English transcription only (Chinese by pinyin, English by spelling); tasks in other languages do not use hotwords",
     );
     pub const HOTWORD_NONE: Str = Str::new("无", "None");
     /// 空状态下 chip 的 tooltip：点它会发生什么。

@@ -821,9 +821,16 @@ impl Settings {
     /// 时 [`crate::hotword::HotwordStore::resolve_run`] 返回 `None`，进不到这里：那是
     /// 「这一行显示无热词、那就真不用热词」，不该反过来要求粗转模型。
     ///
+    /// **语言门禁先行**：热词只接中文与英文（[`crate::lang::supports_hotwords`]）。
+    /// 其他语言的任务即使带着 `hotword_run`，也不该为词表或粗转模型报错——流程
+    /// 压根不会跑（管线侧同一个判据见 `asr.rs::stage_rough_transcribe`）。
+    ///
     /// [`Self::can_start`] 与 [`Self::hotword_blocks_start`] **共用**这一个判据，
     /// 免得「能不能跑」与「该去哪儿修」两处各写一份、日后再漂开。
     fn check_hotword_ready(&self) -> Result<(), String> {
+        if !crate::lang::supports_hotwords(&self.language) {
+            return Ok(());
+        }
         let Some(run) = &self.hotword_run else {
             return Ok(());
         };
@@ -1095,7 +1102,23 @@ mod tests {
         assert!(s.hotword_blocks_start());
         assert!(s.can_start().is_err());
 
-        // ④ 粗转模型就位：能跑，且不再算热词挡路
+        // ④ 非中英的语言：热词流程根本不接入——空组不报错、缺粗转模型也不拦。
+        //    本测试走到这里的夹具正好是「粗转模型缺失」，用它最能说明问题。
+        //    断骨锚点：把 `check_hotword_ready` 开头那道语言闸去掉，本段立刻变红。
+        s.language = "ja".into();
+        assert!(s.can_start().is_ok(), "{:?}", s.can_start());
+        assert!(!s.hotword_blocks_start());
+        s.hotword_run = Some(run_of("   "));
+        assert!(
+            s.can_start().is_ok(),
+            "非中英语言连空组都不该拦：{:?}",
+            s.can_start()
+        );
+        assert!(!s.hotword_blocks_start());
+        s.language = "zh".into();
+        s.hotword_run = Some(run_of("甲词"));
+
+        // ⑤ 粗转模型就位：能跑，且不再算热词挡路
         for name in crate::engine::local::SENSEVOICE_REQUIRED_FILES {
             std::fs::write(sense.join(name), &blob).unwrap();
         }

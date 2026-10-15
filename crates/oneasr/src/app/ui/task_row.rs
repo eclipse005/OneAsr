@@ -151,21 +151,34 @@ pub(super) fn task_row_view(
     let hw_current = row.hotword_group.clone();
     // 绑了组才值得给它一格药丸的分量（见下面 chip 的注释）。
     let hw_bound = hw_current.is_some();
+    // 语言门禁：热词只接中文与英文（`lang::supports_hotwords`）。不支持的语言上
+    // 这颗 chip 一律「不适用」且不可点；**绑定不清掉**——语言改回中/英它会恢复，
+    // 只是这一趟不会用（管线侧同一道闸见 `stage_rough_transcribe`）。
+    let hw_supported = oneasr_core::lang::supports_hotwords(&row.language);
+    let can_edit_hw = can_edit_lang && hw_supported;
     // 未绑定时显示**字段名**而不是「无」：这颗控件紧跟在语种 `EN ▾` 后面，
     // 光秃秃一个「无」读不出是热词还是字幕/翻译。显示字段名之后，这一列自己
     // 讲清楚了「空 = 没绑」，而且中英文都不必为它多留宽度。
-    let hw_label: SharedString = match &row.hotword_group_label {
-        Some(name) => name.clone().into(),
-        // 未绑定时只写「无」：这一列的位置已经说明了它是热词（左边语种、右边分离、
-        // 文稿），再写「热词：」是重复；tooltip 里仍有一句「点击挑选一组」。
-        None => t(L::HOTWORD_NONE).into(),
+    let hw_label: SharedString = if !hw_supported {
+        // 不支持的语言：显示「不适用」而不是绑定的组名——组名在这儿只会让人
+        // 以为「这一行用了热词」。
+        t(L::HOTWORD_NOT_APPLICABLE).into()
+    } else {
+        match &row.hotword_group_label {
+            Some(name) => name.clone().into(),
+            // 未绑定时只写「无」：这一列的位置已经说明了它是热词（左边语种、右边分离、
+            // 文稿），再写「热词：」是重复；tooltip 里仍有一句「点击挑选一组」。
+            None => t(L::HOTWORD_NONE).into(),
+        }
     };
-    let hw_tip: SharedString = if hw_bound {
+    let hw_tip: SharedString = if !hw_supported {
+        t(L::TIP_HOTWORD_LANG_UNSUPPORTED).into()
+    } else if hw_bound {
         hw_label.clone()
     } else {
         t(L::TIP_HOTWORD_UNBOUND).into()
     };
-    let hw_menu_float: Option<gpui::AnyElement> = if hw_open && can_edit_lang {
+    let hw_menu_float: Option<gpui::AnyElement> = if hw_open && can_edit_hw {
         Some(
             floating_hotword_menu(
                 SharedString::from(format!("hw-menu-{id_hw_pick}")),
@@ -578,7 +591,7 @@ pub(super) fn task_row_view(
                                                 .border_1()
                                                 .border_color(if hw_open {
                                                     ACCENT
-                                                } else if can_edit_lang {
+                                                } else if can_edit_hw {
                                                     LINE
                                                 } else {
                                                     LINE_SOFT
@@ -588,18 +601,18 @@ pub(super) fn task_row_view(
                                                 } else {
                                                     BG
                                                 })
-                                                .opacity(if can_edit_lang {
+                                                .opacity(if can_edit_hw {
                                                     1.0
                                                 } else {
                                                     DISABLED_OPACITY
                                                 })
-                                                .when(can_edit_lang, |el| {
+                                                .when(can_edit_hw, |el| {
                                                     el.cursor_pointer().hover(|s| {
                                                         s.bg(ACCENT_SOFT)
                                                             .border_color(ACCENT)
                                                     })
                                                 })
-                                                .when(can_edit_lang, |el| {
+                                                .when(can_edit_hw, |el| {
                                                     el.on_click(cx.listener(
                                                         move |this, _, _, cx| {
                                                             this.toggle_hotword_menu(
@@ -636,12 +649,12 @@ pub(super) fn task_row_view(
                                                                 // 未绑定时用弱一档的灰：它是个「可选」的开关，
                                                                 // 不该和语言 chip 一样抢注意力。
                                                                 .text_color(if hw_bound {
-                                                                    if can_edit_lang {
+                                                                    if can_edit_hw {
                                                                         TEXT
                                                                     } else {
                                                                         MUTED_SOFT
                                                                     }
-                                                                } else if can_edit_lang {
+                                                                } else if can_edit_hw {
                                                                     MUTED
                                                                 } else {
                                                                     MUTED_SOFT

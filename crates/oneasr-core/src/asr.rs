@@ -665,11 +665,15 @@ impl<'a> Pipeline<'a> {
         // 判据是 `is_usable()` 而不是「有没有选组」：组已被删除时
         // `resolve_run` 返回 `None`，这里直接跳过——那一行本来就显示「无热词」，
         // 不该反过来拿一个用不到的粗转模型把任务挡在门外。
-        if self
-            .settings
-            .hotword_run
-            .as_ref()
-            .is_some_and(HotwordRun::is_usable)
+        //
+        // 语言门禁同源：非中英的转录压根不接热词（见 `stage_rough_transcribe`），
+        // 选了组也不该被粗转模型挡住。
+        if crate::lang::supports_hotwords(&self.settings.language)
+            && self
+                .settings
+                .hotword_run
+                .as_ref()
+                .is_some_and(HotwordRun::is_usable)
         {
             check_sensevoice_model_dir(&self.settings.resolved_sensevoice_model_dir())?;
         }
@@ -949,6 +953,13 @@ impl<'a> Pipeline<'a> {
         conv: &ConvertedAudio,
         vad: &VadPlan,
     ) -> Result<Option<Vec<String>>, AsrError> {
+        // 语言门禁：热词只接中文与英文（见 [`crate::lang::supports_hotwords`]）。
+        // 其他语言的任务**整趟不跑**——粗转模型不加载、context 不注入。
+        // 这道闸放在这里而不是只放 `can_start`：库调用方与测试都能绕过开跑检查
+        // 直接进管线，而「没有消费者」的粗转是纯浪费（日语素材实测白跑一趟）。
+        if !crate::lang::supports_hotwords(&self.settings.language) {
+            return Ok(None);
+        }
         // 只认**已经解析好**的运行参数：这里没有组 id 可查，也就没有「组被删了
         // 却仍按热词去要求模型」的那类悬空状态。
         let Some(run) = self
