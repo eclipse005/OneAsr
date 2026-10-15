@@ -20,8 +20,15 @@
 //! - 滚轮可以在**不动光标**的前提下翻页（`scroll_row`）。两个来源的优先级写死在
 //!   `top_row` 里：光标出窗就把窗口拉回来，光标没动就保持用户翻到的位置。
 //!
-//! 明确不做：选区拖拽、撤销栈、横向滚动条。折行按**字符**推进（CJK 没有词边界）。
-//! 够用即可。
+//! 支持：鼠标点选 / **拖选**、Shift + 方向键 / Home / End 扩选、Ctrl+A 全选、
+//! Ctrl+C/X/V、**Ctrl+Z 撤销 / Ctrl+Y（或 Ctrl+Shift+Z）重做**、滚轮翻页。
+//!
+//! 撤销按**用户能感知的一步**合并：连续打字与一次输入法组合算一步，粘贴 / 删除 /
+//! 换行 / 导航各算一步（规则在 [`EditHistory`]，纯状态、可单测）。换编辑对象
+//! （[`TextField::set_text`]）会清空历史——撤销不该把上一个组的词写回这一个组。
+//!
+//! 明确不做：双击选词、撤销栈跨编辑对象、横向滚动条、富文本。折行按**字符宽度**
+//! 贪心装箱，但**优先在空格后断**（拉丁词不从中间劈开，CJK 无空格时退回按字符断）。
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -30,9 +37,9 @@ use std::rc::Rc;
 
 use gpui::{
     AbsoluteLength, App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler,
-    FocusHandle, Focusable, Font, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, Render,
-    ScrollWheelEvent, ShapedLine, SharedString, UTF16Selection, Window, canvas, div, fill, phi,
-    point, prelude::*, px, rems, size,
+    FocusHandle, Focusable, Font, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    Pixels, Point, Render, ScrollWheelEvent, ShapedLine, SharedString, UTF16Selection, Window,
+    canvas, div, fill, phi, point, prelude::*, px, rems, size,
 };
 
 use crate::theme::{ACCENT, ACCENT_SOFT, LINE, MUTED_SOFT, PANEL, TEXT};
@@ -57,6 +64,80 @@ pub enum FieldKind {
 
 /// 用户编辑后的回调（拿到最新文本）。`set_text` 不触发它，避免回写回环。
 type ChangeFn = Rc<dyn Fn(&str, &mut App)>;
+
+/// 一步编辑的快照：文本 + 光标 + 选区锚点。
+///
+/// 全文快照而不是「差量 + 反向操作」：词表这个量级（几十 KB）复制一份远比维护一套
+/// 反向操作便宜，也不会因为某个编辑路径忘了记录而出现「撤销撤出半个字」。
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Snapshot {
+    text: String,
+    cursor: usize,
+    anchor: Option<usize>,
+}
+
+/// 撤销栈上限。词表级文本（顶多几十 KB）每条快照一个 `String`，64 步足够，
+/// 也把「按住 Ctrl+Z 的人」挡在无限增长之外。
+const UNDO_LIMIT: usize = 64;
+
+/// 撤销 / 重做历史。**只管栈**：压什么、能不能合并（`coalesce`）由调用方声明，
+/// 应用快照由调用方做——所以它是纯状态，能脱离 gpui 单测。
+#[derive(Default)]
+struct EditHistory {
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// 上一步是「可以继续合并」的编辑（连续打字 / 输入法组合的中间态）。
+    coalescing: bool,
+}
+
+impl EditHistory {
+    /// 一次编辑**开始前**调用：把 `current` 压进撤销栈，并清掉重做栈。
+    ///
+    /// `coalesce` 为真且上一步也在合并中时**不压**：连续打字只留最开始那一刻，
+    /// 否则 Ctrl+Z 一次退一个字，等于没有撤销。
+    fn checkpoint(&mut self, current: Snapshot, coalesce: bool) {
+        if coalesce && self.coalescing && !self.undo.is_empty() {
+            return;
+        }
+        if self.undo.len() >= UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.undo.push(current);
+        self.redo.clear();
+        self.coalescing = coalesce;
+    }
+
+    /// 撤销一步：把 `current` 交给重做栈，返回要恢复的快照。
+    fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
+        let prev = self.undo.pop()?;
+        self.redo.push(current);
+        self.coalescing = false;
+        Some(prev)
+    }
+
+    /// 重做一步：与 [`Self::undo`] 对称。
+    fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
+        let next = self.redo.pop()?;
+        self.undo.push(current);
+        self.coalescing = false;
+        Some(next)
+    }
+
+    /// 打断合并：导航 / 点选 / 换文之后，下一步编辑另起一条。
+    ///
+    /// 少了这一句，打字 → 挪光标 → 再打字会并成一步，撤销时把中间那次导航也一起
+    /// 吞掉（光标跳回去，用户不知道发生了什么）。
+    fn break_run(&mut self) {
+        self.coalescing = false;
+    }
+
+    /// 换文档（`set_text`）：历史整份丢掉。
+    fn reset(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.coalescing = false;
+    }
+}
 
 /// 一帧的整形结果：画字、光标、鼠标命中都靠它。
 struct Geometry {
@@ -127,6 +208,12 @@ pub struct TextField {
     /// paint 再把夹取后的结果写回来——所以滚轮下一次是从「这一帧真的在哪」继续，
     /// 而不是从一个过期的意图继续。
     scroll_row: Rc<Cell<usize>>,
+    /// 撤销 / 重做（见 [`EditHistory`]）。
+    history: EditHistory,
+    /// 左侧按钮是不是在本框内按下的、且还没松手——只有这种拖动才扩选。
+    ///
+    /// 不加这个判断的话，在别处按住鼠标拖过本框也会改变选区。
+    dragging: bool,
     /// 上一帧的整形结果，鼠标命中 / IME 光标定位用。每帧由 paint 刷新。
     geometry: Rc<RefCell<Option<Geometry>>>,
     on_change: ChangeFn,
@@ -155,18 +242,23 @@ impl TextField {
             min_rows,
             max_rows,
             scroll_row: Rc::new(Cell::new(0)),
+            history: EditHistory::default(),
+            dragging: false,
             geometry: Rc::new(RefCell::new(None)),
             on_change: Rc::new(on_change),
         }
     }
 
-    /// 程序化换文（切换编辑对象时用）。**不触发** `on_change`，也不动光标。
+    /// 程序化换文（切换编辑对象时用）。**不触发** `on_change`，也不动光标，
+    /// 并清空撤销历史——撤销不该把上一个组的词写回这一个组。
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
         self.text = text.into();
         let len = self.text.len();
         self.cursor = self.cursor.min(len);
         self.anchor = None;
         self.marked = None;
+        self.history.reset();
+        self.dragging = false;
         cx.notify();
     }
 
@@ -183,12 +275,32 @@ impl TextField {
         }
     }
 
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            anchor: self.anchor,
+        }
+    }
+
+    /// 恢复一步快照。光标/锚点都夹回文本长度内（历史与文本理论上一致，夹一下是
+    /// 为了任何一条编辑路径写坏了也不会 panic）。
+    fn apply_snapshot(&mut self, snap: Snapshot) {
+        self.text = snap.text;
+        let len = self.text.len();
+        self.cursor = snap.cursor.min(len);
+        self.anchor = snap.anchor.map(|a| a.min(len));
+        self.marked = None;
+    }
+
     fn select_all(&mut self) {
         self.anchor = Some(0);
         self.cursor = self.text.len();
+        self.history.break_run();
     }
 
-    /// 用 `new` 替换 `range`，光标落到替换文本末尾。
+    /// 用 `new` 替换 `range`，光标落到替换文本末尾——**不**碰撤销栈。
+    /// 编辑路径请走 [`Self::edit`]。
     fn replace_range(&mut self, range: Range<usize>, new: &str) {
         let new = sanitize(new, self.kind);
         let len = self.text.len();
@@ -199,13 +311,84 @@ impl TextField {
         self.anchor = None;
     }
 
+    /// 一次用户编辑：压快照 → 改文本。
+    ///
+    /// `coalesce` = 这一步与上一步属于同一串输入（连续打字 / 输入法组合），撤销时
+    /// 合成一步；删除、粘贴、换行传 `false`。
+    fn edit(&mut self, range: Range<usize>, new: &str, coalesce: bool) {
+        self.history.checkpoint(self.snapshot(), coalesce);
+        self.replace_range(range, new);
+    }
+
+    /// 撤销 / 重做。返回是否真的改了文本（调用方据此决定要不要 `on_change`）。
+    fn undo_edit(&mut self) -> bool {
+        match self.history.undo(self.snapshot()) {
+            Some(prev) => {
+                self.apply_snapshot(prev);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn redo_edit(&mut self) -> bool {
+        match self.history.redo(self.snapshot()) {
+            Some(next) => {
+                self.apply_snapshot(next);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 鼠标按下：聚焦 + 按坐标落光标，并进入拖动（按住不放就是拖选）。
+    ///
+    /// Shift + 点击 = 「从原锚点选到这里」：锚点不动，光标跳过去。
+    fn begin_drag(&mut self, ev: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dragging = true;
+        if let Some(byte) = self.byte_at(ev.position) {
+            if ev.modifiers.shift {
+                if self.anchor.is_none() {
+                    self.anchor = Some(self.cursor);
+                }
+            } else {
+                // 普通点击：锚点落在同一处（退化选区），之后拖动就从这里开始扩。
+                self.anchor = Some(byte);
+            }
+            self.cursor = byte;
+            self.history.break_run();
+            cx.notify();
+        }
+    }
+
+    /// 拖动中：锚点不动、光标跟着指针走——这就是「拖选」。
+    fn drag_to(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.dragging || !ev.dragging() {
+            return;
+        }
+        if let Some(byte) = self.byte_at(ev.position)
+            && byte != self.cursor
+        {
+            if self.anchor.is_none() {
+                self.anchor = Some(self.cursor);
+            }
+            self.cursor = byte;
+            cx.notify();
+        }
+    }
+
+    /// 松开左键（含在框外松开）：拖动结束。选区留着。
+    fn end_drag(&mut self) {
+        self.dragging = false;
+    }
+
     /// 退格。返回**是否真的改了文本**——在开头处按退格什么都不会发生，而调用方
     /// 据此决定要不要回调 `on_change`（否则空框里按一下就把抽屉标成「未保存」）。
     fn delete_backward(&mut self) -> bool {
         let range = backward_delete_range(&self.text, self.cursor, self.anchor);
         match range {
             Some(range) => {
-                self.replace_range(range, "");
+                self.edit(range, "", false);
                 true
             }
             None => false,
@@ -217,16 +400,25 @@ impl TextField {
         let range = forward_delete_range(&self.text, self.cursor, self.anchor);
         match range {
             Some(range) => {
-                self.replace_range(range, "");
+                self.edit(range, "", false);
                 true
             }
             None => false,
         }
     }
 
-    fn move_cursor(&mut self, to: usize) {
+    /// 移动光标。`keep_selection`（Shift）为真则保留锚点（从原位置扩选），
+    /// 否则收起选区——顺带打断撤销合并，让「打字→挪光标→再打字」是两步。
+    fn move_cursor(&mut self, to: usize, keep_selection: bool) {
+        if keep_selection {
+            if self.anchor.is_none() {
+                self.anchor = Some(self.cursor);
+            }
+        } else {
+            self.anchor = None;
+        }
         self.cursor = to.min(self.text.len());
-        self.anchor = None;
+        self.history.break_run();
     }
 
     /// 光标所在行的字节区间（不含行尾 `\n`）。
@@ -246,6 +438,18 @@ impl TextField {
         let cb = self.on_change.clone();
         cb(&self.text, cx);
         cx.notify();
+    }
+
+    /// 撤销 / 重做一步，并把新文本回传（`on_change`）；没有变化就什么都不做。
+    fn apply_history(&mut self, redo: bool, cx: &mut Context<Self>) {
+        let changed = if redo {
+            self.redo_edit()
+        } else {
+            self.undo_edit()
+        };
+        if changed {
+            self.notify_changed(cx);
+        }
     }
 
     fn handle_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -272,7 +476,7 @@ impl TextField {
                         cx.write_to_clipboard(ClipboardItem::new_string(
                             self.text[sel.clone()].to_string(),
                         ));
-                        self.replace_range(sel, "");
+                        self.edit(sel, "", false);
                         self.notify_changed(cx);
                     }
                 }
@@ -281,15 +485,21 @@ impl TextField {
                         && let Some(text) = item.text()
                     {
                         let sel = self.selection();
-                        self.replace_range(sel, &text);
+                        self.edit(sel, &text, false);
                         self.notify_changed(cx);
                     }
                 }
+                // Ctrl+Z 撤销；Ctrl+Y 与 Ctrl+Shift+Z 都认作重做——前者是 Windows
+                // 习惯、后者是 macOS / 浏览器的，两个都收比让用户猜更好。
+                "z" if m.shift => self.apply_history(true, cx),
+                "z" => self.apply_history(false, cx),
+                "y" => self.apply_history(true, cx),
                 _ => {}
             }
             return;
         }
 
+        let keep = m.shift;
         let moved = match key {
             "backspace" => {
                 if self.delete_backward() {
@@ -308,28 +518,28 @@ impl TextField {
                 // （`parse_word_list` 把逗号与换行当同一种分隔符），所以这里
                 // 不做任何「帮用户整理格式」的猜测——那等于替他改词表。
                 let sel = self.selection();
-                self.replace_range(sel, "\n");
+                self.edit(sel, "\n", false);
                 self.notify_changed(cx);
                 return;
             }
             "left" => {
                 let to = prev_char_boundary(&self.text, self.selection().start);
-                self.move_cursor(to);
+                self.move_cursor(to, keep);
                 true
             }
             "right" => {
                 let to = next_char_boundary(&self.text, self.selection().end);
-                self.move_cursor(to);
+                self.move_cursor(to, keep);
                 true
             }
             "home" => {
                 let to = self.current_line_range().start;
-                self.move_cursor(to);
+                self.move_cursor(to, keep);
                 true
             }
             "end" => {
                 let to = self.current_line_range().end;
-                self.move_cursor(to);
+                self.move_cursor(to, keep);
                 true
             }
             _ => false,
@@ -339,15 +549,6 @@ impl TextField {
         }
         // 未识别的键（含 Escape / Tab）不消费，让它们照常冒泡给上层。
         let _ = window;
-    }
-
-    /// 鼠标按下：聚焦 + 按坐标落光标。
-    fn place_cursor(&mut self, ev: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(byte) = self.byte_at(ev.position) {
-            self.cursor = byte;
-            self.anchor = None;
-            cx.notify();
-        }
     }
 
     /// 滚轮纵向滚动（只有内容超过可见行数时才有得滚）。
@@ -456,8 +657,19 @@ impl TextField {
                 MouseButton::Left,
                 cx.listener(|this, ev, window, cx| {
                     this.focus(window);
-                    this.place_cursor(ev, window, cx);
+                    this.begin_drag(ev, window, cx);
                 }),
+            )
+            .on_mouse_move(cx.listener(|this, ev, _window, cx| this.drag_to(ev, cx)))
+            // 松开（含在框外松开，比如拖出边界）都要结束拖动，否则下一次经过本框
+            // 的移动会被当成还在拖。
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.end_drag()),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.end_drag()),
             )
             .on_key_down(cx.listener(|this, ev, window, cx| this.handle_key(ev, window, cx)))
             .on_scroll_wheel(
@@ -622,6 +834,23 @@ fn paint_field(
         cursor,
     };
 
+    // 选区底色（**先于文字**画：铺在字下面。画在字上面会把文字盖掉，看起来就像
+    // 「全选了但看不出来」）。
+    let mut sel = match anchor {
+        Some(a) => a.min(cursor)..a.max(cursor),
+        None => cursor..cursor,
+    };
+    if let Some((s, e)) = marked
+        && e > s
+    {
+        sel = s..e;
+    }
+    if !sel.is_empty() {
+        for rect in selection_rects(&geom, text, sel) {
+            window.paint_quad(fill(rect, ACCENT_SOFT));
+        }
+    }
+
     // 画字；空文本且未聚焦时画占位符。
     if empty && !focus_handle.is_focused(window) {
         let mut ph = style;
@@ -640,24 +869,6 @@ fn paint_field(
                 geom.origin.y + line_height * ix as f32,
             );
             let _ = line.paint(origin, line_height, window, cx);
-        }
-    }
-
-    // 选区底色。
-    let mut sel = match anchor {
-        Some(a) => a.min(cursor)..a.max(cursor),
-        None => cursor..cursor,
-    };
-    if let Some((s, e)) = marked
-        && e > s
-    {
-        sel = s..e;
-    }
-    if !sel.is_empty()
-        && let (Some(a), Some(b)) = (caret_point(&geom, sel.start), caret_point(&geom, sel.end))
-    {
-        for rect in selection_rects(a, b, line_height) {
-            window.paint_quad(fill(rect, ACCENT_SOFT));
         }
     }
 
@@ -761,14 +972,71 @@ fn scroll_x_for(caret_x: f32, line_w: f32, viewport_w: f32, margin: f32) -> f32 
     (caret_x + margin - viewport_w).max(0.0).min(overflow)
 }
 
-/// 选区矩形（跨行时按行切成若干块；单行直接一段）。
-fn selection_rects(a: Point<Pixels>, b: Point<Pixels>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
-    if (a.y - b.y).abs() < px(0.5) {
-        let x = a.x.min(b.x);
-        let w = (b.x - a.x).abs();
-        return vec![Bounds::new(point(x, a.y), size(w, line_height))];
+/// 可见窗内、与选区相交的每一行各画一段底色。
+///
+/// 逐行画（而不是拿选区两端凑一个矩形）有三个必须的理由：
+/// - 跨行选区：两端坐标画不出中间那些整行；
+/// - `Ctrl+A`：起点在第 0 字节，而窗口可能停在文末（光标在末尾），起点压根不在窗内
+///   ——旧实现拿 `caret_point` 取两端，一见 `None` 就整段不画，于是「全选了但看不
+///   出来」；
+/// - 拖到行尾时，行尾那截空白也该带上（不然看着像少选了几个字）。
+///
+/// 行与字节的边界算术在 [`selection_row_spans`] 里（纯函数、可单测），这里只把
+/// 结果换算成坐标。
+fn selection_rects(geom: &Geometry, text: &str, sel: Range<usize>) -> Vec<Bounds<Pixels>> {
+    let mut out = Vec::new();
+    for (row, span, whole_line) in selection_row_spans(&geom.line_starts, text, sel) {
+        let ix = match row.checked_sub(geom.first_row) {
+            Some(ix) if ix < geom.lines.len() => ix,
+            _ => continue, // 窗外的行：不画，滚到了自然会画
+        };
+        let line = &geom.lines[ix];
+        let row_start = geom.line_starts[row];
+        let x_at =
+            |byte: usize| geom.origin.x + line.x_for_index(byte.min(line.len())) - geom.scroll_x;
+        let x1 = x_at(span.start - row_start);
+        let x2 = if whole_line {
+            geom.origin.x + line.width - geom.scroll_x
+        } else {
+            x_at(span.end - row_start)
+        };
+        let y = geom.origin.y + geom.line_height * ix as f32;
+        // 空行被选中时宽度是 0：给一小段，否则「选中了一个空行」根本看不见。
+        let w = if x2 > x1 { x2 - x1 } else { px(6.) };
+        out.push(Bounds::new(point(x1, y), size(w, geom.line_height)));
     }
-    vec![Bounds::new(a, size(px(4.0), line_height))]
+    out
+}
+
+/// 选区与每一行相交的部分：`(行号, 行内字节区间, 该行是否整行入选)`。
+///
+/// 拆出来是为了能单测——`\n` 不属于任何一行、空行、以及「最后一行到文末」这几个
+/// 边界都在这里。注意行内区间是按**整段文本**的字节下标算的，画的时候才减去行首。
+fn selection_row_spans(
+    line_starts: &[usize],
+    text: &str,
+    sel: Range<usize>,
+) -> Vec<(usize, Range<usize>, bool)> {
+    let mut out = Vec::new();
+    for (row, &start) in line_starts.iter().enumerate() {
+        // 下一行的起点就是本行终点；最后一行到文末。行表把硬换行的 `\n` 排除在行外，
+        // 所以行尾那个 `\n` 要减掉。
+        let end = line_starts.get(row + 1).copied().unwrap_or(text.len());
+        let line_end = if text[start..end].ends_with('\n') {
+            end - 1
+        } else {
+            end
+        };
+        let s = sel.start.max(start);
+        let e = sel.end.min(line_end);
+        // 整行都在选区里（含行尾换行）时，行尾那段空白也算选中。
+        let whole_line = sel.start <= start && sel.end >= end;
+        if e <= s && !whole_line {
+            continue;
+        }
+        out.push((row, s..e.max(s), whole_line));
+    }
+    out
 }
 
 // ── EntityInputHandler ─────────────────────────────────────────────────
@@ -819,14 +1087,21 @@ impl EntityInputHandler for TextField {
         cx: &mut Context<Self>,
     ) {
         // 组合期间提交：替换掉 marked 区间，否则替换选区。
-        let range = match self.marked.take() {
+        let marked = self.marked.take();
+        let composing = marked.is_some();
+        let range = match marked {
             Some((s, e)) => s..e,
             None => match range_utf16 {
                 Some(r) => byte_range(&self.text, &r),
                 None => self.selection(),
             },
         };
-        self.replace_range(range, text);
+        self.edit(range, text, true);
+        // 一次输入法组合到此结束：下一次输入另起一步撤销。合并的位置很关键——
+        // 放在这里（而不是每个字符都断）才能让「打了一串拼音」是一步。
+        if composing {
+            self.history.break_run();
+        }
         self.notify_changed(cx);
     }
 
@@ -891,7 +1166,10 @@ impl EntityInputHandler for TextField {
 /// 折行：把文本切成若干视觉行，返回每行的字节区间。
 ///
 /// - `\n` 是硬换行（该字符本身不属于任何一行）；
-/// - 其余按 `advance` 给的字符宽度贪心装箱，超宽就在该字符前断行；
+/// - 其余按 `advance` 给的字符宽度贪心装箱，**优先在空格后断**：拉丁词不该从中间
+///   劈开（`Machine Translation` 断成 `Machine ` / `Translation`，而不是 `Machine Translatio` / `n`），
+///   断点前那截空格留在上一行；
+/// - 一行里没有空格可断（CJK 常态，或一个超长单词）时退回按字符断；
 /// - 单个字符本身就超宽时仍然独占一行（否则会死循环）。
 ///
 /// 纯函数：宽度由调用方以 `advance` 注入，所以折行规则可以脱离 GPUI 单测。
@@ -903,20 +1181,40 @@ fn wrap_rows_with(
     let mut rows = Vec::new();
     let mut start = 0usize;
     let mut width = 0.0f32;
+    // 最近一次「可以在其后断行」的位置：`(行内断点后偏移, 断点前的累计宽度)`。
+    let mut break_after: Option<(usize, f32)> = None;
+
     for (i, ch) in text.char_indices() {
         if ch == '\n' {
             rows.push(start..i);
             start = i + 1;
             width = 0.0;
+            break_after = None;
             continue;
         }
         let w = advance(ch);
         if i > start && width + w > max_w {
-            rows.push(start..i);
-            start = i;
-            width = 0.0;
+            match break_after.filter(|(at, _)| *at > start) {
+                // 在有空格的那一处断：上一行到断点为止，宽度减去断点前的部分。
+                Some((at, w_at)) => {
+                    rows.push(start..at);
+                    start = at;
+                    width -= w_at;
+                }
+                // 没有断点（CJK / 超长单词）：在该字符前断。
+                None => {
+                    rows.push(start..i);
+                    start = i;
+                    width = 0.0;
+                }
+            }
+            break_after = None;
         }
         width += w;
+        if ch == ' ' {
+            // 断在空格**之后**：空格留在上一行行尾，下一行不从空格开头。
+            break_after = Some((i + ch.len_utf8(), width));
+        }
     }
     rows.push(start..text.len());
     rows
@@ -1052,6 +1350,110 @@ mod tests {
         assert_eq!(wrap("一句话很长很长", f32::INFINITY), vec![0..21]);
     }
 
+    /// 拉丁词不从中间劈开：优先在空格后断（断点前的空格留在上一行）。
+    #[test]
+    fn wrap_prefers_breaking_at_a_space() {
+        // 每字符宽 1、行宽 5："ab cd ef" → "ab " + "cd ef"
+        assert_eq!(wrap("ab cd ef", 5.0), vec![0..3, 3..8]);
+        // 一个词自己就超宽时仍退回按字符断（不硬撑成一行）
+        assert_eq!(wrap("abcdefgh", 3.0), vec![0..3, 3..6, 6..8]);
+        // 空格太靠前也不留超宽行：断点之后的部分照样重新装箱
+        assert_eq!(wrap("a bbbbbbbb", 4.0), vec![0..2, 2..6, 6..10]);
+    }
+
+    // ── 撤销历史（纯状态，可单测） ──────────────────────────────────────
+
+    fn snap(text: &str, cursor: usize) -> Snapshot {
+        Snapshot {
+            text: text.into(),
+            cursor,
+            anchor: None,
+        }
+    }
+
+    /// 连续打字合成一步——这正是「Ctrl+Z 一次退一个字」与「退一步回到词首」的区别。
+    ///
+    /// 断骨验证：把 `checkpoint` 里 `coalesce && self.coalescing` 那一支去掉，
+    /// 第一次断言立刻变红（撤销栈里会多出两条）。
+    #[test]
+    fn typing_run_is_one_undo_step() {
+        let mut h = EditHistory::default();
+        h.checkpoint(snap("", 0), true); // 输入第一个词
+        h.checkpoint(snap("甲", 3), true); // 第二个
+        h.checkpoint(snap("甲乙", 6), true); // 第三个
+        let prev = h.undo(snap("甲乙丙", 9)).expect("应当能撤销");
+        assert_eq!(prev.text, "", "三次连续输入应当并成一步");
+        assert!(h.undo(snap("", 0)).is_none(), "再撤就没有了");
+    }
+
+    /// 非合并编辑（删除 / 粘贴 / 换行）各算一步。
+    #[test]
+    fn separate_edits_each_get_their_own_step() {
+        let mut h = EditHistory::default();
+        h.checkpoint(snap("甲", 3), true); // 打字
+        h.checkpoint(snap("甲乙", 6), false); // 删除
+        assert_eq!(h.undo(snap("甲", 3)).unwrap().text, "甲乙");
+        assert_eq!(h.undo(snap("", 0)).unwrap().text, "甲");
+    }
+
+    /// 撤销后能重做回来；重做栈在有新编辑时清空（否则会「重做出一个分叉」）。
+    #[test]
+    fn redo_tracks_undo_and_is_dropped_on_a_new_edit() {
+        let mut h = EditHistory::default();
+        h.checkpoint(snap("甲", 3), false);
+        let prev = h.undo(snap("甲乙", 6)).unwrap();
+        assert_eq!(prev.text, "甲");
+        assert_eq!(h.redo(snap("甲", 3)).unwrap().text, "甲乙");
+
+        let _ = h.undo(snap("甲乙", 6)).unwrap();
+        h.checkpoint(snap("甲", 3), false);
+        assert!(h.redo(snap("甲改了", 6)).is_none(), "新编辑必须清掉重做栈");
+    }
+
+    /// 导航（挪光标 / 点选）打断合并：打字 → 挪光标 → 再打字 = 两步。
+    ///
+    /// 少了这条，撤销会把中间那次导航一起吞掉：光标跳回去，用户不知道发生了什么。
+    #[test]
+    fn moving_the_caret_breaks_the_run() {
+        let mut h = EditHistory::default();
+        h.checkpoint(snap("甲", 3), true);
+        h.break_run();
+        h.checkpoint(snap("甲乙", 6), true);
+        assert_eq!(
+            h.undo(snap("甲乙丙", 9)).unwrap().text,
+            "甲乙",
+            "第二次输入要独立成一步"
+        );
+        assert_eq!(h.undo(snap("甲乙", 6)).unwrap().text, "甲");
+    }
+
+    /// 换文档（`set_text`）清空历史——撤销不该把别组的词写进当前编辑对象。
+    #[test]
+    fn reset_drops_everything() {
+        let mut h = EditHistory::default();
+        h.checkpoint(snap("甲", 3), true);
+        h.checkpoint(snap("甲乙", 6), false);
+        h.reset();
+        assert!(h.undo(snap("别组的词", 12)).is_none());
+        assert!(h.redo(snap("别组的词", 12)).is_none());
+    }
+
+    /// 撤销栈有上限：第 65 步不会把内存吃掉，最早那步被丢掉。
+    #[test]
+    fn history_is_capped() {
+        let mut h = EditHistory::default();
+        for i in 0..(UNDO_LIMIT + 5) {
+            h.checkpoint(snap(&format!("第{i}步"), i), false);
+        }
+        let mut steps = 0usize;
+        let mut cur = snap("末", 0);
+        while let Some(prev) = h.undo(cur) {
+            cur = prev;
+            steps += 1;
+        }
+        assert_eq!(steps, UNDO_LIMIT, "撤销步数应当被 UNDO_LIMIT 封顶");
+    }
+
     // ── 可见窗（高度封顶 + 内部滚动）的纯函数 ────────────────────────────
 
     /// 字节 → 行号：`byte == len` 落在末行（含末尾换行留下的那个空行）。
@@ -1109,6 +1511,46 @@ mod tests {
         assert_eq!(scroll_x_for(10.0, 300.0, 100.0, 4.0), 0.0);
         // 推到尽头也不超过内容宽度
         assert_eq!(scroll_x_for(299.0, 300.0, 100.0, 4.0), 200.0);
+    }
+
+    // ── 选区分行（纯函数：行号与字节区间） ──────────────────────────────
+
+    /// 选区按行切开：整行为一段、行尾 `\n` 不算进行内、空行也要能被选中。
+    #[test]
+    fn selection_spans_are_cut_per_line() {
+        // "ab\ncd" → 行 [0..2, 3..5]
+        let starts = [0usize, 3];
+        // 单行中段
+        assert_eq!(
+            selection_row_spans(&starts, "ab\ncd", 0..1),
+            vec![(0, 0..1, false)]
+        );
+        // 跨行（第 0 行后半 + 第 1 行前半）
+        assert_eq!(
+            selection_row_spans(&starts, "ab\ncd", 1..4),
+            vec![(0, 1..2, false), (1, 3..4, false)]
+        );
+        // 从文首选到文末：两行都是「整行」，行尾的 `\n` 不占行内区间
+        assert_eq!(
+            selection_row_spans(&starts, "ab\ncd", 0..5),
+            vec![(0, 0..2, true), (1, 3..5, true)]
+        );
+        // 空行被选中：区间是空的，但 `whole_line` 为真（画的时候给一小段）
+        assert_eq!(
+            selection_row_spans(&[0usize, 2, 3], "a\n\nb", 0..3),
+            vec![(0, 0..1, true), (1, 2..2, true)]
+        );
+    }
+
+    /// `Ctrl+A` 那种「整段入选」：每一行都要在结果里——旧实现（拿选区两端坐标
+    /// 凑一个矩形）在「窗口停在文末」时一条都画不出来，就是「全选了但看不出」。
+    #[test]
+    fn select_all_covers_every_row() {
+        let text = "甲\n乙\n丙";
+        let starts = [0usize, 4, 8];
+        let spans = selection_row_spans(&starts, text, 0..text.len());
+        assert_eq!(spans.len(), 3, "三行都要有：{spans:?}");
+        assert!(spans.iter().all(|(_, _, whole)| *whole));
     }
 
     #[test]
