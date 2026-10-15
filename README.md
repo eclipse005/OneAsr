@@ -12,36 +12,16 @@
   **English** · [简体中文](README.zh-CN.md)
 </div>
 
-<table width="100%">
-  <tr>
-    <td width="50%" valign="top">
-      <p><strong>01 · TRANSCRIBE</strong></p>
-      <h3>Make subtitles from audio or video</h3>
-      <p><strong>Input</strong> · audio or video</p>
-      <p align="center">
-        <code>Audio/video</code> → <code>VAD</code> → <code>Qwen3-ASR</code><br>
-        ↓<br>
-        <code>CTC alignment</code> → <code>Smart segmentation</code>
-      </p>
-      <p>Optional vocal separation runs before speech is segmented and transcribed.</p>
-      <p><strong>Output</strong> · SRT / ASS / TXT</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><strong>02 · ALIGN A SCRIPT</strong></p>
-      <h3>Add timings to an existing script</h3>
-      <p><strong>Input</strong> · audio/video + a checked .txt / .srt</p>
-      <p align="center">
-        <code>Audio/video</code> + <code>Transcript</code><br>
-        ↓<br>
-        <code>Forced alignment</code><br>
-        ↓<br>
-        <code>Timed subtitle lines</code>
-      </p>
-      <p>Optional vocal separation runs first. Recognition is skipped; the original wording is kept.</p>
-      <p><strong>Output</strong> · SRT / ASS</p>
-    </td>
-  </tr>
-</table>
+## How it works
+
+Everything runs on your machine — no cloud, no account.
+
+| Mode | Input | Pipeline | Output |
+|---|---|---|---|
+| **Transcribe** | audio / video | VAD → Qwen3-ASR → CTC alignment → smart segmentation | SRT / ASS / TXT |
+| **Transcript matching** | audio / video + a checked .txt / .srt | CTC alignment (recognition is skipped) | SRT / ASS |
+
+Optional vocal separation (HTDemucs) can run before either mode.
 
 ## Download
 
