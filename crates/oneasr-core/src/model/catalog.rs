@@ -80,8 +80,8 @@ impl ModelId {
                 crate::i18n::UiLang::En => "Vocal separation (HTDemucs)",
             },
             Self::SenseVoiceSmall => match lang {
-                crate::i18n::UiLang::Zh => "热词粗转 SenseVoice",
-                crate::i18n::UiLang::En => "Hotword rough pass (SenseVoice)",
+                crate::i18n::UiLang::Zh => "热词模型 SenseVoice",
+                crate::i18n::UiLang::En => "Hotword model (SenseVoice)",
             },
         }
     }

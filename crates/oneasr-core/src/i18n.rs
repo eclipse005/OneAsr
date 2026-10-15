@@ -118,8 +118,8 @@ pub const ROLE_ASR: Str = Str::new("语音识别", "ASR");
 pub const ROLE_ALIGNER: Str = Str::new("对齐", "Aligner");
 /// 见 [`ROLE_ASR`]。
 pub const ROLE_DEMUCS: Str = Str::new("人声分离", "Vocal separation");
-/// 见 [`ROLE_ASR`]。
-pub const ROLE_HOTWORD: Str = Str::new("热词粗转", "Hotword rough pass");
+/// 见 [`ROLE_ASR`]。热词这一路的模型（SenseVoiceSmall，负责第一趟转录 + 召回）。
+pub const ROLE_HOTWORD: Str = Str::new("热词模型", "Hotword model");
 
 /// `热词组「{name}」还没有词，先加词或换一个组` /
 /// `Hotword group "{name}" is empty — add words or pick another group`。
@@ -204,11 +204,11 @@ pub fn load_aligner_failed(e: &str) -> String {
     }
 }
 
-/// `加载热词粗转模型失败: {e}` / `Failed to load the hotword rough-pass model: {e}`。
+/// `加载热词模型失败: {e}` / `Failed to load the hotword model: {e}`。
 pub fn load_rough_asr_failed(e: &str) -> String {
     match ui_lang() {
-        UiLang::Zh => format!("加载热词粗转模型失败: {e}"),
-        UiLang::En => format!("Failed to load the hotword rough-pass model: {e}"),
+        UiLang::Zh => format!("加载热词模型失败: {e}"),
+        UiLang::En => format!("Failed to load the hotword model: {e}"),
     }
 }
 

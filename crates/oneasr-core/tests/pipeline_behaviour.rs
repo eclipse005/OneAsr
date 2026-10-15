@@ -655,7 +655,7 @@ fn install_fake_sensevoice(root: &Path) -> PathBuf {
 }
 
 /// 选了热词组：先跑一趟粗转，把召回到的词拼成 `Vocabulary: …` 逐块交给正式
-/// ASR；粗转引擎用完即弃，阶段列表里出现「热词粗转」。
+/// ASR；粗转引擎用完即弃，阶段列表里出现「热词处理」。
 ///
 /// 断骨锚点：把 `stage_rough_transcribe` 的召回结果当成 None（或不再传
 /// `context`），「热词必须进 context」那条断言立刻变红。
@@ -692,7 +692,7 @@ fn a_selected_hotword_group_runs_the_rough_pass_and_injects_context() {
         stages
             .iter()
             .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
-        "阶段列表里要有「热词粗转」：{stages:?}"
+        "阶段列表里要有「热词处理」：{stages:?}"
     );
     let contexts = provider.asr_contexts();
     assert!(
@@ -733,7 +733,7 @@ fn without_a_hotword_group_the_rough_pass_never_runs() {
         !stages
             .iter()
             .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
-        "不该报告「热词粗转」：{stages:?}"
+        "不该报告「热词处理」：{stages:?}"
     );
 }
 
@@ -800,7 +800,7 @@ fn a_hotword_row_without_usable_words_runs_as_if_there_were_none() {
         !stages
             .iter()
             .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
-        "不该报告「热词粗转」：{stages:?}"
+        "不该报告「热词处理」：{stages:?}"
     );
 }
 

@@ -165,6 +165,9 @@ pub enum AsrStage {
     /// VAD + chunk plan (or single-chunk plan for short audio).
     Planning,
     /// 热词第一趟：SenseVoice 粗转 + 逐块召回（只有选了热词组时出现）。
+    ///
+    /// 界面标签叫「热词处理」——这一步对外只该是一个中性名字；「粗转」是内部的
+    /// 机制名（引擎 trait 也叫 [`crate::engine::RoughAsr`]），别把它抄进界面文案。
     RoughTranscribing,
     /// Load Qwen ASR weights.
     LoadingAsr,
@@ -187,8 +190,8 @@ impl AsrStage {
             (Self::Separating, UiLang::En) => "Separating vocals",
             (Self::Planning, UiLang::Zh) => "分段规划",
             (Self::Planning, UiLang::En) => "Planning segments",
-            (Self::RoughTranscribing, UiLang::Zh) => "热词粗转",
-            (Self::RoughTranscribing, UiLang::En) => "Hotword rough pass",
+            (Self::RoughTranscribing, UiLang::Zh) => "热词处理",
+            (Self::RoughTranscribing, UiLang::En) => "Hotword processing",
             (Self::LoadingAsr, UiLang::Zh) => "加载识别模型",
             (Self::LoadingAsr, UiLang::En) => "Loading ASR model",
             (Self::Transcribing, UiLang::Zh) => "转写中",
@@ -1569,6 +1572,11 @@ mod tests {
             AsrStage::LoadingAligner.label(UiLang::Zh)
         );
         assert_eq!(AsrStage::Planning.label(UiLang::Zh), "分段规划");
+        assert_eq!(
+            AsrStage::RoughTranscribing.label(UiLang::Zh),
+            "热词处理",
+            "这一步对外的名字是「热词处理」——「粗转」是内部机制名，不进界面"
+        );
         assert!(timing.has_breakdown());
     }
 

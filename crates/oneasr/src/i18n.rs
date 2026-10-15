@@ -335,8 +335,8 @@ pub mod L {
     // ---- 热词（独立面板 + 任务行下拉） ----
     pub const HOTWORD: Str = Str::new("热词", "Hotwords");
     pub const TIP_HOTWORD: Str = Str::new(
-        "先用轻量模型粗转一遍、召回其中的热词，再交给识别模型；热词用逗号分隔",
-        "Rough-transcribes first, recalls the hotwords, then hands them to the ASR model. Separate hotwords with commas",
+        "先用轻量模型转一遍、召回其中的热词，再交给识别模型；热词用逗号分隔",
+        "Runs a lightweight first pass, recalls the hotwords it hears, then hands them to the ASR model. Separate hotwords with commas",
     );
     pub const HOTWORD_NONE: Str = Str::new("无", "None");
     /// 空状态下 chip 的 tooltip：点它会发生什么。
@@ -375,16 +375,13 @@ pub mod L {
         "处理中的任务不能改热词组",
         "Can't change the hotword group while the task is processing",
     );
-    /// 热词粗转模型（SenseVoice）卡。
-    pub const SENSEVOICE_MODEL: Str = Str::new("热词粗转模型", "Hotword rough-pass model");
+    /// 热词模型（SenseVoice）卡。
+    pub const SENSEVOICE_MODEL: Str = Str::new("热词模型", "Hotword model");
     pub const TIP_SENSEVOICE_MODEL: Str = Str::new(
-        "SenseVoiceSmall：轻量、跨语言，用于粗转与热词召回",
-        "SenseVoiceSmall: lightweight and multilingual, used for the rough pass and hotword recall",
+        "SenseVoiceSmall：轻量、跨语言；先转一遍，用来从音频里召回热词",
+        "SenseVoiceSmall: lightweight and multilingual; runs the first pass used for hotword recall",
     );
-    pub const DLG_SENSEVOICE_DIR: Str = Str::new(
-        "选择热词粗转模型目录",
-        "Choose hotword rough-pass model folder",
-    );
+    pub const DLG_SENSEVOICE_DIR: Str = Str::new("选择热词模型目录", "Choose hotword model folder");
 
     // ---- 托盘菜单 ----
     pub const TRAY_OPEN: Str = Str::new("打开 OneAsr", "Open OneAsr");
