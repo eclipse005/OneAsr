@@ -147,6 +147,20 @@ impl OneAsrApp {
         self.mark_settings_dirty(cx);
     }
 
+    /// 「新任务默认用热词」开关。
+    ///
+    /// 只改**新加入任务**的默认绑定（`HotwordStore::new_task_group` 是唯一出口）；
+    /// 已有任务、以及每个任务自己的选择都不动。打开时若还没有默认组，就把当前正在
+    /// 编辑的这一组标为默认——否则开关打开却没有任何组会被绑定，等于没打开。
+    fn toggle_hotword_new_task_default(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.hotwords.default_group_enabled;
+        let fallback = self.hotword_edit_group.clone();
+        self.hotwords
+            .set_default_group_enabled(enabled, fallback.as_deref());
+        self.play_ui(sfx::Sfx::Click);
+        self.mark_settings_dirty(cx);
+    }
+
     /// 这一页的三张卡：热词粗转模型 / 热词组 / 当前组编辑器。
     ///
     /// 由抽屉的 `render_settings` 在 `DrawerPage::Hotword` 时调用——滚动容器、
@@ -179,6 +193,8 @@ impl OneAsrApp {
             .as_deref()
             .is_some_and(|id| default_id.as_deref() == Some(id));
         let can_delete = groups.len() > 1;
+        // 开关状态（只看这一个布尔：`normalize` 保证「开着 ⇒ 一定有默认组」）。
+        let use_by_default = self.hotwords.default_group_enabled;
 
         // ── 卡 1：热词粗转模型（骨架照「人声分离」那张）──────────────────
         let model_body = div()
@@ -307,6 +323,27 @@ impl OneAsrApp {
                     )),
             )
             .child(div().flex().flex_wrap().gap_1p5().children(chips))
+            // 开关行：只决定「新加入的任务默认绑哪一组」，与上面那两个动作（新建 /
+            // 选中某组）不是一回事，所以单独一行、上面一条细分割线。
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(LINE_SOFT)
+                    .child(setting_title(
+                        "tip-hotword-new-task-default",
+                        t(L::HOTWORD_NEW_TASK_DEFAULT),
+                        t(L::TIP_HOTWORD_NEW_TASK_DEFAULT),
+                    ))
+                    .child(switch(
+                        "switch-hotword-new-task-default",
+                        use_by_default,
+                        cx.listener(|this, _, _, cx| this.toggle_hotword_new_task_default(cx)),
+                    )),
+            )
             .into_any_element();
 
         // ── 当前组编辑器（组名 + 逗号词表 + 计数 + 两个动作）──────────────

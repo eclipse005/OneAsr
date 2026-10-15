@@ -156,9 +156,9 @@ pub(super) fn task_row_view(
     // 讲清楚了「空 = 没绑」，而且中英文都不必为它多留宽度。
     let hw_label: SharedString = match &row.hotword_group_label {
         Some(name) => name.clone().into(),
-        // 字段名与状态都要在：光一个「无」读不出是热词还是字幕，光一个「热词」
-        // 又看不出当前是空的。两种语言的标点不同，在 i18n helper 里拼。
-        None => crate::i18n::hotword_unbound_chip(ui_lang()).into(),
+        // 未绑定时只写「无」：这一列的位置已经说明了它是热词（左边语种、右边分离、
+        // 文稿），再写「热词：」是重复；tooltip 里仍有一句「点击挑选一组」。
+        None => t(L::HOTWORD_NONE).into(),
     };
     let hw_tip: SharedString = if hw_bound {
         hw_label.clone()

@@ -111,9 +111,19 @@ pub struct HotwordStore {
     /// 至少一个（由 [`Self::normalize`] 保证）。
     #[serde(default)]
     pub groups: Vec<HotwordGroup>,
-    /// 新任务默认绑定的组 id（`None` = 默认「无热词」）。
+    /// **新任务**默认绑定的组 id（`None` = 没标默认组）。
+    ///
+    /// 注意这只是「哪一组是默认组」，新任务到底用不用它由
+    /// [`Self::default_group_enabled`] 决定——区别见那个字段。
     #[serde(default)]
     pub default_group: Option<String>,
+    /// 「新任务默认用热词」开关。
+    ///
+    /// **只决定新加入的任务**默认绑不绑 [`Self::default_group`]：关掉 = 新任务是
+    /// 「无热词」，但**记住**默认组的选择，重新打开接着用。已有任务、以及每个任务
+    /// 自己的选择都不受影响（任务行上仍可单独改）。
+    #[serde(default)]
+    pub default_group_enabled: bool,
     /// 每段最多注入多少条热词。
     #[serde(default = "default_top_k")]
     pub top_k: usize,
@@ -135,6 +145,8 @@ impl Default for HotwordStore {
         Self {
             groups: vec![HotwordGroup::default()],
             default_group: None,
+            // 全新安装：还没标默认组，开关也默认关着（打开时会顺手把当前组标为默认）。
+            default_group_enabled: false,
             top_k: default_top_k(),
             threshold: default_threshold(),
         }
@@ -257,6 +269,12 @@ impl HotwordStore {
                 .get("hotword_default_group")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            // 老配置里「有个默认组」就等于「新任务会用它」（那时还没有开关），迁移
+            // 时把开关一并打开：行为不变，用户想关随时关。
+            default_group_enabled: value
+                .get("hotword_default_group")
+                .and_then(|v| v.as_str())
+                .is_some(),
             top_k: value
                 .get("hotword_top_k")
                 .and_then(serde_json::Value::as_u64)
@@ -300,6 +318,14 @@ impl HotwordStore {
             self.default_group = None;
             notes.push("hotword default group no longer exists -> none".into());
         }
+        // 不变式：**开着开关 ⇒ 一定有一个默认组**。默认组被删掉之后还开着开关，
+        // 只会得到「开关开着、却没有任何组会被绑定」这种自相矛盾的状态（用户看到
+        // 的是开关亮着但新任务仍是「无」），所以这里把开关一起关掉；用户重新打开
+        // 时会顺手把当前组标为默认（见 `set_default_group_enabled`）。
+        if self.default_group_enabled && self.default_group.is_none() {
+            self.default_group_enabled = false;
+            notes.push("hotword default group gone -> new tasks won't use hotwords".into());
+        }
         self.top_k = self.top_k.clamp(1, 100);
         if !self.threshold.is_finite() {
             self.threshold = DEFAULT_THRESHOLD;
@@ -338,9 +364,17 @@ impl HotwordStore {
         self.group(id).map_or(0, |g| count_words(&g.words))
     }
 
-    /// 新任务的默认绑定（`None` = 默认不用热词）。
+    /// 哪一组被标成了「默认组」（不看开关；界面用它决定 chip 上的「默认」标记、
+    /// 以及打开热词页时先编辑哪一组）。
     pub fn default_group_id(&self) -> Option<String> {
         self.default_group.clone()
+    }
+
+    /// **新加入的任务**该绑哪一组：开关关着就是 `None`（无热词）。
+    pub fn new_task_group(&self) -> Option<String> {
+        self.default_group_enabled
+            .then(|| self.default_group.clone())
+            .flatten()
     }
 
     /// 本次运行该带的参数：选了哪个组就给哪个组的词表 + 当前调参。
@@ -398,7 +432,8 @@ impl HotwordStore {
         }
     }
 
-    /// 指定默认组；`None` = 默认「无热词」。
+    /// 指定默认组；`None` = 没有默认组（开关随之关掉，见 [`Self::normalize`] 的
+    /// 不变式）。
     ///
     /// 指向不存在的组是空操作——调用方通常来自界面上一份可能已过期的列表，
     /// 静默忽略比写进一个悬空 id 更安全。
@@ -408,8 +443,27 @@ impl HotwordStore {
                 self.default_group = Some(id.to_string());
             }
             Some(_) => {}
-            None => self.default_group = None,
+            None => {
+                self.default_group = None;
+                self.default_group_enabled = false;
+            }
         }
+    }
+
+    /// 开关「新任务默认用热词」。
+    ///
+    /// 打开时若还没有默认组，就把 `fallback`（界面上正在编辑的那一组）标为默认：
+    /// 否则开关打开却没有任何组会被绑定，等于没打开。`fallback` 不存在（列表过期）
+    /// 就只是打开开关——`normalize` 的不变式会把这种没有默认组的空转状态关回去。
+    pub fn set_default_group_enabled(&mut self, enabled: bool, fallback: Option<&str>) {
+        self.default_group_enabled = enabled;
+        if enabled && self.default_group.is_none() {
+            self.default_group = fallback
+                .filter(|id| self.groups.iter().any(|g| g.id == *id))
+                .map(str::to_string);
+        }
+        let mut notes = Vec::new();
+        self.normalize(&mut notes);
     }
 
     /// 下一个没被占用的 `g{n}`。
@@ -594,6 +648,10 @@ mod tests {
         assert_eq!(store.groups[0].words, "OneAsr\n模型");
         assert_eq!(store.word_count("default"), 2);
         assert_eq!(store.default_group.as_deref(), Some("g1"));
+        assert!(
+            store.default_group_enabled,
+            "老配置里有默认组 = 新任务会用它，迁移时开关要一并打开"
+        );
         assert_eq!(store.top_k, 12);
         assert_eq!(store.threshold, 0.7);
     }
@@ -876,6 +934,74 @@ mod tests {
         assert_eq!(s.resolve_run(None, UiLang::Zh), None, "没选组才是 None");
     }
 
+    // ── 「新任务默认用热词」开关 ────────────────────────────────────────
+
+    /// 开关只管「**新加入的任务**默认绑谁」：关掉不丢默认组的选择，重新打开接着用；
+    /// 打开时若还没标默认组，就把 fallback（界面上正在编辑的那一组）标上。
+    ///
+    /// 断骨验证：让 `new_task_group` 无视开关直接返回 `default_group`，第三条断言
+    /// 立刻变红（关掉开关后新任务仍然会被绑上组）。
+    #[test]
+    fn the_switch_only_decides_what_new_tasks_bind() {
+        let mut s = HotwordStore::default();
+        let id = s.add_group("甲");
+        s.set_group_words(&id, "甲词");
+
+        // 全新安装：开关关着 → 新任务「无热词」
+        assert!(!s.default_group_enabled);
+        assert_eq!(s.new_task_group(), None);
+
+        // 打开：顺手把当前这一组标为默认，于是新任务立刻用上它
+        s.set_default_group_enabled(true, Some(&id));
+        assert_eq!(s.default_group.as_deref(), Some(id.as_str()));
+        assert_eq!(s.new_task_group().as_deref(), Some(id.as_str()));
+
+        // 关掉：新任务回到「无热词」，但默认组的选择留着
+        s.set_default_group_enabled(false, None);
+        assert_eq!(s.new_task_group(), None);
+        assert_eq!(
+            s.default_group.as_deref(),
+            Some(id.as_str()),
+            "关开关不等于丢掉默认组"
+        );
+
+        // 重新打开：接着用原来那一组，不用重新标记
+        s.set_default_group_enabled(true, None);
+        assert_eq!(s.new_task_group().as_deref(), Some(id.as_str()));
+    }
+
+    /// 默认组没了（被删 / 被取消标记）时开关自己关掉：不留「开关亮着、却没有任何
+    /// 组会被绑定」的自相矛盾状态。
+    #[test]
+    fn the_switch_cannot_stay_on_without_a_default_group() {
+        let mut s = HotwordStore::default();
+        let id = s.add_group("甲");
+        s.set_default_group_enabled(true, Some(&id));
+
+        // ① 删掉默认组
+        s.remove_group(&id);
+        assert!(!s.default_group_enabled, "默认组被删，开关必须跟着关");
+        assert_eq!(s.new_task_group(), None);
+
+        // ② 取消默认标记（chip 上那颗「默认」）
+        let other = s.add_group("乙");
+        s.set_default_group_enabled(true, Some(&other));
+        s.set_default_group(None);
+        assert!(!s.default_group_enabled);
+        assert_eq!(s.new_task_group(), None);
+    }
+
+    /// 打开开关时给的 fallback 必须是真实存在的组（界面列表可能已过期）：悬空 id
+    /// 不写进配置，空转的开关也就自己关回去。
+    #[test]
+    fn enabling_with_a_stale_fallback_does_not_mark_it() {
+        let mut s = HotwordStore::default();
+        s.set_default_group_enabled(true, Some("nope"));
+        assert_eq!(s.default_group, None);
+        assert!(!s.default_group_enabled);
+        assert_eq!(s.new_task_group(), None);
+    }
+
     // ── 改名不掉绑定 / 计数口径 ───────────────────────────────────────
 
     /// 改名只动 `name`、不动 `id`——这就是「改名后任务绑定不掉」的依据。
@@ -929,6 +1055,7 @@ mod tests {
         let mut s = HotwordStore {
             groups: vec![group("default", "", ""), group("g1", "", "")],
             default_group: None,
+            default_group_enabled: false,
             top_k: DEFAULT_TOP_K,
             threshold: DEFAULT_THRESHOLD,
         };
@@ -966,6 +1093,7 @@ mod tests {
                 group("g2", "丙", ""),
             ],
             default_group: None,
+            default_group_enabled: false,
             top_k: DEFAULT_TOP_K,
             threshold: DEFAULT_THRESHOLD,
         };

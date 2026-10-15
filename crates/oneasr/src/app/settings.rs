@@ -257,8 +257,9 @@ impl OneAsrApp {
         let pairing = crate::app::transcript::pair_picked(&paths);
         let default_lang = self.settings.language.clone();
         let default_sep = self.settings.vocal_separation;
-        // 新任务默认绑定的热词组（None = 不预热词）；可逐行改。
-        let default_hotword = self.hotwords.default_group_id();
+        // 新任务默认绑定的热词组：由「新任务默认用热词」开关决定（关 = 无热词）；
+        // 可逐行改。
+        let default_hotword = self.hotwords.new_task_group();
         // 读在循环外：媒体行要挂的那份文稿，先解析一次；读不了的当场报，任务照建
         // （不因为一份坏文稿丢掉整个添加动作）。
         let mut staged: Vec<(PathBuf, Option<StagedTranscript>)> = Vec::new();

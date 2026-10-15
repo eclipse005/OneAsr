@@ -339,12 +339,6 @@ pub mod L {
         "Rough-transcribes first, recalls the hotwords, then hands them to the ASR model. Separate hotwords with commas",
     );
     pub const HOTWORD_NONE: Str = Str::new("无", "None");
-    /// 任务行那颗 chip 的**字段名**——「热词」/「Hotword」。
-    ///
-    /// 单独一个「无」读不出这是热词还是字幕/翻译，任务行里语种旁边那颗控件
-    /// 必须自报家门。它与 [`HOTWORD_NONE`] 一起拼成未绑定时显示的整串，见
-    /// [`hotword_unbound_chip`]。
-    pub const HOTWORD_FIELD: Str = Str::new("热词", "Hotword");
     /// 空状态下 chip 的 tooltip：点它会发生什么。
     pub const TIP_HOTWORD_UNBOUND: Str = Str::new(
         "未使用热词（点击挑选一组）",
@@ -352,6 +346,13 @@ pub mod L {
     );
     pub const HOTWORD_GROUPS: Str = Str::new("热词组", "Hotword groups");
     pub const HOTWORD_NEW_GROUP: Str = Str::new("新建组", "New group");
+    /// 「新任务默认用热词」开关（热词页）。它**只**决定新加入的任务默认绑哪一组。
+    pub const HOTWORD_NEW_TASK_DEFAULT: Str =
+        Str::new("新任务默认用热词", "New tasks use hotwords");
+    pub const TIP_HOTWORD_NEW_TASK_DEFAULT: Str = Str::new(
+        "只决定新加入的任务默认绑哪一组（默认组）；已有任务不受影响，每个任务仍可在任务行里单独改",
+        "Only decides which group (the default one) newly added tasks bind. Existing tasks are untouched, and each task can still change it in its row",
+    );
     pub const HOTWORD_SET_DEFAULT: Str = Str::new("设为默认组", "Set as default");
     pub const HOTWORD_DELETE_GROUP: Str = Str::new("删除此组", "Delete this group");
     pub const HOTWORD_DEFAULT_BADGE: Str = Str::new("默认", "Default");
@@ -587,22 +588,6 @@ pub fn hotword_word_count(n: usize) -> String {
     }
 }
 
-/// `热词：无` / `Hotword: None`（任务行那颗 chip 在**未绑定**时显示的整串）。
-///
-/// 字段名与状态都要在：光一个「无」读不出是热词还是字幕，光一个「热词」又
-/// 看不出当前是空的。两种语言的标点不同（中文全角冒号、英文半角冒号带空格），
-/// 所以在 helper 里按语言拼好，渲染层只拿结果——不在渲染层 `format!` 一个
-/// 单语冒号出去。
-///
-/// 显式收 `UiLang`：这条是纯格式化函数，单测不该去读全局语言（CI 与本机的
-/// 系统语言不一致时，靠读全局的断言会变成随机绿/随机红）。
-pub fn hotword_unbound_chip(lang: UiLang) -> String {
-    match lang {
-        UiLang::Zh => format!("{}：{}", L::HOTWORD_FIELD.zh, L::HOTWORD_NONE.zh),
-        UiLang::En => format!("{}: {}", L::HOTWORD_FIELD.en, L::HOTWORD_NONE.en),
-    }
-}
-
 /// `下载启动失败: {e}`
 pub fn download_start_failed(e: &std::io::Error) -> String {
     match ui_lang() {
@@ -682,33 +667,5 @@ pub fn tray_tooltip(stage: Option<&str>) -> String {
     match stage {
         Some(stage) => format!("OneAsr · {stage}"),
         None => "OneAsr".into(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use oneasr_core::i18n::UiLang;
-
-    #[test]
-    fn unbound_hotword_chip_names_the_field_and_the_state_in_both_languages() {
-        assert_eq!(hotword_unbound_chip(UiLang::Zh), "热词：无");
-        // 半角冒号 + 空格：英文侧混进全角冒号会被 verify-i18n 判成中文残留。
-        assert_eq!(hotword_unbound_chip(UiLang::En), "Hotword: None");
-    }
-
-    /// 断骨验证：把 helper 里的冒号改成两边都用全角，英文那条断言必须变红。
-    /// 这条断言守的就是「两种语言各用各的标点」——helper 若图省事直接
-    /// `format!("{}:{}", ..)`，中文会变成半角，而中文界面里半角冒号贴着一串
-    /// 汉字很难看，却几乎不会被肉眼当成 bug。
-    #[test]
-    fn a_single_colon_for_both_languages_is_caught() {
-        let zh = hotword_unbound_chip(UiLang::Zh);
-        assert!(zh.contains('：'), "中文侧必须是全角冒号，实际是 {zh:?}");
-        let en = hotword_unbound_chip(UiLang::En);
-        assert!(
-            !en.contains('：'),
-            "英文侧绝不能出现全角冒号，实际是 {en:?}"
-        );
     }
 }
