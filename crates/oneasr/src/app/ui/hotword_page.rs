@@ -154,7 +154,12 @@ impl OneAsrApp {
     /// 编辑的这一组标为默认——否则开关打开却没有任何组会被绑定，等于没打开。
     fn toggle_hotword_new_task_default(&mut self, cx: &mut Context<Self>) {
         let enabled = !self.hotwords.default_group_enabled;
-        let fallback = self.hotword_edit_group.clone();
+        // 打开时把「当前这一组」标为默认；没有正在编辑的组（理论上不会，但别假设）
+        // 就退到第一个——总之不能让开关打开却没有任何组会被绑定。
+        let fallback = self
+            .hotword_edit_group
+            .clone()
+            .or_else(|| self.first_hotword_group_id());
         self.hotwords
             .set_default_group_enabled(enabled, fallback.as_deref());
         self.play_ui(sfx::Sfx::Click);
@@ -196,7 +201,7 @@ impl OneAsrApp {
         // 开关状态（只看这一个布尔：`normalize` 保证「开着 ⇒ 一定有默认组」）。
         let use_by_default = self.hotwords.default_group_enabled;
 
-        // ── 卡 1：热词粗转模型（骨架照「人声分离」那张）──────────────────
+        // ── 卡 1：热词模型（骨架照「人声分离」那张）──────────────────────
         let model_body = div()
             .flex()
             .flex_col()

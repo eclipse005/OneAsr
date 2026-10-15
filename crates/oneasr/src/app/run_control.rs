@@ -67,8 +67,14 @@ impl OneAsrApp {
         if let Err(msg) = self.settings.can_start() {
             self.model_status = ModelStatus::NotReady;
             self.flash_hint(msg, cx);
-            // 模型路径在设置页上——抽屉若开在热词页，切回去而不是「已经开着就不管」。
-            if !self.settings_page_open() {
+            // 把抽屉翻到**能修的那一页**：热词的毛病（组没词 / 粗转模型缺失）在
+            // 热词页上，其余模型路径都在设置页。翻错页的代价是用户对着一排绿点
+            // 找不到问题——判据与 `can_start` 同源（`hotword_blocks_start`）。
+            if self.settings.hotword_blocks_start() {
+                if !self.hotword_page_open() {
+                    self.toggle_hotword_drawer(cx);
+                }
+            } else if !self.settings_page_open() {
                 self.toggle_settings(cx);
             }
             return false;

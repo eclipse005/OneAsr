@@ -812,18 +812,34 @@ impl Settings {
             crate::asr::check_demucs_model_dir(&self.resolved_demucs_model_dir())
                 .map_err(|e| e.to_string())?;
         }
-        // 热词：选了组就必须有词、且粗转模型在位。空组报错而不是静默跳过——
-        // 「选了却什么都没发生」比直接说清楚更糟。组**不存在**时
-        // [`crate::hotword::HotwordStore::resolve_run`] 返回 `None`，进不到这里：
-        // 那是「这一行显示无热词、那就真不用热词」，不该反过来要求粗转模型。
-        if let Some(run) = &self.hotword_run {
-            if !run.is_usable() {
-                return Err(crate::i18n::hotword_group_empty(&run.group_name));
-            }
-            crate::asr::check_sensevoice_model_dir(&self.resolved_sensevoice_model_dir())
-                .map_err(|e| e.to_string())?;
+        self.check_hotword_ready()
+    }
+
+    /// 热词这一路的开跑前检查：选了组就必须有词、且粗转模型在位。
+    ///
+    /// 空组报错而不是静默跳过——「选了却什么都没发生」比直接说清楚更糟。组**不存在**
+    /// 时 [`crate::hotword::HotwordStore::resolve_run`] 返回 `None`，进不到这里：那是
+    /// 「这一行显示无热词、那就真不用热词」，不该反过来要求粗转模型。
+    ///
+    /// [`Self::can_start`] 与 [`Self::hotword_blocks_start`] **共用**这一个判据，
+    /// 免得「能不能跑」与「该去哪儿修」两处各写一份、日后再漂开。
+    fn check_hotword_ready(&self) -> Result<(), String> {
+        let Some(run) = &self.hotword_run else {
+            return Ok(());
+        };
+        if !run.is_usable() {
+            return Err(crate::i18n::hotword_group_empty(&run.group_name));
         }
-        Ok(())
+        crate::asr::check_sensevoice_model_dir(&self.resolved_sensevoice_model_dir())
+            .map_err(|e| e.to_string())
+    }
+
+    /// 开不了跑时，挡路的是不是**热词**（组没词 / 粗转模型缺失）。
+    ///
+    /// 界面据此把抽屉翻到热词页而不是设置页：这两条错误只有热词页能修（往词表里
+    /// 加词、换一组、下粗转模型），翻到设置页只会让人对着一排绿点找不到问题。
+    pub fn hotword_blocks_start(&self) -> bool {
+        self.hotword_run.is_some() && self.check_hotword_ready().is_err()
     }
 
     /// After a successful download: bind paths **only if** this id is the active
@@ -1017,6 +1033,75 @@ mod tests {
         )
         .unwrap();
         assert!(s.can_start().is_ok(), "{:?}", s.can_start());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 热词挡路的判据与 `can_start` **同源**（都走 `check_hotword_ready`）：选了组
+    /// 就必须有词、且粗转模型在位；没选热词时永远是「不是热词的锅」。
+    ///
+    /// 断骨验证：让 `hotword_blocks_start` 直接返回 `false`（界面就会一律翻到设置页，
+    /// 而那里没有任何热词可修），本测试立刻变红。
+    #[test]
+    fn hotword_blocker_is_reported_as_such() {
+        fn run_of(words: &str) -> crate::hotword::HotwordRun {
+            crate::hotword::HotwordRun {
+                group_id: "default".into(),
+                group_name: "默认".into(),
+                text: words.into(),
+                top_k: 20,
+                threshold: 0.85,
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!("oneasr_hotword_gate_{}", std::process::id()));
+        let asr = root.join("asr-test");
+        let align = root.join("align-test");
+        let sense = root.join("sensevoice-test");
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in [&asr, &align, &sense] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let blob = vec![0u8; 4096];
+        std::fs::write(asr.join("config.json"), &blob).unwrap();
+        std::fs::write(asr.join("tokenizer.json"), &blob).unwrap();
+        std::fs::write(asr.join("model.safetensors"), &blob).unwrap();
+        std::fs::write(align.join("config.json"), &blob).unwrap();
+        std::fs::write(align.join("tokenizer.json"), &blob).unwrap();
+        std::fs::write(align.join("tokenizer_config.json"), &blob).unwrap();
+        std::fs::write(align.join("model.safetensors"), &blob).unwrap();
+
+        // 目录名刻意不叫 `SenseVoiceSmall`：那个名字走清单精确校验（尺寸 + sha256），
+        // 4 KB 占位文件过不了。
+        let mut s = Settings {
+            asr_model_dir: asr,
+            aligner_model_dir: align,
+            sensevoice_model_dir: sense.clone(),
+            ..Settings::default()
+        };
+
+        // ① 没选热词：能跑，也不是热词挡路
+        s.hotword_run = None;
+        assert!(s.can_start().is_ok(), "{:?}", s.can_start());
+        assert!(!s.hotword_blocks_start());
+
+        // ② 选了组但没词：热词挡路，报错点名是哪个组
+        s.hotword_run = Some(run_of("   "));
+        assert!(s.hotword_blocks_start());
+        let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || s.can_start().unwrap_err());
+        assert!(err.contains("默认"), "报错要说是哪个组：{err}");
+
+        // ③ 有词、但粗转模型不在：同样是热词挡路（那个模型在热词页下载）
+        s.hotword_run = Some(run_of("甲词"));
+        assert!(s.hotword_blocks_start());
+        assert!(s.can_start().is_err());
+
+        // ④ 粗转模型就位：能跑，且不再算热词挡路
+        for name in crate::engine::local::SENSEVOICE_REQUIRED_FILES {
+            std::fs::write(sense.join(name), &blob).unwrap();
+        }
+        assert!(s.can_start().is_ok(), "{:?}", s.can_start());
+        assert!(!s.hotword_blocks_start());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
