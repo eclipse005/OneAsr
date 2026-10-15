@@ -53,18 +53,18 @@ The main window and the settings drawer (same window size, side by side):
 
 - **Fully local**: transcription and alignment run on your machine; after the models are downloaded you can go offline
 - **Batch queue**: drop in many files at once; progress and stage are always visible
-- **Reliable timing**: CTC word-level alignment + smart sentence segmentation — not whole-segment guesses
-- **Transcript matching**: already have a verified script? Attach it and recognition is skipped entirely — every line gets a real timestamp, so no more fixing mis-heard words you already know the answer to
+- **Reliable timing**: word-level alignment + smart sentence segmentation — not whole-segment guesses
+- **Transcript matching**: already have a verified script? Attach it and recognition is skipped — your lines keep their wording and get real timestamps
 - **ASS karaoke output**: CJK characters (words in spaced languages) each carry their own timing for player highlighting
-- **CTC aligner (default)**: omniASR-CTC-300M-v2 — frame-synchronous and 100% local, no language coverage limits
-- **Legacy forced aligner**: Qwen3-ForcedAligner-0.6B-hf is still selectable in Settings if you prefer it
+- **Local aligner (default)**: frame-synchronous and fully local, no language coverage limits
+- **Legacy aligner**: the Qwen forced aligner is still selectable in Settings if you prefer it
 - **11 source languages**: 中文普通话, English, 粤语, 日本語, 한국어, Français, Deutsch, Italiano, Español, Português, Русский (set manually per task; no auto-detection)
 - **Two ASR sizes**: 0.6B (faster / less VRAM) · 1.7B (more accurate / more resources)
 - **Output options**: SRT / ASS / TXT, in any combination; saved next to the video by default
 - **Transcribe only**: tick TXT alone (no SRT / ASS) and the task stops at transcription — one sentence per line, cut on sentence punctuation; an aligner model is not needed at all
 - **Chinese script choice**: original / Simplified / Traditional (Chinese & Cantonese only; timing is unaffected)
-- **Vocal separation (optional)**: built-in HTDemucs v4 strips BGM / noise before transcribing
-- **Hotwords (optional)**: bind a word list to a task — a lightweight model runs a first pass, recalls the entries it hears, and feeds them to the ASR model as context; phonetic matching covers what that first pass mishears, so a word only needs its correct spelling. Chinese and English transcription only — other languages skip the hotword pass and their rows show the picker grayed out (the hotword model is a separate ~940 MB download)
+- **Vocal separation (optional)**: strips BGM / noise before transcribing
+- **Hotwords (optional)**: put the names and terms the model keeps mishearing in a list and the transcription gets them right; Chinese and English only (separate ~940 MB model download)
 - **GPU acceleration**: NVIDIA / AMD / Intel / Apple Silicon; falls back to CPU automatically when no discrete GPU is present
 
 ## Models & sizes
