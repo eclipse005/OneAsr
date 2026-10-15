@@ -637,3 +637,178 @@ fn a_scratch_root_is_removed_even_when_the_test_panics() {
     let dir = kept.lock().unwrap().clone();
     assert!(!dir.exists(), "panic 也必须把临时目录清掉：{dir:?}");
 }
+
+// ─── 热词：粗转 → 逐块召回 → 注入 context ───────────────────────────────
+
+/// 装一个「就绪」的假 SenseVoice 目录。
+///
+/// **刻意不用安装布局的名字**（`SenseVoiceSmall`）：那个名字会走目录清单的精确
+/// 校验（尺寸 + sha256），4 KB 的占位文件过不了。自选目录名只看那 4 个文件在不在、
+/// 够不够大（各 4 KB 就够）——测试不需要真权重。
+fn install_fake_sensevoice(root: &Path) -> PathBuf {
+    let dir = root.join("models").join("sensevoice-fake");
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in oneasr_core::engine::local::SENSEVOICE_REQUIRED_FILES {
+        std::fs::write(dir.join(name), vec![0u8; 4096]).unwrap();
+    }
+    dir
+}
+
+/// 选了热词组：先跑一趟粗转，把召回到的词拼成 `Vocabulary: …` 逐块交给正式
+/// ASR；粗转引擎用完即弃，阶段列表里出现「热词粗转」。
+///
+/// 断骨锚点：把 `stage_rough_transcribe` 的召回结果当成 None（或不再传
+/// `context`），「热词必须进 context」那条断言立刻变红。
+#[test]
+fn a_selected_hotword_group_runs_the_rough_pass_and_injects_context() {
+    let mut run = Run::new("hotword_on", false);
+    run.settings.sensevoice_model_dir = install_fake_sensevoice(&run.app_root);
+    // 管线只认**解析好**的运行参数（GUI 在开跑前从热词库解析，见
+    // `HotwordStore::resolve_run`）——测试因此不必先造一个 `hotword.json`。
+    run.settings.hotword_run = Some(oneasr_core::HotwordRun {
+        group_id: "default".into(),
+        group_name: "测试".into(),
+        text: "窦神归来\n".into(),
+        top_k: 20,
+        threshold: 0.85,
+    });
+
+    // 粗转写错字（逗神归来），召回要能认出正确的「窦神归来」并注入。
+    let provider = FakeProvider::new("今天讲窦神归来的故事。", tokens())
+        .with_rough_text("今天讲逗神归来的故事");
+    let (stages, result) = run.run(&provider);
+    result.expect("pipeline should succeed");
+
+    assert!(
+        provider
+            .log()
+            .entries()
+            .iter()
+            .any(|entry| entry == "rough.load"),
+        "必须真的加载了粗转引擎：{:?}",
+        provider.log().entries()
+    );
+    assert!(
+        stages
+            .iter()
+            .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
+        "阶段列表里要有「热词粗转」：{stages:?}"
+    );
+    let contexts = provider.asr_contexts();
+    assert!(
+        contexts
+            .iter()
+            .any(|c| c.as_deref().is_some_and(|c| c.contains("窦神归来"))),
+        "召回的热词必须拼进 context：{contexts:?}"
+    );
+    assert!(
+        contexts.iter().flatten().all(|c| !c.is_empty()),
+        "给了提示就不能是空串（空串等于没给）：{contexts:?}"
+    );
+}
+
+/// 没选热词组：粗转引擎一次都不加载，正式 ASR 也不该收到任何 context。
+#[test]
+fn without_a_hotword_group_the_rough_pass_never_runs() {
+    let run = Run::new("hotword_off", false);
+    let provider = FakeProvider::new("今天讲窦神归来的故事。", tokens());
+    let (stages, result) = run.run(&provider);
+    result.expect("pipeline should succeed");
+
+    assert!(
+        !provider
+            .log()
+            .entries()
+            .iter()
+            .any(|entry| entry.starts_with("rough.")),
+        "不该加载 / 运行粗转：{:?}",
+        provider.log().entries()
+    );
+    assert!(
+        provider.asr_contexts().iter().all(Option::is_none),
+        "没选热词就不该有 context：{:?}",
+        provider.asr_contexts()
+    );
+    assert!(
+        !stages
+            .iter()
+            .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
+        "不该报告「热词粗转」：{stages:?}"
+    );
+}
+
+/// 选了一个**空组**：`can_start` 必须拦下，而不是静默地不跑粗转。
+///
+/// 空组与「没选组」必须分得开：前者是用户该被告知的错误，后者是安静跑完。
+#[test]
+fn an_empty_hotword_group_is_refused_before_starting() {
+    let mut run = Run::new("hotword_empty", false);
+    run.settings.sensevoice_model_dir = install_fake_sensevoice(&run.app_root);
+    run.settings.hotword_run = Some(oneasr_core::HotwordRun {
+        group_id: "default".into(),
+        group_name: "空组".into(),
+        text: "   \n".into(),
+        top_k: 20,
+        threshold: 0.85,
+    });
+    let err = run.settings.can_start().expect_err("空组必须报错");
+    assert!(err.contains("空组"), "报错要带上是哪个组：{err}");
+}
+
+/// 任务绑定的组**已经被删掉**（`resolve_run` 返回 `None`），或者组还在但没填词
+///（`Some` 但 `is_usable()` 为假）——这两种情况下这一行界面上显示的都是「无热词」，
+/// 管线就必须当它没有热词跑完：不要求粗转模型、不加载粗转引擎。
+///
+/// 断骨锚点（实测）：把 `run()` 里那道 `check_sensevoice_model_dir` 的判据从
+/// `is_some_and(HotwordRun::is_usable)` 放宽成 `hotword_run.is_some()`，第二个
+/// 用例立刻变红——这里**故意不装** SenseVoice，会报「粗转模型缺失」。
+#[test]
+fn a_hotword_row_without_usable_words_runs_as_if_there_were_none() {
+    // ① 组被删了：GUI 解析不出来，`hotword_run` 是 None。
+    let mut run = Run::new("hotword_gone", false);
+    run.settings.sensevoice_model_dir = missing_sensevoice_dir(&run.app_root);
+    run.settings.hotword_run = None;
+    let provider = FakeProvider::new("今天讲窦神归来的故事。", tokens());
+    let (_, result) = run.run(&provider);
+    result.expect("组没了不等于跑不了：这一行显示的就是「无热词」");
+
+    // ② 组还在、但一个词都没填：`can_start` 会拦下（那是 GUI 的活），可库调用方
+    // 仍可能带着这么一份设置进管线。既然压根不会跑粗转，就不该要求那个模型。
+    let mut run = Run::new("hotword_blank", false);
+    run.settings.sensevoice_model_dir = missing_sensevoice_dir(&run.app_root);
+    run.settings.hotword_run = Some(oneasr_core::HotwordRun {
+        group_id: "default".into(),
+        group_name: "空组".into(),
+        text: "  \n ".into(),
+        top_k: 20,
+        threshold: 0.85,
+    });
+    let provider = FakeProvider::new("今天讲窦神归来的故事。", tokens());
+    let (stages, result) = run.run(&provider);
+    result.expect("空组不会跑粗转，也就不该被粗转模型挡住");
+
+    assert!(
+        !provider
+            .log()
+            .entries()
+            .iter()
+            .any(|entry| entry.starts_with("rough.")),
+        "不该碰粗转引擎：{:?}",
+        provider.log().entries()
+    );
+    assert!(
+        !stages
+            .iter()
+            .any(|s| s.stage == oneasr_core::AsrStage::RoughTranscribing),
+        "不该报告「热词粗转」：{stages:?}"
+    );
+}
+
+/// 指向一个**保证不存在**的目录。
+///
+/// 刻意不用默认值：默认目录落在真实安装目录里，而这台机器上它可能是**装好了的**
+/// 真模型——那会让「模型缺失」这个前提悄悄不成立，测试变成假绿（AGENTS.md：
+/// 不要断言本机环境）。钉进 scratch 目录，结论只取决于被测代码。
+fn missing_sensevoice_dir(app_root: &Path) -> std::path::PathBuf {
+    app_root.join("models").join("sensevoice-absent")
+}

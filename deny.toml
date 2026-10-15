@@ -2,10 +2,11 @@
 #
 # 为什么选 cargo-deny 而不是 cargo-audit：
 #   cargo-audit 只做「已知漏洞」一件事；本项目真正的供应链风险面更大 ——
-#   产物里含 6 个 GitHub git 依赖（5 个直接声明：qwen3-asr-wgpu /
-#   qwen3-aligner-wgpu / fireredvad / demucs-core / punkt，外加传递依赖
-#   nagisa-rs）。cargo-deny 能把「git 依赖只能来自这份显式清单、而且必须带
-#   tag/rev 说明符」写成硬规则，[advisories] 同时覆盖漏洞。
+#   产物里含 7 个 GitHub git 依赖（6 个直接声明：qwen3-asr-wgpu /
+#   qwen3-aligner-wgpu / fireredvad / demucs-core / punkt /
+#   sensevoice-small-wgpu，外加传递依赖 nagisa-rs）。cargo-deny 能把
+#   「git 依赖只能来自这份显式清单、而且必须带 tag/rev 说明符」写成硬规则，
+#   [advisories] 同时覆盖漏洞。
 #   一个工具、一份配置、一条命令，比两个工具更好维护。
 #
 # 运行（本地与 CI 同一条命令）：
@@ -68,6 +69,9 @@ allow-git = [
     "https://github.com/eclipse005/qwen3-aligner-wgpu",
     "https://github.com/eclipse005/qwen3-asr-wgpu",
     "https://github.com/eclipse005/rust-punkt",
+    # 热词粗转（SenseVoiceSmall，wgpu）：只服务「先粗转再召回」那一趟，
+    # 不参与正式转写，但同样会被打进产物。
+    "https://github.com/eclipse005/sensevoice-small-wgpu",
 ]
 # 必须带 tag 或 rev：不写说明符的 git 依赖会跟踪默认分支最新提交，
 # 同一份源码能构建出不同产物。用 rev 也可以（更具体），tag 是允许的底线。

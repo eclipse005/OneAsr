@@ -25,6 +25,18 @@ pub const TEXT: Rgba = rgba_hex(0x0f172a);
 pub const MUTED: Rgba = rgba_hex(0x64748b);
 /// Disabled / very soft secondary (still readable on white)
 pub const MUTED_SOFT: Rgba = rgba_hex(0x94a3b8);
+/// **禁用态的整体淡化系数**，任务行上所有锁住的控件共用这一个。
+///
+/// 之前只有 `icon_btn`（▶ 🗑）带这层淡化，语种 / 热词 / 分离 / 文稿四颗 chip
+/// 没有——它们各自把底色换成 `PANEL`（纯白）、描边换成 `LINE_SOFT`，在白色行底
+/// 上几乎看不出变化。于是「处理中」的一行里，▶ 🗑 灰得发闷（读作：点不动），
+/// EN / 分离 却还是白底描边加实色文字（读作：大概能点）。同一行里两种禁用语，
+/// 比不禁用还误导。
+///
+/// 只调底色不够：白底换灰底在浅色主题里差异很小，而叠一层 55% 淡化之后，
+/// 控件会真的「沉下去」，和图标按钮完全一致。放在这里而不是各写各的，
+/// 是为了让 chip 与 `icon_btn` 永远不会再分家。
+pub const DISABLED_OPACITY: f32 = 0.55;
 /// Brand / success
 pub const ACCENT: Rgba = rgba_hex(0x0d9488);
 /// Accent soft fill

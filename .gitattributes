@@ -29,6 +29,7 @@ installer/macos/* text eol=lf
 *.png binary
 *.ico binary
 *.wav binary
+*.bin binary
 *.safetensors binary
 *.dll binary
 *.exe binary

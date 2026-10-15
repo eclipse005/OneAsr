@@ -9,6 +9,7 @@
 pub mod asr;
 mod diagnostics;
 pub mod engine;
+pub mod hotword;
 pub mod i18n;
 pub mod lang;
 pub mod media;
@@ -28,15 +29,16 @@ pub mod vad;
 pub use asr::{
     AsrStage, ProcessExportOptions, StageClock, StageTiming, StageUpdate, TaskTiming,
     TranscriptInput, check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir,
-    format_process_ms, invalidate_all_model_checks, invalidate_model_check, is_model_ready,
-    process_media_file_with_export, process_media_file_with_progress,
-    process_media_file_with_provider, process_media_file_with_transcript,
-    process_media_file_with_transcript_export,
+    check_sensevoice_model_dir, format_process_ms, invalidate_all_model_checks,
+    invalidate_model_check, is_model_ready, process_media_file_with_export,
+    process_media_file_with_progress, process_media_file_with_provider,
+    process_media_file_with_transcript, process_media_file_with_transcript_export,
 };
 pub use engine::{
     AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider, SeparateRequest,
     SeparationEvent, Separator, TranscribeRequest, Transcript,
 };
+pub use hotword::{DEFAULT_HOTWORD_GROUP_ID, HotwordGroup, HotwordRun, HotwordStore};
 pub use lang::{
     SOURCE_LANGUAGES, SourceLanguage, normalize_source_language, source_language_by_id,
 };
@@ -45,14 +47,14 @@ pub use media::{
 };
 pub use model::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, HTDEMUCS_FT, ModelId,
-    ModelKind, QWEN3_ASR_06B, QWEN3_ASR_17B, default_aligner_model_dir, default_asr_model_dir,
-    default_demucs_model_dir, download_model, probe_writable, resolve_app_root_dir,
-    resolve_models_root,
+    ModelKind, QWEN3_ASR_06B, QWEN3_ASR_17B, SENSEVOICE_SMALL, default_aligner_model_dir,
+    default_asr_model_dir, default_demucs_model_dir, default_sensevoice_model_dir, download_model,
+    probe_writable, resolve_app_root_dir, resolve_models_root,
 };
 pub use paths::{
     DataEnv, DataRoot, DataRootError, DataRootSource, Platform, data_dir, data_root,
-    data_root_log_line, default_output_dir, install_settings_path, redact_home, resolve_data_root,
-    runs_dir, set_data_root_override, settings_path, user_data_base,
+    data_root_log_line, default_output_dir, hotwords_path, install_settings_path, redact_home,
+    resolve_data_root, runs_dir, set_data_root_override, settings_path, user_data_base,
 };
 pub use runtime::{demote_current_thread, init_runtime};
 pub use settings::{

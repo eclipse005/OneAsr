@@ -10,6 +10,7 @@ use crate::app::prelude::*;
 
 pub(crate) mod chrome;
 pub(crate) mod empty_wave;
+pub(crate) mod hotword_page;
 pub(crate) mod metrics;
 pub(crate) mod settings_drawer;
 pub(crate) mod settings_sections;

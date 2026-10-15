@@ -46,12 +46,20 @@ impl OneAsrApp {
                     DurationState::Known(s) => Some(s),
                     _ => None,
                 };
+                // 热词组：绑定按稳定 id，显示名每帧从 settings 解析——组改名后
+                // 名字随之变，绑定不散。
+                let hotword_label = t
+                    .hotword_group
+                    .as_deref()
+                    .and_then(|id| self.hotwords.label(id));
                 TaskRowView {
                     id: t.id.clone(),
                     status: t.status,
                     has_output: t.output_file.is_some(),
                     language: t.language.clone(),
                     vocal_separation: t.vocal_separation,
+                    hotword_group: t.hotword_group.clone(),
+                    hotword_group_label: hotword_label,
                     error: t.error.clone(),
                     name: t.name.clone(),
                     size_label: t.size_label(),

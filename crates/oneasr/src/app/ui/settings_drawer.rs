@@ -1,12 +1,13 @@
 //! The settings drawer's skeleton — slide-in shell, scroll host, save bar.
 //!
-//! The ten sections themselves live in [`super::settings_sections`], which
+//! The section builders themselves live in [`super::settings_sections`], which
 //! reads a [`SettingsFormState`] so the probes and clones happen once.
 
 use crate::app::prelude::*;
 
 impl OneAsrApp {
     pub(super) fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let page = self.settings_page;
         let form = self.settings_form_state(cx);
         // 语言按钮的 tooltip：当前档位 + 点击提示（按当前界面语言拼）。
         let mode_label = t(match form.ui_language.as_str() {
@@ -15,6 +16,34 @@ impl OneAsrApp {
             _ => L::UI_LANG_SYSTEM,
         });
         let lang_tooltip: SharedString = crate::i18n::ui_language_tooltip(mode_label).into();
+        let title = match page {
+            DrawerPage::Settings => t(L::SETTINGS),
+            DrawerPage::Hotword => t(L::HOTWORD),
+        };
+        // 内容按页组装成一份 `AnyElement` 列表：抽屉骨架（宽度 / 动画 / 保存栏 /
+        // 快照回滚）只有一份，页只决定里面放哪几张卡。
+        let cards: Vec<AnyElement> = match page {
+            DrawerPage::Settings => vec![
+                self.render_settings_language(&form, cx).into_any_element(),
+                self.render_settings_chunk_duration(&form, cx)
+                    .into_any_element(),
+                // 输出：格式 | 中文字形 并排平分（同「默认语言 | 字幕长度」）
+                self.render_settings_output(&form, cx).into_any_element(),
+                self.render_settings_output_location(&form, cx)
+                    .into_any_element(),
+                self.render_settings_asr_model(&form, cx).into_any_element(),
+                self.render_settings_aligner(&form, cx).into_any_element(),
+                // 人声分离（可选）：HTDemucs 原生 Rust 推理，转录前压掉 BGM
+                self.render_settings_demucs(&form, cx).into_any_element(),
+                self.render_settings_backend(&form, cx).into_any_element(),
+                // One switch, no essay: taps and the run reminder together.
+                self.render_settings_sound(&form, cx).into_any_element(),
+            ],
+            DrawerPage::Hotword => self.render_hotword_cards(cx),
+        };
+        // 「重置」只对设置页有意义：在热词页上点它会把后端 / 主题一起恢复出厂，
+        // 那不是这一页该干的事。左槽留空以维持保存按钮靠右。
+        let show_reset = page == DrawerPage::Settings;
 
         // Layout: title | scrollable body | pin footer (save always visible).
         div()
@@ -36,7 +65,7 @@ impl OneAsrApp {
                             .text_base()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(TEXT)
-                            .child(t(L::SETTINGS)),
+                            .child(title),
                     )
                     // 右上角：未保存标记 + 界面语言切换（点击循环三档）。
                     .child(
@@ -60,27 +89,16 @@ impl OneAsrApp {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    // 上下留白与卡片间距（gap_2p5）一致：标题→首卡、卡↔卡、
+                    // 上下留白与卡片间距（gap_3）一致：标题→首卡、卡↔卡、
                     // 末卡→保存栏全部等距，末卡不再贴着保存栏。
                     .px_4()
-                    .pt_2p5()
-                    .pb_2p5()
+                    .pt_3()
+                    .pb_3()
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap_2p5()
-                    .child(self.render_settings_language(&form, cx))
-                    .child(self.render_settings_chunk_duration(&form, cx))
-                    // 输出：格式 | 中文字形 并排平分（同「默认语言 | 字幕长度」）
-                    .child(self.render_settings_output(&form, cx))
-                    .child(self.render_settings_output_location(&form, cx))
-                    .child(self.render_settings_asr_model(&form, cx))
-                    .child(self.render_settings_aligner(&form, cx))
-                    // 人声分离（可选）：HTDemucs 原生 Rust 推理，转录前压掉 BGM
-                    .child(self.render_settings_demucs(&form, cx))
-                    .child(self.render_settings_backend(&form, cx))
-                    // One switch, no essay: taps and the run reminder together.
-                    .child(self.render_settings_sound(&form, cx)),
+                    .gap_3()
+                    .children(cards),
             )
             .child(
                 div()
@@ -92,12 +110,14 @@ impl OneAsrApp {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().flex_shrink_0().child(btn(
-                        t(L::RESET),
-                        BtnKind::Quiet,
-                        true,
-                        cx.listener(|this, _, _, cx| this.reset_settings(cx)),
-                    )))
+                    .child(div().flex_shrink_0().when(show_reset, |el| {
+                        el.child(btn(
+                            t(L::RESET),
+                            BtnKind::Quiet,
+                            true,
+                            cx.listener(|this, _, _, cx| this.reset_settings(cx)),
+                        ))
+                    }))
                     .child(div().flex_shrink_0().child(btn(
                         if form.dirty {
                             t(L::SAVE_SETTINGS)
@@ -119,7 +139,7 @@ impl OneAsrApp {
 /// Everything the settings drawer derives once per repaint.
 ///
 /// Collected up front (as the monolith did) and shared by reference with the
-/// ten section builders, so probe / download state is read exactly once.
+/// section builders, so probe / download state is read exactly once.
 pub(super) struct SettingsFormState {
     pub(super) backend: String,
     pub(super) language: String,

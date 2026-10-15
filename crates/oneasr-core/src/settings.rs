@@ -138,6 +138,19 @@ pub struct Settings {
     /// HTDemucs weights directory (default `{app}/models/htdemucs_ft`).
     #[serde(default = "default_demucs_model_dir")]
     pub demucs_model_dir: PathBuf,
+    /// **本次运行**要用的热词（`None` = 不跑粗转）。
+    ///
+    /// 不落盘（`serde(skip)`）：它是**任务级**的运行时状态，与 `language` /
+    /// `vocal_separation` 同一套路——GUI 每次开跑前从任务上抄进这份副本，持久化
+    /// 的那份在 [`crate::hotword::HotwordStore`]（`hotword.json`）。
+    ///
+    /// 这里存的是**已经解析好的**词表文本与调参，不是组 id：管线因此拿不到悬空
+    /// id，「组被删了却仍按热词去要求粗转模型」那类自相矛盾从结构上消失。
+    #[serde(skip)]
+    pub hotword_run: Option<crate::hotword::HotwordRun>,
+    /// SenseVoiceSmall 目录（热词粗转用；默认 `{app}/models/SenseVoiceSmall`）。
+    #[serde(default = "default_sensevoice_model_dir")]
+    pub sensevoice_model_dir: PathBuf,
     /// The one sound switch (「提示音」): interaction taps AND the run
     /// reminder together.
     #[serde(default = "default_sound")]
@@ -216,6 +229,10 @@ fn default_demucs_model_dir() -> PathBuf {
     crate::model::default_demucs_model_dir()
 }
 
+fn default_sensevoice_model_dir() -> PathBuf {
+    crate::model::default_sensevoice_model_dir()
+}
+
 // Sounds default on: that has been the shipped behaviour, and the one switch
 // to turn them all off lives in an obvious place.
 fn default_sound() -> bool {
@@ -262,6 +279,9 @@ impl Default for Settings {
             text_script: default_text_script(),
             vocal_separation: false,
             demucs_model_dir: default_demucs_model_dir(),
+            sensevoice_model_dir: default_sensevoice_model_dir(),
+            // 运行期状态：每次开跑由 GUI 从任务 + 热词库填进来，不落盘。
+            hotword_run: None,
             sound: default_sound(),
             close_to_tray: default_close_to_tray(),
             // 全新安装要弹欢迎卡；serde 字段默认（老配置）是 true 不弹。
@@ -416,6 +436,8 @@ impl Settings {
         }
         self.chunk_target_seconds = clamp_chunk_target_seconds(self.chunk_target_seconds);
         self.normalize_output_dir();
+        // 热词库不在这里自愈——它自己一份 `hotword.json`，见
+        // [`crate::hotword::HotwordStore::normalize`]。
         // A muted install stays muted. The two switches of 0.1.9 were merged
         // into one, so the merged switch inherits "on" only when neither family
         // was turned off; this can only ever turn sound *off*, and once the
@@ -619,6 +641,14 @@ impl Settings {
         self.demucs_model_dir.clone()
     }
 
+    /// 热词粗转模型目录（空 = 安装布局默认）。
+    pub fn resolved_sensevoice_model_dir(&self) -> PathBuf {
+        if self.sensevoice_model_dir.as_os_str().is_empty() {
+            return crate::model::default_sensevoice_model_dir();
+        }
+        self.sensevoice_model_dir.clone()
+    }
+
     pub fn selected_asr_id(&self) -> ModelId {
         ModelId::parse_asr(&self.asr_model)
     }
@@ -782,6 +812,17 @@ impl Settings {
             crate::asr::check_demucs_model_dir(&self.resolved_demucs_model_dir())
                 .map_err(|e| e.to_string())?;
         }
+        // 热词：选了组就必须有词、且粗转模型在位。空组报错而不是静默跳过——
+        // 「选了却什么都没发生」比直接说清楚更糟。组**不存在**时
+        // [`crate::hotword::HotwordStore::resolve_run`] 返回 `None`，进不到这里：
+        // 那是「这一行显示无热词、那就真不用热词」，不该反过来要求粗转模型。
+        if let Some(run) = &self.hotword_run {
+            if !run.is_usable() {
+                return Err(crate::i18n::hotword_group_empty(&run.group_name));
+            }
+            crate::asr::check_sensevoice_model_dir(&self.resolved_sensevoice_model_dir())
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -817,6 +858,8 @@ impl Settings {
             // Weights always land in the install-layout dir the settings
             // already point at; nothing to re-bind.
             ModelKind::Demucs => false,
+            // 热词粗转同理：它没有「选中 id」这回事，下载落点就是设置里那个目录。
+            ModelKind::Hotword => false,
         }
     }
 }

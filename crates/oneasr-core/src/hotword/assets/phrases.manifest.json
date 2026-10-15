@@ -1,0 +1,10 @@
+{
+  "source": "pypinyin.constants.PHRASES_DICT",
+  "pypinyin_version": "0.55.0",
+  "generator": "scripts/export-phrases.py",
+  "magic": "PYPHRS\u0001\u0000",
+  "entries": 47111,
+  "syllables": 1247,
+  "bytes": 867110,
+  "sha256": "aa05de6a81e0070875af9dab7e98e3c5767ba63b53ff3231de3252535dc9b925"
+}

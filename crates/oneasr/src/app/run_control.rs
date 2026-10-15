@@ -67,7 +67,8 @@ impl OneAsrApp {
         if let Err(msg) = self.settings.can_start() {
             self.model_status = ModelStatus::NotReady;
             self.flash_hint(msg, cx);
-            if !self.settings_open {
+            // 模型路径在设置页上——抽屉若开在热词页，切回去而不是「已经开着就不管」。
+            if !self.settings_page_open() {
                 self.toggle_settings(cx);
             }
             return false;
@@ -197,6 +198,7 @@ impl OneAsrApp {
         let name = task.name.clone();
         let task_lang = task.language.clone();
         let task_sep = task.vocal_separation;
+        let task_hotword = task.hotword_group.clone();
         // 挂了文稿就走「只打轴」那条路。
         let task_transcript = task
             .transcript
@@ -232,6 +234,10 @@ impl OneAsrApp {
         let mut settings = self.settings.clone();
         settings.language = normalize_source_language(&task_lang);
         settings.vocal_separation = task_sep;
+        // 热词组是**任务级**的运行时选择：在这里就把 id **解析成**词表 + 调参，
+        // 管线那边从此只见解析结果、不再见组 id。组被删掉时 `resolve_run` 返回
+        // `None`，这一行就真的按「无热词」跑——不会反过来要求粗转模型。
+        settings.hotword_run = self.hotwords.resolve_run(task_hotword.as_deref());
         if task_transcript.is_some() {
             // 文稿任务固定用 CTC：整段一次对齐，块边界不伤词。这个闸门是
             // **任务级**的——全局 `align_ready` 问的是「设置里选中的对齐器就绪吗」，

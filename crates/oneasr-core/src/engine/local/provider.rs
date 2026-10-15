@@ -7,6 +7,7 @@ use super::backend::{
 use super::ctc_aligner::CtcAlignerAdapter;
 use super::demucs::DemucsSeparatorAdapter;
 use super::qwen_asr::QwenAsrAdapter;
+use super::sensevoice::SenseVoiceRoughAdapter;
 use crate::model::ModelId;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 #[cfg(debug_assertions)]
 use crate::diagnostics::pipeline_trace;
 use crate::diagnostics::trace_log;
-use crate::engine::{Aligner, AsrEngine, EngineError, EngineProvider, Separator};
+use crate::engine::{Aligner, AsrEngine, EngineError, EngineProvider, RoughAsr, Separator};
 use crate::settings::Settings;
 
 /// Real engines backed by local weights, with the product's backend policy.
@@ -27,6 +28,8 @@ pub struct LocalEngineProvider {
     /// Which aligner engine the settings selected (`CTC` | `Qwen`).
     aligner: ModelId,
     demucs_model_dir: PathBuf,
+    /// 热词粗转（SenseVoice）的目录。只有选了热词组的运行才会读它。
+    rough_model_dir: PathBuf,
     backend_pref: String,
     resolved: Cell<ComputeBackend>,
 }
@@ -54,6 +57,7 @@ impl LocalEngineProvider {
             aligner_model_dir: settings.aligner_model_dir.clone(),
             aligner: settings.selected_aligner_id(),
             demucs_model_dir: settings.resolved_demucs_model_dir(),
+            rough_model_dir: settings.resolved_sensevoice_model_dir(),
             backend_pref: settings.backend.clone(),
             resolved: Cell::new(resolved),
         })
@@ -167,5 +171,14 @@ impl EngineProvider for LocalEngineProvider {
             trace_log,
         )
         .map(|engine| Box::new(engine) as Box<dyn Separator>)
+    }
+
+    fn load_rough_asr(&self) -> Result<Box<dyn RoughAsr>, EngineError> {
+        // 粗转跑在正式 ASR 之前，所以这里看到的是本次运行「已定下」的后端：
+        // 若本机已定成 CPU（钉卡失败回落），这趟也走 CPU，与「一次运行一套后端
+        // 策略」一致。粗转不做 GPU/CPU 之间的二次回落——加载失败就报错。
+        let engine = SenseVoiceRoughAdapter::load(&self.rough_model_dir, self.resolved.get())?;
+        trace_log(format!("rough device={}", engine.device_description()));
+        Ok(Box::new(engine))
     }
 }

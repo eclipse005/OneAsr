@@ -59,10 +59,14 @@ impl Default for FakeSeparation {
 pub struct FakeProvider {
     log: EngineLog,
     transcript: String,
+    /// 粗转（热词第一趟）的假文本；默认空串。
+    rough_text: String,
     tokens: Vec<AlignedToken>,
     separation: Option<FakeSeparation>,
     align_progress_total: usize,
     align_inputs: Arc<Mutex<Vec<String>>>,
+    /// 每次 `transcribe` 收到的热词 `context`（`None` = 没给提示）。
+    asr_contexts: Arc<Mutex<Vec<Option<String>>>>,
     separator_loads: Arc<AtomicUsize>,
 }
 
@@ -72,10 +76,12 @@ impl FakeProvider {
         Self {
             log: EngineLog::default(),
             transcript: transcript.into(),
+            rough_text: String::new(),
             tokens,
             separation: None,
             align_progress_total: 0,
             align_inputs: Arc::new(Mutex::new(Vec::new())),
+            asr_contexts: Arc::new(Mutex::new(Vec::new())),
             separator_loads: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -103,6 +109,21 @@ impl FakeProvider {
         self.align_inputs.lock().unwrap().clone()
     }
 
+    /// 每次 ASR 调用收到的热词 `context`，按调用顺序——让测试能证明召回结果真的
+    /// 进到了正式 ASR，而不是只跑了一趟粗转。
+    pub fn asr_contexts(&self) -> Vec<Option<String>> {
+        self.asr_contexts.lock().unwrap().clone()
+    }
+
+    /// 让假粗转引擎对**每个**分块都返回这段文本。
+    ///
+    /// 有了它，管线测试才能在没有 SenseVoice 权重的情况下走到「逐块召回 → 注入
+    /// context」那一段。
+    pub fn with_rough_text(mut self, text: impl Into<String>) -> Self {
+        self.rough_text = text.into();
+        self
+    }
+
     /// How often the pipeline asked for a separator engine.
     pub fn separator_loads(&self) -> usize {
         self.separator_loads.load(Ordering::SeqCst)
@@ -115,6 +136,7 @@ impl EngineProvider for FakeProvider {
         Ok(Box::new(FakeAsr {
             log: self.log.clone(),
             text: self.transcript.clone(),
+            contexts: self.asr_contexts.clone(),
         }))
     }
 
@@ -141,16 +163,44 @@ impl EngineProvider for FakeProvider {
             config,
         }))
     }
+    fn load_rough_asr(&self) -> Result<Box<dyn crate::engine::RoughAsr>, EngineError> {
+        self.log.push("rough.load");
+        Ok(Box::new(FakeRough {
+            log: self.log.clone(),
+            text: self.rough_text.clone(),
+        }))
+    }
+}
+
+struct FakeRough {
+    log: EngineLog,
+    text: String,
+}
+
+impl crate::engine::RoughAsr for FakeRough {
+    fn transcribe_chunks(
+        &mut self,
+        _wav: &std::path::Path,
+        chunks: &[(f32, f32)],
+    ) -> Result<Vec<String>, EngineError> {
+        self.log.push("rough.transcribe");
+        Ok(vec![self.text.clone(); chunks.len()])
+    }
 }
 
 struct FakeAsr {
     log: EngineLog,
     text: String,
+    contexts: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 impl AsrEngine for FakeAsr {
-    fn transcribe(&self, _req: TranscribeRequest<'_>) -> Result<Transcript, EngineError> {
+    fn transcribe(&self, req: TranscribeRequest<'_>) -> Result<Transcript, EngineError> {
         self.log.push("asr.transcribe");
+        self.contexts
+            .lock()
+            .unwrap()
+            .push(req.context.map(str::to_owned));
         Ok(Transcript {
             text: self.text.clone(),
         })

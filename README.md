@@ -80,6 +80,7 @@ Main window (empty state) and the task list + settings drawer (same window size,
 - **Transcribe only**: tick TXT alone (no SRT / ASS) and the task stops at transcription — one sentence per line, cut on sentence punctuation; an aligner model is not needed at all
 - **Chinese script choice**: original / Simplified / Traditional (Chinese & Cantonese only; timing is unaffected)
 - **Vocal separation (optional)**: built-in HTDemucs v4 strips BGM / noise before transcribing
+- **Hotwords (optional)**: bind a word list to a task — a lightweight model rough-transcribes first, recalls the entries it hears, and feeds them to the ASR model as context; misses in the rough pass are covered by phonetic matching, so a word only needs its correct spelling (the rough pass needs its own ~940 MB model)
 - **GPU acceleration**: NVIDIA / AMD / Intel / Apple Silicon; falls back to CPU automatically when no discrete GPU is present
 
 ## Models & sizes
@@ -93,6 +94,7 @@ The installer ships **no** weights; models download from ModelScope on first use
 | omniASR-CTC-300M-v2-hf | ~1.3 GB | Required, shared by all ASR sizes |
 | Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | Optional — only if you switch the aligner |
 | HTDemucs v4 vocal weights | ~84 MB | Optional |
+| SenseVoiceSmall (hotword rough pass) | ~940 MB | Optional — only when you use hotwords |
 
 Common setups total about 2.9–5.4 GB. Only the model download needs network; transcription itself runs offline.
 

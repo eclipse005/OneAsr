@@ -401,6 +401,13 @@ pub enum IconKind {
 ///
 /// Note: GPUI SVG needs an explicit `.text_color()` (currentColor); parent
 /// cascade alone often leaves stroke/fill invisible.
+///
+/// 三颗按钮（开始 / 打开输出 / 删除）现在**完全同款**：静息态一律
+/// `MUTED / PANEL / LINE`，禁用一律 `MUTED_SOFT / BG / LINE_SOFT` + 淡化。
+/// 「打开输出」曾经是唯一一颗常驻强调色的（ACCENT 图标 + ACCENT_SOFT 底），
+/// 论点是「它不是要等你发现的动作，而是这一行已完成的事实」。但那件事左边的
+/// 竖条、状态药丸、以及主按钮自己从 ▶ 变成 📁 已经说了三遍；再让这一颗方块
+/// 常驻一块亮青，读起来不是「已完成」，是「被选中了」。
 pub fn icon_btn(
     kind: IconKind,
     tip: &'static str,
@@ -409,25 +416,14 @@ pub fn icon_btn(
 ) -> impl IntoElement {
     let id = SharedString::from(format!("ico-{tip}-{enabled}-{}", kind as u8));
     let tip_s: SharedString = tip.into();
-    let (fg, bg, border) = if !enabled {
+    let (fg, bg, border) = if enabled {
+        (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE)
+    } else {
         (
             crate::theme::MUTED_SOFT,
             crate::theme::BG,
             crate::theme::LINE_SOFT,
         )
-    } else {
-        match kind {
-            // 「打开字幕」始终是强调色：它不是一个要等你发现的动作，而是这一行
-            // 已经完成的事实。
-            IconKind::Folder => (
-                crate::theme::ACCENT,
-                crate::theme::ACCENT_SOFT,
-                crate::theme::ACCENT_SOFT,
-            ),
-            IconKind::Play | IconKind::Trash => {
-                (crate::theme::MUTED, crate::theme::PANEL, crate::theme::LINE)
-            }
-        }
     };
     let mut el = div()
         .id(id)
@@ -440,7 +436,11 @@ pub fn icon_btn(
         .border_1()
         .border_color(border)
         .text_color(fg)
-        .opacity(if enabled { 1.0 } else { 0.55 })
+        .opacity(if enabled {
+            1.0
+        } else {
+            crate::theme::DISABLED_OPACITY
+        })
         .child(svg().size(px(17.)).path(icon_svg_path(kind)).text_color(fg))
         .tooltip(move |_, cx| {
             cx.new(|_| NameTooltip {
@@ -458,8 +458,8 @@ pub fn icon_btn(
                 IconKind::Trash => s
                     .bg(crate::theme::DANGER_SOFT)
                     .border_color(crate::theme::DANGER),
-                // Keep the bg light so the ACCENT icon stays readable (unlike a
-                // solid-ACCENT fill, which would eat the icon of the same color).
+                // 静息态与两颗按钮同款，悬停也同款——一颗「打开输出」不该
+                // 因为图标形状不同就自带一套配色。
                 IconKind::Folder => s
                     .bg(crate::theme::ACCENT_SOFT)
                     .border_color(crate::theme::ACCENT),

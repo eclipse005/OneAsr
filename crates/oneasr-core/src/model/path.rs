@@ -70,3 +70,8 @@ pub fn default_aligner_model_dir() -> PathBuf {
 pub fn default_demucs_model_dir() -> PathBuf {
     resolve_model_dir(HTDEMUCS_FT)
 }
+
+/// 热词粗转（SenseVoiceSmall）的安装布局目录。和别的模型一样：装在哪读哪。
+pub fn default_sensevoice_model_dir() -> PathBuf {
+    resolve_model_dir(crate::model::SENSEVOICE_SMALL)
+}

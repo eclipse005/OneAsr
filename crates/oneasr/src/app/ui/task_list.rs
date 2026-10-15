@@ -67,7 +67,7 @@ impl OneAsrApp {
                                         BtnKind::Secondary,
                                         true,
                                         cx.listener(|this, _, _, cx| {
-                                            if !this.settings_open {
+                                            if !this.settings_page_open() {
                                                 this.toggle_settings(cx);
                                             }
                                         }),
@@ -83,15 +83,20 @@ impl OneAsrApp {
         let items = self.snapshot_task_rows(Instant::now());
         let hover_id = self.hover_row.clone();
         let lang_menu = self.lang_menu.clone();
+        let hotword_menu = self.hotword_menu.clone();
         let active_stage = self.active_stage.clone();
         let timing_popover = self.timing_popover.clone();
         let timing_visible = self.timing_popover_visible();
         let timing_progress = self.timing_popover_progress();
+        // 热词组（id, 显示名）快照：改名后名字随之变，任务绑定不变。
+        let hotword_groups = self.hotwords.menu_options();
 
         // Row-invariant state, captured once for the whole repaint.
         let row_ctx = RowCtx {
             hover_id,
             lang_menu,
+            hotword_menu,
+            hotword_groups,
             active_stage,
             timing_popover,
             timing_visible,

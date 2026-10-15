@@ -87,6 +87,9 @@ pub mod L {
         "Model files are complete — no need to re-download",
     );
     pub const CANCELLING_DOWNLOAD: Str = Str::new("正在取消下载…", "Cancelling download…");
+    /// 点路径复制后的回执。没有它用户只能靠猜——点击没有可见后果的控件，
+    /// 要么没人敢点第二次，要么每次都回头去别处核对一遍路径。
+    pub const PATH_COPIED: Str = Str::new("路径已复制", "Path copied");
     pub const PREPARING: Str = Str::new("准备中…", "Preparing…");
     pub const TIP_CANCEL_DOWNLOAD: Str = Str::new("点击取消下载", "Click to cancel the download");
     pub const TIP_REDOWNLOAD: Str = Str::new("重新下载", "Re-download");
@@ -329,6 +332,59 @@ pub mod L {
         "Plays a click for actions, and a chime when a run finishes",
     );
 
+    // ---- 热词（独立面板 + 任务行下拉） ----
+    pub const HOTWORD: Str = Str::new("热词", "Hotwords");
+    pub const TIP_HOTWORD: Str = Str::new(
+        "先用轻量模型粗转一遍、召回其中的热词，再交给识别模型；热词用逗号分隔",
+        "Rough-transcribes first, recalls the hotwords, then hands them to the ASR model. Separate hotwords with commas",
+    );
+    pub const HOTWORD_NONE: Str = Str::new("无", "None");
+    /// 任务行那颗 chip 的**字段名**——「热词」/「Hotword」。
+    ///
+    /// 单独一个「无」读不出这是热词还是字幕/翻译，任务行里语种旁边那颗控件
+    /// 必须自报家门。它与 [`HOTWORD_NONE`] 一起拼成未绑定时显示的整串，见
+    /// [`hotword_unbound_chip`]。
+    pub const HOTWORD_FIELD: Str = Str::new("热词", "Hotword");
+    /// 空状态下 chip 的 tooltip：点它会发生什么。
+    pub const TIP_HOTWORD_UNBOUND: Str = Str::new(
+        "未使用热词（点击挑选一组）",
+        "No hotword group yet — click to pick one",
+    );
+    pub const HOTWORD_GROUPS: Str = Str::new("热词组", "Hotword groups");
+    pub const HOTWORD_NEW_GROUP: Str = Str::new("新建组", "New group");
+    pub const HOTWORD_SET_DEFAULT: Str = Str::new("设为默认组", "Set as default");
+    pub const HOTWORD_DELETE_GROUP: Str = Str::new("删除此组", "Delete this group");
+    pub const HOTWORD_DEFAULT_BADGE: Str = Str::new("默认", "Default");
+    pub const TIP_HOTWORD_SET_DEFAULT: Str = Str::new(
+        "新任务默认绑定这一组；任务行里仍可单独更改",
+        "New tasks bind this group by default. Each task can still change it",
+    );
+    /// 词表框的占位符：**一个词**就够。占位只画第一行，所以别在这里演示换行。
+    pub const HOTWORD_WORDS_PLACEHOLDER: Str = Str::new("热词", "Hotword");
+    pub const HOTWORD_GROUP_NAME_PLACEHOLDER: Str = Str::new("组名", "Group name");
+    pub const HOTWORD_NO_SELECTION: Str = Str::new(
+        "选一个组来编辑它的词表",
+        "Pick a group to edit its word list",
+    );
+    pub const HOTWORD_DEFAULT_GROUP_DELETED: Str = Str::new(
+        "已删除默认组，默认组现在为空",
+        "Deleted the default group — no group is default now",
+    );
+    pub const LOCKED_HOTWORD: Str = Str::new(
+        "处理中的任务不能改热词组",
+        "Can't change the hotword group while the task is processing",
+    );
+    /// 热词粗转模型（SenseVoice）卡。
+    pub const SENSEVOICE_MODEL: Str = Str::new("热词粗转模型", "Hotword rough-pass model");
+    pub const TIP_SENSEVOICE_MODEL: Str = Str::new(
+        "SenseVoiceSmall：轻量、跨语言，用于粗转与热词召回",
+        "SenseVoiceSmall: lightweight and multilingual, used for the rough pass and hotword recall",
+    );
+    pub const DLG_SENSEVOICE_DIR: Str = Str::new(
+        "选择热词粗转模型目录",
+        "Choose hotword rough-pass model folder",
+    );
+
     // ---- 托盘菜单 ----
     pub const TRAY_OPEN: Str = Str::new("打开 OneAsr", "Open OneAsr");
     pub const TRAY_QUIT: Str = Str::new("退出 OneAsr", "Quit OneAsr");
@@ -432,6 +488,18 @@ pub fn save_failed(e: &str) -> String {
     }
 }
 
+/// `热词已保存，但设置未保存: {e}` / `Hotwords were saved, but settings were not: {e}`
+///
+/// 一次提交要写两份文件（`hotword.json` + `settings.json`），先写的那份可能已经
+/// 成功。这种半提交必须**说出来**：只报「保存失败」会让用户以为整次保存作废，
+/// 而他的词表其实已经在磁盘上了。
+pub fn settings_save_failed_hotwords_saved(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("热词已保存，但设置未保存: {e}"),
+        UiLang::En => format!("Hotwords were saved, but settings were not: {e}"),
+    }
+}
+
 /// `已省 {span}`（状态栏统计 chip）。
 pub fn saved_prefix(span: &str) -> String {
     match ui_lang() {
@@ -507,6 +575,31 @@ pub fn took_time(total: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("用时 {total}"),
         UiLang::En => format!("Took {total}"),
+    }
+}
+
+/// `{n} 条` / `{n} words`（词表条目数；英文按个数取复数）。
+pub fn hotword_word_count(n: usize) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("{n} 条"),
+        UiLang::En if n == 1 => "1 word".into(),
+        UiLang::En => format!("{n} words"),
+    }
+}
+
+/// `热词：无` / `Hotword: None`（任务行那颗 chip 在**未绑定**时显示的整串）。
+///
+/// 字段名与状态都要在：光一个「无」读不出是热词还是字幕，光一个「热词」又
+/// 看不出当前是空的。两种语言的标点不同（中文全角冒号、英文半角冒号带空格），
+/// 所以在 helper 里按语言拼好，渲染层只拿结果——不在渲染层 `format!` 一个
+/// 单语冒号出去。
+///
+/// 显式收 `UiLang`：这条是纯格式化函数，单测不该去读全局语言（CI 与本机的
+/// 系统语言不一致时，靠读全局的断言会变成随机绿/随机红）。
+pub fn hotword_unbound_chip(lang: UiLang) -> String {
+    match lang {
+        UiLang::Zh => format!("{}：{}", L::HOTWORD_FIELD.zh, L::HOTWORD_NONE.zh),
+        UiLang::En => format!("{}: {}", L::HOTWORD_FIELD.en, L::HOTWORD_NONE.en),
     }
 }
 
@@ -589,5 +682,33 @@ pub fn tray_tooltip(stage: Option<&str>) -> String {
     match stage {
         Some(stage) => format!("OneAsr · {stage}"),
         None => "OneAsr".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oneasr_core::i18n::UiLang;
+
+    #[test]
+    fn unbound_hotword_chip_names_the_field_and_the_state_in_both_languages() {
+        assert_eq!(hotword_unbound_chip(UiLang::Zh), "热词：无");
+        // 半角冒号 + 空格：英文侧混进全角冒号会被 verify-i18n 判成中文残留。
+        assert_eq!(hotword_unbound_chip(UiLang::En), "Hotword: None");
+    }
+
+    /// 断骨验证：把 helper 里的冒号改成两边都用全角，英文那条断言必须变红。
+    /// 这条断言守的就是「两种语言各用各的标点」——helper 若图省事直接
+    /// `format!("{}:{}", ..)`，中文会变成半角，而中文界面里半角冒号贴着一串
+    /// 汉字很难看，却几乎不会被肉眼当成 bug。
+    #[test]
+    fn a_single_colon_for_both_languages_is_caught() {
+        let zh = hotword_unbound_chip(UiLang::Zh);
+        assert!(zh.contains('：'), "中文侧必须是全角冒号，实际是 {zh:?}");
+        let en = hotword_unbound_chip(UiLang::En);
+        assert!(
+            !en.contains('：'),
+            "英文侧绝不能出现全角冒号，实际是 {en:?}"
+        );
     }
 }

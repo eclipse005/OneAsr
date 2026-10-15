@@ -1,5 +1,5 @@
-//! The three model downloads — ASR, aligner, Demucs — and the
-//! progress state machine behind each one.
+//! The four model downloads — ASR, aligner, Demucs, SenseVoice (热词粗转) — and
+//! the progress state machine behind each one.
 //!
 //! The lanes are independent: the drawer shows a row per component, and one
 //! finishing must not disturb another still in flight.
@@ -24,6 +24,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.settings.asr_model_dir.clone(),
             ModelKind::Align => self.settings.aligner_model_dir.clone(),
             ModelKind::Demucs => self.settings.resolved_demucs_model_dir(),
+            ModelKind::Hotword => self.settings.resolved_sensevoice_model_dir(),
         };
 
         // 就绪缓存失效（下载前置）: the user may have deleted files since the
@@ -38,6 +39,7 @@ impl OneAsrApp {
             ModelKind::Asr => check_asr_model_dir(&model_dir),
             ModelKind::Align => oneasr_core::check_aligner_model_dir(&model_dir),
             ModelKind::Demucs => oneasr_core::check_demucs_model_dir(&model_dir),
+            ModelKind::Hotword => oneasr_core::check_sensevoice_model_dir(&model_dir),
         };
         if verified.is_ok() {
             self.flash_hint(t(L::MODEL_FILES_COMPLETE), cx);
@@ -57,6 +59,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle = Some(handle.clone()),
             ModelKind::Align => self.align_dl_handle = Some(handle.clone()),
             ModelKind::Demucs => self.demucs_dl_handle = Some(handle.clone()),
+            ModelKind::Hotword => self.sensevoice_dl_handle = Some(handle.clone()),
         }
         self.set_download_progress(DownloadProgress {
             state: DownloadState::Downloading,
@@ -104,6 +107,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle.as_ref(),
             ModelKind::Align => self.align_dl_handle.as_ref(),
             ModelKind::Demucs => self.demucs_dl_handle.as_ref(),
+            ModelKind::Hotword => self.sensevoice_dl_handle.as_ref(),
         };
         if let Some(h) = handle
             && h.model_id == id
@@ -127,6 +131,10 @@ impl OneAsrApp {
                 .is_some_and(|h| h.model_id == id),
             ModelKind::Demucs => self
                 .demucs_dl_handle
+                .as_ref()
+                .is_some_and(|h| h.model_id == id),
+            ModelKind::Hotword => self
+                .sensevoice_dl_handle
                 .as_ref()
                 .is_some_and(|h| h.model_id == id),
         };
@@ -160,6 +168,13 @@ impl OneAsrApp {
                         .as_ref()
                         .is_some_and(|p| p.state == DownloadState::Downloading)
             }
+            ModelKind::Hotword => {
+                self.sensevoice_dl_handle.is_some()
+                    || self
+                        .sensevoice_download
+                        .as_ref()
+                        .is_some_and(|p| p.state == DownloadState::Downloading)
+            }
         }
     }
 
@@ -168,6 +183,7 @@ impl OneAsrApp {
         self.download_kind_busy(ModelKind::Asr)
             || self.download_kind_busy(ModelKind::Align)
             || self.download_kind_busy(ModelKind::Demucs)
+            || self.download_kind_busy(ModelKind::Hotword)
     }
 
     /// Progress snapshot for this exact model id (never another ASR size).
@@ -176,6 +192,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_download.as_ref(),
             ModelKind::Align => self.align_download.as_ref(),
             ModelKind::Demucs => self.demucs_download.as_ref(),
+            ModelKind::Hotword => self.sensevoice_download.as_ref(),
         }?;
         if p.model_id == id { Some(p) } else { None }
     }
@@ -185,6 +202,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_download = Some(progress),
             ModelKind::Align => self.align_download = Some(progress),
             ModelKind::Demucs => self.demucs_download = Some(progress),
+            ModelKind::Hotword => self.sensevoice_download = Some(progress),
         }
     }
 
@@ -193,6 +211,7 @@ impl OneAsrApp {
             ModelKind::Asr => self.asr_dl_handle = None,
             ModelKind::Align => self.align_dl_handle = None,
             ModelKind::Demucs => self.demucs_dl_handle = None,
+            ModelKind::Hotword => self.sensevoice_dl_handle = None,
         }
     }
 

@@ -18,6 +18,10 @@ sha2 = "0.10"
 # Simplified ⇄ Traditional conversion for Chinese output (pure Rust, Apache-2.0,
 # dictionaries compiled into the binary at build time — no runtime files).
 ferrous-opencc = "0.4"
+# 热词筛选（音素级召回）：文本 → 拼音（多音字走自带的短语词典），
+# 以及汉字/假名等「不空格书写系统」的字符判定。见 src/hotword/。
+pinyin = "0.11"
+unicode-general-category = "1.1"
 punkt = { git = "https://github.com/eclipse005/rust-punkt.git", rev = "ca9187276d9478c0bc67c1cc3cd787de88f6e293" }
 # 四个 git 依赖全部钉到具体提交（rev）。`git` 依赖不写 rev/tag 时，Cargo 会在
 # 需要重新解析锁文件的时候（新 clone、CI 缓存未命中、`cargo update -p ...`）
@@ -30,6 +34,9 @@ qwen3-aligner-wgpu = { git = "https://github.com/eclipse005/qwen3-aligner-wgpu.g
 # （CJK 逐字、空格语言逐词），上层不再自己做分组。
 ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-aligner-wgpu.git", rev = "1915e577c63f74cfe1c2194e05fa01b332a13ce6" }
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
+# 热词的第一趟粗转（SenseVoiceSmall，wgpu）。只服务「先粗转再召回」，不参与
+# 正式转写；钉 rev 不跟默认分支漂。
+sensevoice-small-wgpu = { git = "https://github.com/eclipse005/sensevoice-small-wgpu.git", rev = "5f5b5edb1956242cc312ced95510cf89f627b2d1" }
 # HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
 demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "bc2ec615f0f8beb66c6a2c31e7b1b34d455f312b" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }

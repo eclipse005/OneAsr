@@ -69,6 +69,11 @@ pub struct TranscribeRequest<'a> {
     pub wav: &'a Path,
     pub language: &'a str,
     pub max_new_tokens: usize,
+    /// 热词提示词（`Vocabulary: a, b, c.`）；`None` 或空串 = 不给提示。
+    ///
+    /// 由 [`crate::hotword`] 逐块召回后按相关度降序拼成——**顺序有意义**：
+    /// 排在中后段的词基本不生效，所以这一串不能重排。
+    pub context: Option<&'a str>,
 }
 
 /// Transcript of one call (kept minimal: the pipeline owns cleaning/punctuation).
@@ -127,9 +132,26 @@ pub enum SeparationEvent {
     FellBackToCpu { reason: String },
 }
 
-/// ASR engine: transcribes a prepared WAV.
+/// AsrEngine: transcribes one prepared WAV.
 pub trait AsrEngine {
     fn transcribe(&self, req: TranscribeRequest<'_>) -> Result<Transcript, EngineError>;
+}
+
+/// 粗略转录引擎（热词的第一趟）：一次把**同一批分块**跑完。
+///
+/// 与 [`AsrEngine`] 的差别是**调用形状**，不是「小模型 vs 大模型」：这个引擎一次
+/// 吃下全部分块（GPU 上多段会拼成一次 encoder 前向），而正式 ASR 逐块调用。
+/// `chunks` 是 `(起, 止)` 秒，**必须与 VAD 规划出的那批完全一致**——两趟共用同一
+/// 批分块，召回出来的热词才不会跨块错位。
+///
+/// 返回值与 `chunks` 一一对应；引擎静默跳过的过短段给空串，那不是错误。
+/// 取 `&mut self`：粗转本身就是「载入一次、整批推理」的顺序过程。
+pub trait RoughAsr {
+    fn transcribe_chunks(
+        &mut self,
+        wav: &Path,
+        chunks: &[(f32, f32)],
+    ) -> Result<Vec<String>, EngineError>;
 }
 
 /// Forced-alignment engine: turns text + audio into timed tokens.
@@ -161,4 +183,8 @@ pub trait EngineProvider {
     fn load_asr(&self) -> Result<Box<dyn AsrEngine>, EngineError>;
     fn load_aligner(&self) -> Result<Box<dyn Aligner>, EngineError>;
     fn load_separator(&self) -> Result<Box<dyn Separator>, EngineError>;
+
+    /// 热词粗转用的引擎。只有「选了热词组」的运行才会调用它——TXT-only、
+    /// 没选热词组的任务在引擎生命周期里都看不到它。
+    fn load_rough_asr(&self) -> Result<Box<dyn RoughAsr>, EngineError>;
 }

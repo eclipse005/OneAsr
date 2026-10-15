@@ -14,6 +14,10 @@ use crate::app::{LangMenuLayout, LangSelectTarget, OneAsrApp, TaskRowView};
 pub(super) struct RowCtx {
     pub(super) hover_id: Option<String>,
     pub(super) lang_menu: Option<String>,
+    /// 任务 id whose 热词组 dropdown is open.
+    pub(super) hotword_menu: Option<String>,
+    /// 热词组（id, 显示名）快照，下拉选项用。
+    pub(super) hotword_groups: Vec<(String, String)>,
     pub(super) active_stage: Option<(String, SharedString)>,
     pub(super) timing_popover: Option<String>,
     pub(super) timing_visible: bool,
@@ -68,6 +72,14 @@ pub(super) fn task_row_view(
         };
     let can_delete = interactive && !row.status.locks_row_actions();
     let can_edit_lang = interactive && !row.status.locks_row_actions();
+    // 文稿芯片用**另一个**判据，这是有意的：文稿在「排队」那一刻就已经成为
+    // 本次运行的输入，所以 Queued 和 Processing 都得锁住
+    // （`TaskStatus::locks_transcript_actions` 就是为此存在的）。
+    //
+    // 之前这个判据只喂给了**卡片里**的取消/更换按钮，芯片自己的点击、悬停
+    // 高亮、光标形状一个都没接——于是「处理中」的一行里点「+ 文稿」照样弹出
+    // 文件选择框，悬停也照样亮成可点。判据本来就在，缺的是把它接到芯片上。
+    let can_edit_transcript = interactive && !row.status.locks_transcript_actions();
     let lang_open = ctx.lang_menu.as_ref() == Some(&row.id);
     let lang_meta = source_language_by_id(&row.language);
     let lang_short = lang_meta.map(|l| l.short).unwrap_or("?");
@@ -123,6 +135,44 @@ pub(super) fn task_row_view(
                 &format!("lang-opt-{id_lang_pick}"),
                 LangSelectTarget::Task(id_lang_pick.clone()),
                 LangMenuLayout::Chip,
+                cx,
+            )
+            .into_any_element(),
+        )
+    } else {
+        None
+    };
+
+    // 热词组 chip：语言 chip 右侧，同一套交互（点开下拉、处理中锁）。
+    // 显示名每帧从 settings 解析（组改名即刻反映），绑定按稳定 id。
+    let id_hw = row.id.clone();
+    let id_hw_pick = row.id.clone();
+    let hw_open = ctx.hotword_menu.as_ref() == Some(&row.id);
+    let hw_current = row.hotword_group.clone();
+    // 绑了组才值得给它一格药丸的分量（见下面 chip 的注释）。
+    let hw_bound = hw_current.is_some();
+    // 未绑定时显示**字段名**而不是「无」：这颗控件紧跟在语种 `EN ▾` 后面，
+    // 光秃秃一个「无」读不出是热词还是字幕/翻译。显示字段名之后，这一列自己
+    // 讲清楚了「空 = 没绑」，而且中英文都不必为它多留宽度。
+    let hw_label: SharedString = match &row.hotword_group_label {
+        Some(name) => name.clone().into(),
+        // 字段名与状态都要在：光一个「无」读不出是热词还是字幕，光一个「热词」
+        // 又看不出当前是空的。两种语言的标点不同，在 i18n helper 里拼。
+        None => crate::i18n::hotword_unbound_chip(ui_lang()).into(),
+    };
+    let hw_tip: SharedString = if hw_bound {
+        hw_label.clone()
+    } else {
+        t(L::TIP_HOTWORD_UNBOUND).into()
+    };
+    let hw_menu_float: Option<gpui::AnyElement> = if hw_open && can_edit_lang {
+        Some(
+            floating_hotword_menu(
+                SharedString::from(format!("hw-menu-{id_hw_pick}")),
+                &format!("hw-opt-{id_hw_pick}"),
+                hw_current.as_deref(),
+                id_hw_pick.clone(),
+                &ctx.hotword_groups,
                 cx,
             )
             .into_any_element(),
@@ -229,6 +279,34 @@ pub(super) fn task_row_view(
                                                 .text_color(MUTED_SOFT)
                                                 .whitespace_nowrap()
                                                 .child(meta_media),
+                                        )
+                                        // 状态药丸，跟在大小/时长后面。挪到这里是因为它在
+                                        // 控制簇里那一列固定宽度（见下面控制区的注释）：宽度
+                                        // 按最长阶段标签预留，空闲时却只有「待处理」三个字，
+                                        // 于是左右各空 40px，整排控件里夹着一个 46px 的空洞。
+                                        // 状态色由左侧色条与图标边框继续承担，信息不丢。
+                                        // max_w 兜底带 N/M 计数的超长标签（英文界面尤甚），
+                                        // 超出省略而不是把文件名列挤没。
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .max_w(px(STATUS_PILL_MAX_W))
+                                                .overflow_hidden()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_full()
+                                                .bg(status_bg)
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(
+                                                            gpui::FontWeight::MEDIUM,
+                                                        )
+                                                        .text_color(status_color)
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
+                                                        .child(status_label),
+                                                ),
                                         )
                                         .when_some(
                                             timing_total.zip(timing_for_card),
@@ -343,33 +421,32 @@ pub(super) fn task_row_view(
                                         )
                                 }),
                         )
-                        // Status — informational, left of the control
-                        // cluster so all clickable pills (语言 / 分离 /
-                        // 开始 / 删除) sit together on the right.
+                        // 控制区：五颗操作件收进**一个** flex，用比正文更小的 gap。
+                        //
+                        // 之前它们是同一个 gap_3 里的平铺兄弟，加上每颗都坐在固定宽度的
+                        // 列里居中——一颗 45px 宽的「EN ▾」躺在 64px 的列中央，两侧各空
+                        // 十几像素，肉眼看到的是「间隔很远」，于是整排像散架而不是一个
+                        // 控制区。收进一个紧凑的 flex 之后：
+                        //   · 控件彼此挨紧，一眼看成一个动作组；
+                        //   · 整组 flex_shrink_0 靠在最右，名字那一列吃掉全部余量；
+                        //   · 各列仍是固定宽度，切换语种不会把后面的控件推来推去
+                        //     （LANG_COL_PX 当初存在的理由，不能丢）。
+                        //
+                        // 状态药丸**不在这一组里**了：它原来占着本组最左边一列 132px 的
+                        // 固定宽度，空闲时「待处理」只有 52px，列里居中 → 左右各空 40px，
+                        // 加上 gap 就是 46px 的视觉间距，夹在 10~14px 的邻居中间格外刺眼；
+                        // 而那一列是按最长标签「人声分离 1800/1800」预留的，英文界面下
+                        // "Separating vocals 1800/1800" 反而会溢出、压到两侧控件上。
+                        // 挪到左侧信息行之后，宽度随内容走，上面两个问题一起消失，
+                        // 控制簇也从 470px 缩到 332px，省下的都还给了文件名。
                         .child(
                             div()
-                                .w(px(STATUS_COL_PX))
                                 .flex_shrink_0()
                                 .flex()
-                                .justify_center()
                                 .items_center()
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_full()
-                                        .bg(status_bg)
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(status_color)
-                                                .whitespace_nowrap()
-                                                .child(status_label),
-                                        ),
-                                ),
-                        )
-                        // Language select — fixed column so status length never shifts it.
+                                .gap_1p5()
+                        // Language select — fixed column so changing the language on one
+                        // row does not shift the chips behind it.
                         .child(
                             div()
                                 .w(px(LANG_COL_PX))
@@ -401,7 +478,15 @@ pub(super) fn task_row_view(
                                                 } else if can_edit_lang {
                                                     BG
                                                 } else {
-                                                    PANEL
+                                                    // 与 icon_btn 的禁用态同一个底色
+                                                    // （以前这里是 PANEL 纯白，
+                                                    // 在白色行底上等于没画）。
+                                                    BG
+                                                })
+                                                .opacity(if can_edit_lang {
+                                                    1.0
+                                                } else {
+                                                    DISABLED_OPACITY
                                                 })
                                                 .when(can_edit_lang, |el| {
                                                     el.cursor_pointer().hover(|s| {
@@ -426,9 +511,10 @@ pub(super) fn task_row_view(
                                                         .child(
                                                             div()
                                                                 .text_xs()
-                                                                .font_weight(
-                                                                    gpui::FontWeight::MEDIUM,
-                                                                )
+                                                                // 四颗 chip 统一**不加粗**：MEDIUM 在
+                                                                // 12px 下看着像半粗体，和文件名一
+                                                                // 比就跳出来。chip 是「安静的一排操作
+                                                                // 件」，不该在文件旁边抢分量。
                                                                 .text_color(
                                                                     if can_edit_lang {
                                                                         TEXT
@@ -455,6 +541,126 @@ pub(super) fn task_row_view(
                                                 ),
                                         )
                                         .children(lang_menu_float),
+                                ),
+                        )
+                        // 热词组 chip — 语言 chip 右侧，同一套交互（点开下拉、
+                        // 处理中锁定）。显示名跟着组改名实时变，绑定是 id。
+                        //
+                        // 这一列**不设固定宽度**，只给上下限：内容是用户自己起的组名，
+                        // 固定宽只有两种坏结果——比内容窄就切掉，比内容宽就被拉出
+                        // 一截空白（chip 在竖向 flex 里默认 `align-items: stretch`，
+                        // 容器一宽它就跟着宽，于是右边空着一大块）。
+                        //
+                        // **边框常驻**：曾经「未绑定就不画边框」，理由是别让整行变成
+                        // 一堵药丸墙。现在未绑定时写的是「热词：无」——文字本身已经
+                        // 说明了一切，边框再时有时无反倒像是渲染不一致。
+                        .child(
+                            div()
+                                .min_w(px(HOTWORD_COL_MIN_PX))
+                                .max_w(px(HOTWORD_COL_MAX_PX))
+                                .flex_shrink_0()
+                                .flex()
+                                .justify_center()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .relative()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "hw-{row_id}"
+                                                )))
+                                                .max_w(px(HOTWORD_COL_MAX_PX))
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(if hw_open {
+                                                    ACCENT
+                                                } else if can_edit_lang {
+                                                    LINE
+                                                } else {
+                                                    LINE_SOFT
+                                                })
+                                                .bg(if hw_open {
+                                                    ACCENT_SOFT
+                                                } else {
+                                                    BG
+                                                })
+                                                .opacity(if can_edit_lang {
+                                                    1.0
+                                                } else {
+                                                    DISABLED_OPACITY
+                                                })
+                                                .when(can_edit_lang, |el| {
+                                                    el.cursor_pointer().hover(|s| {
+                                                        s.bg(ACCENT_SOFT)
+                                                            .border_color(ACCENT)
+                                                    })
+                                                })
+                                                .when(can_edit_lang, |el| {
+                                                    el.on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.toggle_hotword_menu(
+                                                                &id_hw, cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                })
+                                                .tooltip({
+                                                    let tip = hw_tip.clone();
+                                                    move |_, cx| {
+                                                        cx.new(|_| NameTooltip {
+                                                            text: tip.clone(),
+                                                        })
+                                                        .into()
+                                                    }
+                                                })
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .min_w_0()
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .overflow_hidden()
+                                                                .text_xs()
+                                                                .whitespace_nowrap()
+                                                                // 组名截断时给出省略号，而不是把字硬切一半
+                                                                // （`overflow_hidden` 单用是硬切）。完整
+                                                                // 名字在这个 chip 的 tooltip 和下拉里都拿得到。
+                                                                .text_ellipsis()
+                                                                // 未绑定时用弱一档的灰：它是个「可选」的开关，
+                                                                // 不该和语言 chip 一样抢注意力。
+                                                                .text_color(if hw_bound {
+                                                                    if can_edit_lang {
+                                                                        TEXT
+                                                                    } else {
+                                                                        MUTED_SOFT
+                                                                    }
+                                                                } else if can_edit_lang {
+                                                                    MUTED
+                                                                } else {
+                                                                    MUTED_SOFT
+                                                                })
+                                                                .child(hw_label),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(MUTED)
+                                                                .child(if hw_open {
+                                                                    "▴"
+                                                                } else {
+                                                                    "▾"
+                                                                }),
+                                                        ),
+                                                ),
+                                        )
+                                        .children(hw_menu_float),
                                 ),
                         )
                         // Vocal separation toggle — same row idiom as
@@ -488,7 +694,14 @@ pub(super) fn task_row_view(
                                         } else if can_edit_lang {
                                             BG
                                         } else {
-                                            PANEL
+                                            // 同 icon_btn 的禁用态（以前是 PANEL
+                                            // 纯白，白底行上等于没画）。
+                                            BG
+                                        })
+                                        .opacity(if can_edit_lang {
+                                            1.0
+                                        } else {
+                                            DISABLED_OPACITY
                                         })
                                         .when(can_edit_lang, |el| {
                                             el.cursor_pointer().hover(|s| {
@@ -508,9 +721,6 @@ pub(super) fn task_row_view(
                                         .child(
                                             div()
                                                 .text_xs()
-                                                .font_weight(
-                                                    gpui::FontWeight::MEDIUM,
-                                                )
                                                 .whitespace_nowrap()
                                                 .text_color(if sep_on {
                                                     PANEL
@@ -576,8 +786,25 @@ pub(super) fn task_row_view(
                                         } else {
                                             BG
                                         })
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(ACCENT_SOFT).border_color(ACCENT))
+                                        .opacity(if can_edit_transcript {
+                                            1.0
+                                        } else {
+                                            DISABLED_OPACITY
+                                        })
+                                        // 锁定时**不挂** cursor_pointer / hover / on_click。
+                                        // 这一段以前是无条件的，于是排队中、处理中的
+                                        // 一行里，「+ 文稿」照样亮成可点、照样弹文件框
+                                        // ——同一行里 ▶ 🗑 EN 分离 全都灰着，只有它
+                                        // 还醒着，比不禁用更糟。悬停出卡片的 on_hover
+                                        // 反而要留着：进出会成对，卡片是纯说明的
+                                        //（它的按钮另有一道 `actions_enabled` 把关），
+                                        // 而且少了 leave 事件，一张已经打开的卡片
+                                        // 会永远关不掉。
+                                        .when(can_edit_transcript, |el| {
+                                            el.cursor_pointer().hover(|s| {
+                                                s.bg(ACCENT_SOFT).border_color(ACCENT)
+                                            })
+                                        })
                                         .on_hover(cx.listener(
                                             move |this, hovered: &bool, _, cx| {
                                                 if *hovered {
@@ -590,7 +817,7 @@ pub(super) fn task_row_view(
                                         // 「+ 文稿」点它 = 选一份文件。有文稿之后芯片就只是**纯悬停**的入口，
                                         // 和「用时」芯片一样：点它什么也不做，卡片靠悬停出。
                                         // 取消 / 换文稿走卡片里的按钮，那才是它们的家。
-                                        .when(!has, |chip| {
+                                        .when(!has && can_edit_transcript, |chip| {
                                             chip.on_click(cx.listener(
                                                 move |this, _, _, cx| {
                                                     this.pick_transcript_for(&id_click, cx);
@@ -600,7 +827,6 @@ pub(super) fn task_row_view(
                                         .child(
                                             div()
                                                 .text_xs()
-                                                .font_weight(gpui::FontWeight::MEDIUM)
                                                 .whitespace_nowrap()
                                                 .text_color(if has { ACCENT } else { MUTED })
                                                 .child(label),
@@ -662,6 +888,7 @@ pub(super) fn task_row_view(
                                         this.delete_task(&id_del, cx);
                                     }),
                                 )),
+                        ),
                         ),
                 ),
         )

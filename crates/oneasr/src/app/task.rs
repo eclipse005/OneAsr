@@ -70,6 +70,9 @@ pub struct Task {
     /// Run HTDemucs vocal separation for this task; defaults from settings,
     /// overridable per row (same model as [`Self::language`]).
     pub vocal_separation: bool,
+    /// 本任务绑定的热词组 id（`None` = 不用热词）。按稳定 id 绑定，所以组改名
+    /// 不会掉绑定；默认值来自 settings 的 `hotword_default_group`，可逐行覆盖。
+    pub hotword_group: Option<String>,
     pub status: TaskStatus,
     pub error: Option<String>,
     /// FIFO order when [`TaskStatus::Queued`] (lower runs first).
@@ -182,6 +185,7 @@ impl Task {
             format,
             language: normalize_source_language(&language.into()),
             vocal_separation,
+            hotword_group: None,
             status: TaskStatus::Pending,
             error: None,
             queue_seq: None,
@@ -199,6 +203,11 @@ impl Task {
     /// Toggle per-task vocal separation.
     pub fn set_vocal_separation(&mut self, enabled: bool) {
         self.vocal_separation = enabled;
+    }
+
+    /// 绑定 / 解绑热词组（`None` = 不用热词）。
+    pub fn set_hotword_group(&mut self, id: Option<String>) {
+        self.hotword_group = id;
     }
 
     pub fn size_label(&self) -> String {

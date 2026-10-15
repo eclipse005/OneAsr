@@ -27,7 +27,8 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 
 ## 项目结构
 
-- `crates/oneasr-core/` —— 引擎：模型目录解析、VAD、转写管线、字幕切分、设置模型、统计
+- `crates/oneasr-core/` —— 引擎：模型目录解析、VAD、转写管线、字幕切分、设置模型、统计、
+  热词召回（`hotword/`：文本→音素、粗筛、`hotword.json` 存储；含短语词典资产）
 - `crates/oneasr/` —— GUI：gpui 界面、任务列表、设置抽屉、耗时弹卡与动画
 - `crates/oneasr-core/src/i18n.rs` —— 双语机制（`UiLang` / `Str` / `t` / 系统语言探测）
   + 管线自产文案（错误、阶段名、下载进度）的双语表
@@ -39,7 +40,10 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
   `verify-ffmpeg-manifest.py`（ffmpeg 哈希清单）、`ffmpeg-checksums.txt`（清单本体）；
   以及 `test_verify_i18n.py`（双语门禁自己的单测）、
   `bonebreak-verify-i18n.py`（门禁的断骨验证）、`_verify_common.py`
-  （三个校验脚本共用的输出编码处理 —— 同一件事只写一份，改一次三处都跟着）
+  （三个校验脚本共用的输出编码处理 —— 同一件事只写一份，改一次三处都跟着）、
+  `export-phrases.py`（热词短语词典资产 `phrases.bin` 的生成器：要一份装了 pypinyin
+  的 Python，不进 CI；`--check` 只核对不写盘。改了资产要连 manifest 一起提交，
+  单测会拿 sha256 对账）
 - `.github/workflows/` —— `ci.yml`（每次提交的门禁：格式 / clippy+测试 / 版本+双语 / 供应链）
   与 `release.yml`（tag 触发的打包发版）
 - `rust-toolchain.toml` —— 工具链的唯一来源；`deny.toml` —— 依赖漏洞与来源规则

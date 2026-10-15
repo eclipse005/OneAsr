@@ -18,6 +18,9 @@ impl OneAsrApp {
             oneasr_core::check_aligner_model_dir(&self.settings.aligner_model_dir).is_ok();
         self.demucs_ready =
             oneasr_core::check_demucs_model_dir(&self.settings.resolved_demucs_model_dir()).is_ok();
+        self.sensevoice_ready =
+            oneasr_core::check_sensevoice_model_dir(&self.settings.resolved_sensevoice_model_dir())
+                .is_ok();
         self.model_status = if self.settings.can_start().is_ok() {
             ModelStatus::Ready
         } else {
@@ -76,33 +79,51 @@ impl OneAsrApp {
         self.flash_hint(t(L::UI_LANGUAGE_APPLY_ON_SAVE), cx);
     }
 
-    /// Write `settings.json`, re-check model files.
+    /// 热词 + 设置一次提交（抽屉底部的「保存设置」）。
     ///
-    /// The one and only commit point: the drawer's 保存设置 button calls
-    /// this, and nothing else does — closing the drawer discards instead.
+    /// **顺序是有意的**：先热词（用户内容）、后设置（机器配置）。两份文件在同一个
+    /// 数据目录，谁先写谁就把结果留在了磁盘上，所以顺序只决定「失败时哪一份已经
+    /// 写进去」——而两份都可能失败。先写用户内容，最坏情况下丢掉的那次写入也只会
+    /// 是机器配置；反过来（打补丁式地写一半）会让最坏情况变成「用户攒的词没了」。
+    ///
+    /// 两个失败分支都说实话，且**都不动内存里的草稿**：
+    /// - 热词写失败 → 磁盘上什么都没变，报「保存失败」，`settings_dirty` 保持，
+    ///   用户可以改完重按；
+    /// - 设置写失败 → 热词已经落盘，报「热词已保存、设置未保存」。
+    ///
+    /// 配套的**快照语义**（见 [`Self::close_drawer`]）：`settings_snapshot` /
+    /// `hotword_snapshot` 记的是「最近一次成功落盘的状态」，每次写成功就跟着前移。
+    /// 正常路径两者相等；只有上面第二个半提交会分开，那时关抽屉只回滚**真正没落盘**
+    /// 的那一份——否则用户会看到「它说保存失败，关抽屉把设置滚回去了，可磁盘上
+    /// 其实已经是新的」。
     pub(crate) fn save_settings(&mut self, cx: &mut Context<Self>) {
-        match self.settings.save() {
-            Ok(_) => {
-                self.settings_dirty = false;
-                self.settings_snapshot = Some(self.settings.clone());
-                // 界面语言随本次保存生效（抽屉里选的档位是暂存的）。
-                oneasr_core::i18n::set_ui_lang(self.settings.resolved_ui_language());
-                self.reset_model_config(cx);
-                // Only a real commit earns the tap.
-                self.play_ui(sfx::Sfx::Click);
-                self.flash_hint(
-                    match self.model_status {
-                        ModelStatus::Ready => t(L::SETTINGS_SAVED_READY),
-                        ModelStatus::NotReady => t(L::SETTINGS_SAVED_NOT_READY),
-                    },
-                    cx,
-                );
-            }
-            Err(e) => {
-                crashlog::log_error(format!("settings save failed: {e}"));
-                self.flash_hint(crate::i18n::save_failed(&e), cx);
-            }
+        if let Err(e) = self.hotwords.save() {
+            crashlog::log_error(format!("hotword save failed: {e}"));
+            self.flash_hint(crate::i18n::save_failed(&e), cx);
+            return;
         }
+        self.hotword_snapshot = Some(self.hotwords.clone());
+        if let Err(e) = self.settings.save() {
+            crashlog::log_error(format!(
+                "settings save failed (hotwords already saved): {e}"
+            ));
+            self.flash_hint(crate::i18n::settings_save_failed_hotwords_saved(&e), cx);
+            return;
+        }
+        self.settings_snapshot = Some(self.settings.clone());
+        self.settings_dirty = false;
+        // 界面语言随本次保存生效（抽屉里选的档位是暂存的）。
+        oneasr_core::i18n::set_ui_lang(self.settings.resolved_ui_language());
+        self.reset_model_config(cx);
+        // Only a real commit earns the tap.
+        self.play_ui(sfx::Sfx::Click);
+        self.flash_hint(
+            match self.model_status {
+                ModelStatus::Ready => t(L::SETTINGS_SAVED_READY),
+                ModelStatus::NotReady => t(L::SETTINGS_SAVED_NOT_READY),
+            },
+            cx,
+        );
     }
 
     pub(crate) fn add_files_dialog(&mut self, cx: &mut Context<Self>) {
@@ -192,6 +213,29 @@ impl OneAsrApp {
         cx.notify();
     }
 
+    /// 路径被复制后的回执提示。
+    ///
+    /// 复制没有可见后果——不提示的话，用户第一次点会怀疑没生效，第二次点还得回头
+    /// 去别处核对一遍路径。`model_path_bar` 只管写剪贴板，这条提示由 app 接上。
+    pub(crate) fn flash_path_copied(&mut self, cx: &mut Context<Self>) {
+        self.flash_hint(t(L::PATH_COPIED), cx);
+    }
+
+    pub(crate) fn pick_sensevoice_dir(&mut self, cx: &mut Context<Self>) {
+        let tx = self.tx.clone();
+        let start = self.settings.resolved_sensevoice_model_dir();
+        thread::spawn(move || {
+            let mut dlg = rfd::FileDialog::new().set_title(t(L::DLG_SENSEVOICE_DIR));
+            if start.is_dir() {
+                dlg = dlg.set_directory(&start);
+            }
+            if let Some(dir) = dlg.pick_folder() {
+                let _ = tx.send(WorkerMsg::SenseVoiceDirPicked(dir));
+            }
+        });
+        cx.notify();
+    }
+
     pub(crate) fn pick_output_dir(&mut self, cx: &mut Context<Self>) {
         let tx = self.tx.clone();
         let start = self.settings.resolved_output_dir();
@@ -213,6 +257,8 @@ impl OneAsrApp {
         let pairing = crate::app::transcript::pair_picked(&paths);
         let default_lang = self.settings.language.clone();
         let default_sep = self.settings.vocal_separation;
+        // 新任务默认绑定的热词组（None = 不预热词）；可逐行改。
+        let default_hotword = self.hotwords.default_group_id();
         // 读在循环外：媒体行要挂的那份文稿，先解析一次；读不了的当场报，任务照建
         // （不因为一份坏文稿丢掉整个添加动作）。
         let mut staged: Vec<(PathBuf, Option<StagedTranscript>)> = Vec::new();
@@ -253,6 +299,7 @@ impl OneAsrApp {
                 continue;
             }
             let mut task = Task::from_path(&path, default_lang.clone(), default_sep);
+            task.hotword_group = default_hotword.clone();
             task.transcript = by_media
                 .iter()
                 .find(|(media, _)| *media == path)

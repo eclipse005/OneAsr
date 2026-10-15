@@ -41,9 +41,14 @@ impl AsrEngine for QwenAsrAdapter {
             .wav
             .to_str()
             .ok_or_else(|| EngineError::new(crate::i18n::audio_path_not_utf8()))?;
-        let opts = TranscribeOptions::default()
+        let mut opts = TranscribeOptions::default()
             .with_max_new_tokens(req.max_new_tokens)
             .with_language(req.language.to_string());
+        // 热词提示词，官方的 `Vocabulary: a, b, c.` 写法（见 `hotword::context_line`）。
+        // 空串等于没给提示；显式跳过空串，让「没热词」在调用上也不留第二种写法。
+        if let Some(context) = req.context.filter(|c| !c.is_empty()) {
+            opts = opts.with_context(context.to_string());
+        }
         self.inner
             .transcribe(path, opts)
             .map(|report| Transcript { text: report.text })

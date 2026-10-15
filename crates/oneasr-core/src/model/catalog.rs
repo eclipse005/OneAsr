@@ -14,6 +14,8 @@ pub const QWEN_ALIGN_06B: &str = "Qwen3-ForcedAligner-0.6B-hf";
 pub const OMNI_ASR_CTC_300M: &str = "omniASR-CTC-300M-v2-hf";
 /// HTDemucs v4 vocals weights (optional vocal separation stage).
 pub const HTDEMUCS_FT: &str = "htdemucs_ft";
+/// 热词粗转用的 SenseVoiceSmall（可选阶段：只服务热词召回，不参与正式转写）。
+pub const SENSEVOICE_SMALL: &str = "SenseVoiceSmall";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
@@ -21,6 +23,8 @@ pub enum ModelKind {
     Align,
     /// Optional HTDemucs vocal-separation weights.
     Demucs,
+    /// 热词粗转（SenseVoiceSmall，可选阶段）。
+    Hotword,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,6 +37,8 @@ pub enum ModelId {
     OmniAsrCtc300M,
     /// HTDemucs v4 vocals shard (`htdemucs_ft_vocals.safetensors`).
     HtdemucsFt,
+    /// SenseVoiceSmall —— 热词的第一趟粗转（可选）。
+    SenseVoiceSmall,
 }
 
 impl ModelId {
@@ -45,6 +51,7 @@ impl ModelId {
             Self::QwenAlign06B => QWEN_ALIGN_06B,
             Self::OmniAsrCtc300M => OMNI_ASR_CTC_300M,
             Self::HtdemucsFt => HTDEMUCS_FT,
+            Self::SenseVoiceSmall => SENSEVOICE_SMALL,
         }
     }
 
@@ -56,6 +63,7 @@ impl ModelId {
             | Self::Qwen3Asr17BInt8 => ModelKind::Asr,
             Self::QwenAlign06B | Self::OmniAsrCtc300M => ModelKind::Align,
             Self::HtdemucsFt => ModelKind::Demucs,
+            Self::SenseVoiceSmall => ModelKind::Hotword,
         }
     }
 
@@ -71,6 +79,10 @@ impl ModelId {
                 crate::i18n::UiLang::Zh => "人声分离 HTDemucs",
                 crate::i18n::UiLang::En => "Vocal separation (HTDemucs)",
             },
+            Self::SenseVoiceSmall => match lang {
+                crate::i18n::UiLang::Zh => "热词粗转 SenseVoice",
+                crate::i18n::UiLang::En => "Hotword rough pass (SenseVoice)",
+            },
         }
     }
 
@@ -84,6 +96,7 @@ impl ModelId {
             Self::QwenAlign06B => "Qwen",
             Self::OmniAsrCtc300M => "CTC",
             Self::HtdemucsFt => "Demucs",
+            Self::SenseVoiceSmall => "SenseVoice",
         }
     }
 
@@ -253,6 +266,10 @@ pub fn model_definition(id: ModelId) -> ModelDefinition {
             "omniASR-CTC-300M-v2",
             omni_asr_ctc_300m_files(),
         ),
+        // 官方仓库（iic/SenseVoiceSmall），不自己转存。
+        ModelId::SenseVoiceSmall => {
+            model_def(id, "iic", "SenseVoiceSmall", sensevoice_small_files())
+        }
     }
 }
 
@@ -288,6 +305,43 @@ fn htdemucs_ft_files() -> Vec<CatalogFile> {
         sha256: "68854b0d7c2b3274723b5761f6fd9f5aec5f1bcd3f0de7c1669546fdb7871b7c",
         revision: "d7057b07a0432fede79326e7d56f50c031d9cb50",
     }]
+}
+
+/// SenseVoiceSmall（热词粗转）。下面这四个文件合计 937,031,977 字节（≈ 937 MB /
+/// 0.94 GB），就是用户实际要下的量。官方 `iic/SenseVoiceSmall` 仓库，
+/// **只取加载器真正会打开的那 4 个文件**：仓库里还有 `model.safetensors`（同一份
+/// 权重的另一种格式）、示例音频与配图，那些不下载。
+///
+/// 逐文件钉 revision：`tokens.json` 与其余三个不在同一次提交上（后者更晚）。
+fn sensevoice_small_files() -> Vec<CatalogFile> {
+    const WEIGHTS_REV: &str = "70514a3da51f1160f51d18449dab6128bbd4928b";
+    const TOKENS_REV: &str = "43d0ed61231c41f8393fa347b838a1f6e2d264f6";
+    vec![
+        CatalogFile {
+            file_name: "model.pt",
+            size: 936_291_369,
+            sha256: "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea",
+            revision: WEIGHTS_REV,
+        },
+        CatalogFile {
+            file_name: "chn_jpn_yue_eng_ko_spectok.bpe.model",
+            size: 377_341,
+            sha256: "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
+            revision: WEIGHTS_REV,
+        },
+        CatalogFile {
+            file_name: "am.mvn",
+            size: 11_203,
+            sha256: "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+            revision: WEIGHTS_REV,
+        },
+        CatalogFile {
+            file_name: "tokens.json",
+            size: 352_064,
+            sha256: "a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97",
+            revision: TOKENS_REV,
+        },
+    ]
 }
 
 fn qwen3_asr_06b_files() -> Vec<CatalogFile> {

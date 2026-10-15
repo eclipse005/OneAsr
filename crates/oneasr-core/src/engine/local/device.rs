@@ -81,6 +81,21 @@ pub(super) fn ctc_selector_from_env() -> Result<ctc_forced_aligner_wgpu::DeviceS
     Ok(selector)
 }
 
+/// SenseVoice（粗转）的设备：未钉卡给 `auto`，钉了就把 spec 原样交给它自己解析。
+///
+/// 与其它引擎的差别：SenseVoice 的 `DeviceSelector` 没有公开导出，这里无法预校验，
+/// 只能把 spec 透传——解析失败由 `Model::load` 报错，仍然是「报错，不静默换卡」，
+/// 与 [`asr_selector_from_env`] 的取舍一致。
+pub(super) fn sensevoice_device_from_env() -> String {
+    match oneasr_device_spec() {
+        Some(spec) => {
+            trace_log(format!("ONEASR_DEVICE={spec} → SenseVoice wgpu selector"));
+            spec
+        }
+        None => "auto".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_device_spec;

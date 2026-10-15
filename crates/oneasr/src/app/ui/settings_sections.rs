@@ -10,7 +10,7 @@ use crate::app::prelude::*;
 use crate::app::ui::settings_drawer::SettingsFormState;
 
 /// 设置标题。悬停用现成的深色小卡片，文案按当前界面语言取。
-fn setting_title(id: &'static str, label: &str, tip: &'static str) -> impl IntoElement {
+pub(super) fn setting_title(id: &'static str, label: &str, tip: &'static str) -> impl IntoElement {
     let tip: SharedString = tip.into();
     div()
         .id(id)
@@ -22,19 +22,22 @@ fn setting_title(id: &'static str, label: &str, tip: &'static str) -> impl IntoE
         .tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into())
 }
 
-/// One settings card: rounded, bordered, padded. All ten sections go through
+/// One settings card: rounded, bordered, padded. Every section goes through
 /// this so their chrome cannot drift apart. Gray cards on the white drawer. White on the gray page background.
+///
+/// 内边距比「刚好装下」再松一档：一屏塞十张各自贴着边的卡会读成一堵墙。卡与卡之间
+/// 由抽屉的 `gap_3` 分开，卡内则给内容呼吸。
 pub(super) fn settings_section(body: AnyElement) -> impl IntoElement + use<> {
     div()
         .flex()
         .flex_col()
-        .gap_1p5()
+        .gap_2()
         .rounded_lg()
         .border_1()
         .border_color(LINE_SOFT)
         .bg(BG)
-        .px_3()
-        .py_2p5()
+        .px_4()
+        .py_3()
         .child(body)
 }
 
@@ -466,59 +469,15 @@ impl OneAsrApp {
                         }),
                 ),
             )
-            .child(
-                div()
-                    .id("output-dir")
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(LINE)
-                    .bg(PANEL)
-                    .overflow_hidden()
-                    .opacity(if form.save_next { 0.45 } else { 1.0 })
-                    .hover(|s| s.border_color(ACCENT))
-                    .child(
-                        div()
-                            .id("output-dir-path")
-                            .flex_1()
-                            .min_w_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .text_xs()
-                            .text_color(TEXT)
-                            .whitespace_normal()
-                            .line_clamp(2)
-                            .child(form.output_dir.clone())
-                            .tooltip({
-                                let tip = form.output_dir_tip.clone();
-                                move |_, cx| {
-                                    cx.new(|_| NameTooltip {
-                                        text: tip.clone().into(),
-                                    })
-                                    .into()
-                                }
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("output-dir-browse")
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .border_l_1()
-                            .border_color(LINE_SOFT)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ACCENT_SOFT))
-                            .child(
-                                svg()
-                                    .size(px(15.))
-                                    .path("icons/folder.svg")
-                                    .text_color(MUTED),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.pick_output_dir(cx))),
-                    ),
-            )
+            .child(model_path_bar(
+                "output-dir",
+                form.output_dir.clone().into(),
+                form.output_dir_tip.clone().into(),
+                2,
+                form.save_next,
+                cx.listener(|this, _, _, cx| this.flash_path_copied(cx)),
+                cx.listener(|this, _, _, cx| this.pick_output_dir(cx)),
+            ))
             .into_any_element();
         settings_section(body)
     }
@@ -613,56 +572,15 @@ impl OneAsrApp {
                     busy: form.asr_dl_busy,
                     progress: form.asr_dl.as_ref(),
                 },
-                div()
-                    .id("model-dir")
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(LINE)
-                    .bg(PANEL)
-                    .overflow_hidden()
-                    .hover(|s| s.border_color(ACCENT))
-                    .child(
-                        div()
-                            .id("model-dir-path")
-                            .flex_1()
-                            .min_w_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .text_xs()
-                            .text_color(TEXT)
-                            .whitespace_normal()
-                            .line_clamp(1)
-                            .child(form.model.clone())
-                            .tooltip({
-                                let tip = form.model_tip.clone();
-                                move |_, cx| {
-                                    cx.new(|_| NameTooltip {
-                                        text: tip.clone().into(),
-                                    })
-                                    .into()
-                                }
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("model-dir-browse")
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .border_l_1()
-                            .border_color(LINE_SOFT)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ACCENT_SOFT))
-                            .child(
-                                svg()
-                                    .size(px(15.))
-                                    .path("icons/folder.svg")
-                                    .text_color(MUTED),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.pick_model_dir(cx))),
-                    ),
+                model_path_bar(
+                    "model-dir",
+                    form.model.clone().into(),
+                    form.model_tip.clone().into(),
+                    1,
+                    false,
+                    cx.listener(|this, _, _, cx| this.flash_path_copied(cx)),
+                    cx.listener(|this, _, _, cx| this.pick_model_dir(cx)),
+                ),
                 cx.listener(move |this, _, _, cx| {
                     let id = this.settings.selected_asr_id();
                     this.start_model_download(id, cx);
@@ -745,56 +663,15 @@ impl OneAsrApp {
                     busy: form.align_dl_busy,
                     progress: form.align_dl.as_ref(),
                 },
-                div()
-                    .id("aligner-dir")
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(LINE)
-                    .bg(PANEL)
-                    .overflow_hidden()
-                    .hover(|s| s.border_color(ACCENT))
-                    .child(
-                        div()
-                            .id("aligner-dir-path")
-                            .flex_1()
-                            .min_w_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .text_xs()
-                            .text_color(TEXT)
-                            .whitespace_normal()
-                            .line_clamp(1)
-                            .child(form.aligner.clone())
-                            .tooltip({
-                                let tip = form.aligner_tip.clone();
-                                move |_, cx| {
-                                    cx.new(|_| NameTooltip {
-                                        text: tip.clone().into(),
-                                    })
-                                    .into()
-                                }
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("aligner-dir-browse")
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .border_l_1()
-                            .border_color(LINE_SOFT)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ACCENT_SOFT))
-                            .child(
-                                svg()
-                                    .size(px(15.))
-                                    .path("icons/folder.svg")
-                                    .text_color(MUTED),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.pick_aligner_dir(cx))),
-                    ),
+                model_path_bar(
+                    "aligner-dir",
+                    form.aligner.clone().into(),
+                    form.aligner_tip.clone().into(),
+                    1,
+                    false,
+                    cx.listener(|this, _, _, cx| this.flash_path_copied(cx)),
+                    cx.listener(|this, _, _, cx| this.pick_aligner_dir(cx)),
+                ),
                 cx.listener(|this, _, _, cx| {
                     this.start_model_download(this.settings.selected_aligner_id(), cx);
                 }),
@@ -856,56 +733,15 @@ impl OneAsrApp {
                     busy: form.demucs_dl_busy,
                     progress: form.demucs_dl.as_ref(),
                 },
-                div()
-                    .id("demucs-dir")
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(LINE)
-                    .bg(PANEL)
-                    .overflow_hidden()
-                    .hover(|s| s.border_color(ACCENT))
-                    .child(
-                        div()
-                            .id("demucs-dir-path")
-                            .flex_1()
-                            .min_w_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .text_xs()
-                            .text_color(TEXT)
-                            .whitespace_normal()
-                            .line_clamp(1)
-                            .child(form.demucs_dir.clone())
-                            .tooltip({
-                                let tip = form.demucs_dir_tip.clone();
-                                move |_, cx| {
-                                    cx.new(|_| NameTooltip {
-                                        text: tip.clone().into(),
-                                    })
-                                    .into()
-                                }
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("demucs-dir-browse")
-                            .flex_shrink_0()
-                            .px_2p5()
-                            .py_1p5()
-                            .border_l_1()
-                            .border_color(LINE_SOFT)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ACCENT_SOFT))
-                            .child(
-                                svg()
-                                    .size(px(15.))
-                                    .path("icons/folder.svg")
-                                    .text_color(MUTED),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.pick_demucs_dir(cx))),
-                    ),
+                model_path_bar(
+                    "demucs-dir",
+                    form.demucs_dir.clone().into(),
+                    form.demucs_dir_tip.clone().into(),
+                    1,
+                    false,
+                    cx.listener(|this, _, _, cx| this.flash_path_copied(cx)),
+                    cx.listener(|this, _, _, cx| this.pick_demucs_dir(cx)),
+                ),
                 cx.listener(|this, _, _, cx| {
                     this.start_model_download(ModelId::HtdemucsFt, cx);
                 }),

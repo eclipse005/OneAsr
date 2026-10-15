@@ -32,17 +32,37 @@ pub(crate) enum ModelStatus {
     NotReady,
 }
 
+/// 右滑抽屉的页。抽屉只有**一套**骨架（宽度 / 滑入动画 / 快照回滚 / 保存栏），
+/// 页只决定里面渲染哪一组卡片：设置页是九张设置卡，热词页是三张热词卡。
+///
+/// 两页共用同一个 `settings` 与同一次快照——所以「改哪页都算同一次编辑」，
+/// 关抽屉＝放弃本次抽屉会话里的全部未保存改动，`保存设置`＝一次提交两页。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrawerPage {
+    Settings,
+    Hotword,
+}
+
 pub(crate) struct OneAsrApp {
     /// Root focus so Escape / key bindings reach the app (menus, dismiss).
     pub(crate) focus_handle: FocusHandle,
     /// Machine-resolved UI font (primary + CJK DirectWrite fallbacks).
     pub(crate) ui_font: ui_font::UiFontPlan,
     settings: Settings,
-    /// Unsaved settings edits (backend / paths).
+    /// Unsaved edits from the drawer session (设置页 + 热词页共用这一个标志：
+    /// 两页是同一次编辑、同一次提交）。
     settings_dirty: bool,
-    /// Settings as they were when the drawer opened. Closing the drawer
-    /// without saving is a cancel, and the edits roll back to this.
+    /// **最近一次成功落盘**的设置。
+    ///
+    /// 关抽屉＝放弃本次会话里没落盘的东西，所以回滚的目标是它，而不是字面上的
+    /// 「打开抽屉那一刻」——正常路径上两者相等；只有保存时设置写失败、而热词
+    /// 已经写进去的那一次半提交里才会分开（见 `save_settings` 的顺序说明）。
     settings_snapshot: Option<Settings>,
+    /// 热词库（`hotword.json`）本体。**刻意不放在 `settings` 里**：热词是用户
+    /// 内容、设置是机器配置，生命周期不同——「重置设置」不该清空用户攒的词表。
+    hotwords: oneasr_core::HotwordStore,
+    /// 热词库的落盘快照，语义与 `settings_snapshot` 是同一条：最近一次成功落盘。
+    hotword_snapshot: Option<oneasr_core::HotwordStore>,
     /// Desired drawer state (open / closed).
     settings_open: bool,
     /// Drawer slide progress source → target (0 = hidden, 1 = open).
@@ -92,6 +112,17 @@ pub(crate) struct OneAsrApp {
     transcript_breaking: HashSet<String>,
     /// Task id whose language dropdown is open (`None` = closed).
     lang_menu: Option<String>,
+    /// Task id whose 热词组 dropdown is open (`None` = closed).
+    hotword_menu: Option<String>,
+    /// 抽屉当前页（抽屉关着时表示「下次打开哪一页」）。
+    settings_page: DrawerPage,
+    /// 面板里正在编辑词表的组 id（`None` = 还没选组）。
+    hotword_edit_group: Option<String>,
+    /// SenseVoice 粗转权重是否就绪（探针缓存，见 `refresh_model_probe`）。
+    sensevoice_ready: bool,
+    /// 面板的两个输入框（惰性创建，跨组复用；切换组时 `set_text`）。
+    hotword_name_field: Option<Entity<TextField>>,
+    hotword_words_field: Option<Entity<TextField>>,
     /// Settings panel: default-language dropdown open.
     settings_lang_open: bool,
     /// Empty-state wave: pointer currently over the strip.
@@ -147,10 +178,13 @@ pub(crate) struct OneAsrApp {
     asr_download: Option<DownloadProgress>,
     align_download: Option<DownloadProgress>,
     demucs_download: Option<DownloadProgress>,
+    /// 热词粗转（SenseVoice）的下载进度。
+    sensevoice_download: Option<DownloadProgress>,
     /// Active download cancel handles.
     asr_dl_handle: Option<DownloadHandle>,
     align_dl_handle: Option<DownloadHandle>,
     demucs_dl_handle: Option<DownloadHandle>,
+    sensevoice_dl_handle: Option<DownloadHandle>,
     /// Stats panel open (floats above the status bar; shares MENU_Z with menus).
     stats_open: bool,
     /// 指南面板（首启欢迎卡）开着吗。全新安装的首启为 `true`（settings 还没有
@@ -177,6 +211,7 @@ impl OneAsrApp {
         Self::start_worker_poller(cx);
 
         let settings = load_settings_or_fallback();
+        let hotwords = load_hotwords_or_fallback();
         // 界面语言先于任何窗口构建生效（settings.json 的 ui_language）。
         oneasr_core::i18n::set_ui_lang(settings.resolved_ui_language());
         let app_root = resolve_app_root_dir();
@@ -192,6 +227,8 @@ impl OneAsrApp {
             settings,
             settings_dirty: false,
             settings_snapshot: None,
+            hotwords,
+            hotword_snapshot: None,
             settings_open: false,
             settings_from: 0.0,
             settings_to: 0.0,
@@ -214,6 +251,12 @@ impl OneAsrApp {
             timing_pop_to: 0.0,
             timing_pop_t0: Instant::now(),
             lang_menu: None,
+            hotword_menu: None,
+            settings_page: DrawerPage::Settings,
+            hotword_edit_group: None,
+            sensevoice_ready: false,
+            hotword_name_field: None,
+            hotword_words_field: None,
             settings_lang_open: false,
             empty_wave_hover: false,
             logo_hover: false,
@@ -244,9 +287,11 @@ impl OneAsrApp {
             asr_download: None,
             align_download: None,
             demucs_download: None,
+            sensevoice_download: None,
             asr_dl_handle: None,
             align_dl_handle: None,
             demucs_dl_handle: None,
+            sensevoice_dl_handle: None,
             stats_open: false,
             welcome_open,
             stats_hover_day: None,
@@ -482,6 +527,20 @@ fn load_settings_or_fallback() -> Settings {
     settings
 }
 
+/// 热词库自己一份 `hotword.json`（见 `oneasr_core::hotword::store`）。
+///
+/// 迁移 / 读失败 / 自愈的原因照样进日志：用户报「热词组没了」时，一份能贴出来的
+/// 日志就该答得上来，而不是让人自己去翻数据目录。**判据在 core 侧**
+/// （[`oneasr_core::hotword::HotwordLoadReport::is_notable`]）——这里只负责问，
+/// 不重新枚举字段，免得下次给报告加字段时又漏一种情况。
+fn load_hotwords_or_fallback() -> oneasr_core::HotwordStore {
+    let (hotwords, report) = oneasr_core::HotwordStore::load();
+    if report.is_notable() {
+        crashlog::log_warn(format!("hotword load report: {}", report.summary()));
+    }
+    hotwords
+}
+
 /// Log why settings were repaired or fell back to defaults. A user report of
 /// "设置丢了" must be answerable from a pasted log alone.
 fn log_settings_report(report: &oneasr_core::SettingsLoadReport) {
@@ -527,6 +586,8 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
         ModelId::OmniAsrCtc300M,
         ModelId::QwenAlign06B,
         ModelId::HtdemucsFt,
+        // 热词粗转（SenseVoice）：贴日志来问「为什么热词没生效」时要能看到它在不在。
+        ModelId::SenseVoiceSmall,
     ]
     .map(|id| {
         format!(
@@ -638,6 +699,10 @@ pub(crate) struct TaskRowView {
     language: String,
     /// Per-task vocal separation (settings default, overridable per row).
     vocal_separation: bool,
+    /// 本行绑定的热词组 id（`None` = 无）；下拉用它标选中项。
+    hotword_group: Option<String>,
+    /// 上一条要显示的名字（`None` = 无）。名字在 `rows.rs` 里解析好，渲染不必再查表。
+    hotword_group_label: Option<String>,
     error: Option<String>,
     name: String,
     size_label: String,

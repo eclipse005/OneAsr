@@ -15,8 +15,10 @@ mod demucs;
 mod device;
 mod provider;
 mod qwen_asr;
+mod sensevoice;
 #[cfg(test)]
 mod tests;
 
 pub use demucs::DEMUCS_WEIGHTS_FILE;
 pub use provider::LocalEngineProvider;
+pub use sensevoice::REQUIRED_FILES as SENSEVOICE_REQUIRED_FILES;

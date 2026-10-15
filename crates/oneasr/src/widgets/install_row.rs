@@ -7,11 +7,95 @@
 //! - 已安装：重新下载（未闭环圆圈箭头）
 //! - 下载中：停止图标，点击取消
 
-use gpui::{App, ClickEvent, SharedString, Window, div, prelude::*, px, relative, svg};
+use gpui::{
+    App, ClickEvent, ClipboardItem, SharedString, Window, div, prelude::*, px, relative, svg,
+};
 use oneasr_core::DownloadProgress;
 
 use super::button::NameTooltip;
 use crate::i18n::L;
+use crate::theme::{ACCENT, ACCENT_SOFT, LINE, LINE_SOFT, MUTED, PANEL, TEXT};
+
+/// 一条路径栏：左边可点的路径文字（**点击即复制**），右边「选文件夹」按钮。
+///
+/// 这块东西原本在设置抽屉里抄了四遍、热词页第五遍，连 id / 文字 / 回调都只差几个
+/// 字符。抄五份的代价不是行数，是**行为**：改一次复制交互要改五处，漏一处就出现
+/// 「ASR 那行能复制、Demucs 那行不能」。所以抽成一个构件，复制只写一次。
+///
+/// 点击复制而不是加「在资源管理器中打开」：前者跨平台、跨 RDP（远程时本机
+/// 资源管理器根本开不了）、而且用户自己粘到地址栏里也就三步。后者只省两步，
+/// 换来三平台各一条命令和一条只在桌面端有效的路径。
+pub fn model_path_bar(
+    // 元素 id 前缀（同一窗内唯一）。
+    id: &'static str,
+    // 完整路径（复制的就是它，不是显示被截断的那一截）。
+    path: SharedString,
+    // 悬停提示：完整路径 + 「点击复制」两行。
+    tip: SharedString,
+    // 最多显示几行（输出目录会长，模型目录一行够）。
+    lines: usize,
+    // 变暗（输出目录在「保存到源文件旁边」打开时不用）。
+    dimmed: bool,
+    // 复制之后的回执提示。构件只管写剪贴板（那是通用的），提示是界面自己的事，
+    // 由调用方接上——这样这个构件不必知道 OneAsrApp 的存在。
+    on_copy: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_browse: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let copy_path = path.clone();
+    let path_id: SharedString = format!("{id}-path").into();
+    let browse_id: SharedString = format!("{id}-browse").into();
+
+    div()
+        .id(SharedString::from(id))
+        .flex()
+        .items_center()
+        .rounded_md()
+        .border_1()
+        .border_color(LINE)
+        .bg(PANEL)
+        .overflow_hidden()
+        .opacity(if dimmed { 0.45 } else { 1.0 })
+        .hover(|s| s.border_color(ACCENT))
+        .child(
+            div()
+                .id(path_id)
+                .flex_1()
+                .min_w_0()
+                .px_2p5()
+                .py_1p5()
+                .text_xs()
+                .text_color(TEXT)
+                .whitespace_normal()
+                .line_clamp(lines)
+                .cursor_pointer()
+                // 点击复制：本地 AI 玩家拿到权重目录的第一件事就是自己往里拷文件，
+                // 让用户把路径抄走比让他记住在哪看更省事。
+                .on_click(move |click, window, app| {
+                    app.write_to_clipboard(ClipboardItem::new_string(copy_path.to_string()));
+                    on_copy(click, window, app);
+                })
+                .child(path)
+                .tooltip(move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into()),
+        )
+        .child(
+            div()
+                .id(browse_id)
+                .flex_shrink_0()
+                .px_2p5()
+                .py_1p5()
+                .border_l_1()
+                .border_color(LINE_SOFT)
+                .cursor_pointer()
+                .hover(|s| s.bg(ACCENT_SOFT))
+                .child(
+                    svg()
+                        .size(px(15.))
+                        .path("icons/folder.svg")
+                        .text_color(MUTED),
+                )
+                .on_click(on_browse),
+        )
+}
 
 /// The live state of one download / install row.
 ///

@@ -124,6 +124,7 @@ impl OneAsrApp {
 
     pub(super) fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let settings_open = self.settings_open;
+        let hotword_open = self.hotword_page_open();
         let dl_busy = self.any_download_busy();
         let picking = self.picking;
         let can_start = self.model_status == ModelStatus::Ready;
@@ -198,6 +199,32 @@ impl OneAsrApp {
                         true,
                         cx.listener(|this, _, _, cx| this.clear_all(cx)),
                     ))
+                    // 热词：工作流级入口，样式与它左边的「清空/添加」同档（NORMAL
+                    // 字重 + 次要按钮配色）；开在热词页时用软强调（同齿轮的 open 态）。
+                    .child(
+                        div()
+                            .id(if hotword_open {
+                                "hotword-open"
+                            } else {
+                                "hotword"
+                            })
+                            .px_3()
+                            .py_1()
+                            .rounded_lg()
+                            .text_sm()
+                            .bg(if hotword_open { ACCENT_SOFT } else { PANEL })
+                            .text_color(if hotword_open { ACCENT } else { TEXT })
+                            .border_1()
+                            .border_color(if hotword_open { ACCENT } else { LINE })
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ACCENT_SOFT).border_color(ACCENT))
+                            .tooltip({
+                                let tip: SharedString = t(L::TIP_HOTWORD).into();
+                                move |_, cx| cx.new(|_| NameTooltip { text: tip.clone() }).into()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_hotword_drawer(cx)))
+                            .child(t(L::HOTWORD)),
+                    )
                     .child(settings_gear_btn(
                         settings_open,
                         dl_busy,

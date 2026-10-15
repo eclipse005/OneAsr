@@ -29,6 +29,7 @@ pub(crate) enum WorkerMsg {
     ModelDirPicked(PathBuf),
     AlignerDirPicked(PathBuf),
     DemucsDirPicked(PathBuf),
+    SenseVoiceDirPicked(PathBuf),
     OutputDirPicked(PathBuf),
     Probed {
         id: String,
@@ -83,6 +84,9 @@ impl OneAsrApp {
                 Ok(WorkerMsg::ModelDirPicked(dir)) => self.handle_model_dir_picked(dir, cx),
                 Ok(WorkerMsg::AlignerDirPicked(dir)) => self.handle_aligner_dir_picked(dir, cx),
                 Ok(WorkerMsg::DemucsDirPicked(dir)) => self.handle_demucs_dir_picked(dir, cx),
+                Ok(WorkerMsg::SenseVoiceDirPicked(dir)) => {
+                    self.handle_sensevoice_dir_picked(dir, cx)
+                }
                 Ok(WorkerMsg::OutputDirPicked(dir)) => self.handle_output_dir_picked(dir, cx),
                 Ok(WorkerMsg::ModelDownload(progress)) => self.handle_model_download(progress, cx),
                 Ok(WorkerMsg::Probed { id, duration_sec }) => {
@@ -237,12 +241,22 @@ impl OneAsrApp {
         }
     }
 
+    /// SenseVoice 粗转目录选好了：绑进 settings 并重探针。
+    ///
+    /// 只标记草稿（`mark_settings_dirty`）——热词页和设置页是同一个抽屉的两次
+    /// 暂存编辑，落盘统一由抽屉的「保存设置」按钮完成，关抽屉即撤销。
+    fn handle_sensevoice_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        self.settings.sensevoice_model_dir = dir;
+        self.refresh_model_probe();
+        self.mark_settings_dirty(cx);
+        cx.notify();
+    }
+
     /// Output directory chosen: rebind — staged, not saved.
     fn handle_output_dir_picked(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         self.settings.output_dir = dir;
         self.mark_settings_dirty(cx);
     }
-
     /// Model download progress / terminal state (background thread).
     fn handle_model_download(&mut self, progress: DownloadProgress, cx: &mut Context<Self>) {
         let id = progress.model_id;
@@ -258,7 +272,7 @@ impl OneAsrApp {
             // Install layout already has files. Bind active selection only
             // when this download is for the currently selected ASR (or Align).
             match id.kind() {
-                ModelKind::Demucs => {
+                ModelKind::Demucs | ModelKind::Hotword => {
                     self.refresh_model_probe();
                     self.flash_hint(crate::i18n::model_ready(id.label(ui_lang())), cx);
                 }

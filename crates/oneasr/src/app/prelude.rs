@@ -17,9 +17,9 @@ pub(crate) use std::thread;
 pub(crate) use std::time::{Duration, Instant};
 
 pub(crate) use gpui::{
-    AnyElement, Bounds, BoxShadow, Context, ExternalPaths, FocusHandle, IntoElement,
+    AnyElement, Bounds, BoxShadow, Context, Entity, ExternalPaths, FocusHandle, IntoElement,
     MouseMoveEvent, Pixels, Rgba, SharedString, Timer, Window, WindowControlArea, canvas, deferred,
-    div, hsla, point, prelude::*, px, relative, svg,
+    div, hsla, point, prelude::*, px, relative,
 };
 
 pub(crate) use oneasr_core::{
@@ -43,7 +43,7 @@ pub(crate) use crate::app::ui::text::*;
 pub(crate) use crate::app::ui::util::*;
 pub(crate) use crate::app::worker::{AsrJob, WorkerMsg};
 pub(crate) use crate::app::{
-    LangMenuLayout, LangSelectTarget, ModelStatus, OneAsrApp, TaskRowView,
+    DrawerPage, LangMenuLayout, LangSelectTarget, ModelStatus, OneAsrApp, TaskRowView,
 };
 pub(crate) use crate::theme::*;
 pub(crate) use crate::ui_font;

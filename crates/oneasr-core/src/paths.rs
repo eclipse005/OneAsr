@@ -37,6 +37,9 @@ pub const OUTPUT_DIR: &str = "output";
 pub const RUNS_DIR: &str = "runs";
 /// 数据目录里的设置文件名。
 pub const SETTINGS_FILE: &str = "settings.json";
+/// 数据目录里的热词库文件名。见 [`crate::hotword::store`]——热词是用户内容，
+/// 不跟 `settings.json` 挤在一份里（理由见该模块头）。
+pub const HOTWORDS_FILE: &str = "hotword.json";
 
 /// Windows / macOS 的用户数据子目录名（与既有 `%LOCALAPPDATA%\OneAsr` 保持一致，
 /// 不再造第二套用户目录）。
@@ -360,6 +363,12 @@ pub fn settings_path() -> PathBuf {
 /// 保证老用户升级后设置不被重置；写入永远走 [`settings_path`]。
 pub fn install_settings_path() -> PathBuf {
     crate::model::resolve_app_root_dir().join(SETTINGS_FILE)
+}
+
+/// `hotword.json` 的路径（与 [`settings_path`] 同目录）。热词库自己一份文件，
+/// 见 [`crate::hotword::store`]。
+pub fn hotwords_path() -> PathBuf {
+    data_dir().join(HOTWORDS_FILE)
 }
 
 /// 日志 / 统计的兜底基址：数据目录；连平台用户目录都探测不到时返回 `None`

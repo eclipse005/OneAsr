@@ -6,7 +6,7 @@
 //! [`invalidate_all_model_checks`]）：下载完成、模型目录变更时失效。
 
 use super::AsrError;
-use crate::i18n::{self, ROLE_ALIGNER, ROLE_ASR, ROLE_DEMUCS};
+use crate::i18n::{self, ROLE_ALIGNER, ROLE_ASR, ROLE_DEMUCS, ROLE_HOTWORD};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -23,6 +23,8 @@ enum ModelRole {
     Asr,
     Aligner,
     Demucs,
+    /// 热词粗转（SenseVoiceSmall）。
+    Rough,
 }
 
 static MODEL_DIR_READY: OnceLock<Mutex<HashSet<(ModelRole, PathBuf)>>> = OnceLock::new();
@@ -79,6 +81,7 @@ pub fn is_model_ready(id: ModelId) -> bool {
         ModelKind::Asr => check_asr_model_dir(&dir).is_ok(),
         ModelKind::Align => check_aligner_model_dir(&dir).is_ok(),
         ModelKind::Demucs => check_demucs_model_dir(&dir).is_ok(),
+        ModelKind::Hotword => check_sensevoice_model_dir(&dir).is_ok(),
     }
 }
 
@@ -158,6 +161,49 @@ pub fn check_demucs_model_dir(model_dir: &Path) -> Result<(), AsrError> {
         } else {
             Err(AsrError::ModelIncomplete {
                 role: ROLE_DEMUCS,
+                missing: join_missing(&missing),
+                dir: model_dir.display().to_string(),
+            })
+        }
+    })
+}
+
+/// Check the optional SenseVoiceSmall directory (hotword rough transcription).
+///
+/// 判据就是 `Model::load` 真正会打开的那 4 个文件（见
+/// [`crate::engine::local::SENSEVOICE_REQUIRED_FILES`）：权重、BPE 分词、
+/// tokens、前端 CMVN。与其它模型同一条规则——自定义目录只看这些文件在不在，
+/// 不让同一个模型换个存放位置就报缺。
+pub fn check_sensevoice_model_dir(model_dir: &Path) -> Result<(), AsrError> {
+    run_cached_model_check(ModelRole::Rough, model_dir, || {
+        // 安装布局目录按目录清单精确校验（尺寸 + sha256），与 ASR / 对齐器 /
+        // 人声分离同一条规则；用户自选目录只看那 4 个文件在不在。
+        let is_install_layout = model_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case(crate::model::SENSEVOICE_SMALL));
+        if is_install_layout {
+            return check_model_dir_against_catalog(
+                ROLE_HOTWORD,
+                model_dir,
+                crate::model::ModelId::SenseVoiceSmall,
+            );
+        }
+        if !model_dir.is_dir() {
+            return Err(AsrError::Other(i18n::model_dir_missing(
+                ROLE_HOTWORD,
+                model_dir,
+            )));
+        }
+        let mut missing = Vec::new();
+        for file in crate::engine::local::SENSEVOICE_REQUIRED_FILES {
+            check_weight_file(model_dir, file, &mut missing);
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(AsrError::ModelIncomplete {
+                role: ROLE_HOTWORD,
                 missing: join_missing(&missing),
                 dir: model_dir.display().to_string(),
             })

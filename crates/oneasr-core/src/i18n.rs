@@ -118,6 +118,19 @@ pub const ROLE_ASR: Str = Str::new("语音识别", "ASR");
 pub const ROLE_ALIGNER: Str = Str::new("对齐", "Aligner");
 /// 见 [`ROLE_ASR`]。
 pub const ROLE_DEMUCS: Str = Str::new("人声分离", "Vocal separation");
+/// 见 [`ROLE_ASR`]。
+pub const ROLE_HOTWORD: Str = Str::new("热词粗转", "Hotword rough pass");
+
+/// `热词组「{name}」还没有词，先加词或换一个组` /
+/// `Hotword group "{name}" is empty — add words or pick another group`。
+pub fn hotword_group_empty(name: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("热词组「{name}」还没有词，先加词或换一个组"),
+        UiLang::En => {
+            format!("Hotword group \"{name}\" is empty — add words or pick another group")
+        }
+    }
+}
 
 // ---- AsrError ----
 pub const ERR_IO: Str = Str::new("I/O 错误", "I/O error");
@@ -167,6 +180,14 @@ pub fn load_aligner_failed(e: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("加载对齐模型失败: {e}"),
         UiLang::En => format!("Failed to load the aligner model: {e}"),
+    }
+}
+
+/// `加载热词粗转模型失败: {e}` / `Failed to load the hotword rough-pass model: {e}`。
+pub fn load_rough_asr_failed(e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("加载热词粗转模型失败: {e}"),
+        UiLang::En => format!("Failed to load the hotword rough-pass model: {e}"),
     }
 }
 

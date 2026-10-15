@@ -50,10 +50,23 @@ impl OneAsrApp {
         })
     }
 
+    /// True when the task-row 热词组 panel can actually paint for `hotword_menu`.
+    pub(crate) fn task_hotword_menu_active(&self) -> bool {
+        let Some(id) = self.hotword_menu.as_ref() else {
+            return false;
+        };
+        self.tasks.iter().any(|t| {
+            &t.id == id && !t.status.locks_row_actions() && !self.exiting.contains_key(&t.id)
+        })
+    }
+
     /// Drop select flags that cannot render a panel (stale id / locked / exiting).
     pub(crate) fn sync_lang_select_state(&mut self) {
         if self.lang_menu.is_some() && !self.task_lang_menu_active() {
             self.lang_menu = None;
+        }
+        if self.hotword_menu.is_some() && !self.task_hotword_menu_active() {
+            self.hotword_menu = None;
         }
         // Settings select only while the drawer is open or animating.
         if self.settings_lang_open && !self.settings_open && self.settings_progress() < 0.01 {
@@ -61,10 +74,12 @@ impl OneAsrApp {
         }
     }
 
-    /// Clear both language selects (no notify — caller owns the frame).
+    /// Clear every row-level / settings select (no notify — caller owns the frame).
     pub(crate) fn close_lang_selects(&mut self) {
         self.lang_menu = None;
         self.settings_lang_open = false;
+        // 热词组下拉与语言下拉是同一族浮层：任何一个关掉落，另一个也不该留。
+        self.hotword_menu = None;
     }
 
     /// Language menus and the timing card share MENU_Z — only one floating surface.
@@ -374,6 +389,45 @@ impl OneAsrApp {
         cx.notify();
     }
 
+    /// Open / close the per-task 热词组 dropdown (closes every other select).
+    pub(crate) fn toggle_hotword_menu(&mut self, id: &str, cx: &mut Context<Self>) {
+        let locked = self
+            .tasks
+            .iter()
+            .find(|t| t.id == id)
+            .is_some_and(|t| t.status.locks_row_actions() || self.exiting.contains_key(id));
+        if locked {
+            self.close_floating_overlays();
+            self.flash_hint(t(L::LOCKED_HOTWORD), cx);
+            return;
+        }
+        let was_open = self.hotword_menu.as_deref() == Some(id);
+        self.close_floating_overlays();
+        if !was_open {
+            self.hotword_menu = Some(id.to_string());
+        }
+        cx.notify();
+    }
+
+    /// Apply a 热词组 pick for one task (`None` = 无) and close every select.
+    pub(crate) fn pick_hotword_group(
+        &mut self,
+        id: &str,
+        group: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+            if task.status.locks_row_actions() {
+                self.close_floating_overlays();
+                self.flash_hint(t(L::LOCKED_HOTWORD), cx);
+                return;
+            }
+            task.set_hotword_group(group);
+        }
+        self.close_floating_overlays();
+        cx.notify();
+    }
+
     /// Flip per-task vocal separation (row pill). Blocked while the row is
     /// processing; enabling needs the Demucs weights to be installed.
     pub(crate) fn toggle_task_separation(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -419,7 +473,7 @@ impl OneAsrApp {
             self.stats_open = false;
             self.stats_hover_day = None;
         }
-        if self.lang_menu.is_none() && !self.settings_lang_open {
+        if self.lang_menu.is_none() && !self.settings_lang_open && self.hotword_menu.is_none() {
             if closed_stats || closed_welcome {
                 cx.notify();
             }
@@ -429,9 +483,103 @@ impl OneAsrApp {
         cx.notify();
     }
 
-    /// Whether a language panel is live (scrim / Escape target).
+    /// Whether a language / hotword dropdown is live (scrim / Escape target).
     pub(crate) fn any_menu_open(&self) -> bool {
-        self.task_lang_menu_active() || self.settings_lang_open
+        self.task_lang_menu_active() || self.settings_lang_open || self.task_hotword_menu_active()
+    }
+
+    // ── 抽屉：设置页 / 热词页共用一套骨架 ──────────────────────────────────
+    //
+    // 热词管理本质是**一张表单**（模型下载 + 组分栏 + 文本编辑），和设置页同构，
+    // 所以它并不新造第三种界面，而是同一个右滑抽屉的第二页：共用宽度、滑入动画、
+    // 开抽屉快照 / 关抽屉回滚、以及底部那条保存栏。滚轮、卡片语言、缓存失效
+    // 口径也都只有一份。
+
+    /// 热词页开着吗（工具栏 chip 高亮、各处判定用）。
+    pub(crate) fn hotword_page_open(&self) -> bool {
+        self.settings_open && self.settings_page == DrawerPage::Hotword
+    }
+
+    pub(crate) fn settings_page_open(&self) -> bool {
+        self.settings_open && self.settings_page == DrawerPage::Settings
+    }
+
+    /// 打开（或翻到）抽屉的某一页。
+    ///
+    /// 快照只在**抽屉从关到开**时拍一次：翻页不是新的编辑会话，所以翻页不会
+    /// 回滚另一页上刚改的东西；关抽屉＝放弃本次会话的全部未保存改动。
+    fn open_drawer(&mut self, page: DrawerPage, cx: &mut Context<Self>) {
+        let was_open = self.settings_open;
+        if !was_open {
+            // 两份快照一起拍：热词页与设置页共用**一次**编辑会话，关抽屉＝整份
+            // 回滚。只拍 settings 会把热词组的改动漏在外面（那才是真丢数据）。
+            // 此刻内存里的两份就是磁盘上的两份，所以拍下来的正好是「落盘状态」，
+            // 与 `save_settings` 里前移快照用的是同一条语义。
+            self.settings_snapshot = Some(self.settings.clone());
+            self.hotword_snapshot = Some(self.hotwords.clone());
+        }
+        self.settings_page = page;
+        // 抽屉与浮层面板不并存：语言下拉 / 用时卡片 / 统计 / 指南先收。
+        self.close_floating_overlays();
+        self.stats_open = false;
+        self.stats_hover_day = None;
+        if self.welcome_open {
+            self.close_welcome(cx);
+        }
+        if page == DrawerPage::Hotword {
+            // 输入框惰性创建；顺手把编辑器指向默认组（或第一个组），省一次点击。
+            self.ensure_hotword_fields(cx);
+            if self.hotword_edit_group.is_none() {
+                let id = self.first_hotword_group_id();
+                self.select_hotword_edit_group(id, cx);
+            }
+        }
+        self.animate_drawer(true);
+        if !was_open {
+            self.play_ui(sfx::Sfx::Click);
+        }
+        cx.notify();
+    }
+
+    /// 关抽屉 = 放弃这次会话里**没落盘**的改动：把 `settings` / `hotwords` 整份
+    /// 回滚到各自的落盘快照（语义见 `settings_snapshot`）。什么都没改就只是丢掉
+    /// 快照，不动内存。
+    pub(crate) fn close_drawer(&mut self, cx: &mut Context<Self>) {
+        if !self.settings_open {
+            return;
+        }
+        if self.is_settings_dirty(cx) {
+            if let Some(snap) = self.settings_snapshot.take() {
+                self.settings = snap;
+                self.settings_dirty = false;
+                // Probes followed the staged edits — re-run them on the restored
+                // paths so the status dots tell the truth again.
+                self.refresh_model_probe();
+            }
+            if let Some(snap) = self.hotword_snapshot.take() {
+                self.hotwords = snap;
+                // 回到抽屉外就不该留着编辑对象，否则下次打开会指向一个可能已经
+                // 被回滚掉的组。
+                self.hotword_edit_group = None;
+            }
+        } else {
+            self.settings_snapshot = None;
+            self.hotword_snapshot = None;
+        }
+        // 编辑器对象不跨会话。
+        self.hotword_edit_group = None;
+        self.animate_drawer(false);
+        self.close_floating_overlays();
+        cx.notify();
+    }
+
+    /// 抽屉滑入 / 滑出（中途再切页也不会跳）。
+    fn animate_drawer(&mut self, open: bool) {
+        let cur = self.settings_progress();
+        self.settings_from = cur;
+        self.settings_to = if open { 1.0 } else { 0.0 };
+        self.settings_anim_t0 = Instant::now();
+        self.settings_open = open;
     }
 
     // ── 指南面板（首启欢迎卡 / 状态栏「指南」chip）──────────────────────
@@ -477,46 +625,28 @@ impl OneAsrApp {
     /// 面板上的「打开设置」：收起 + 开抽屉一步到位。
     pub(crate) fn close_welcome_open_settings(&mut self, cx: &mut Context<Self>) {
         self.close_welcome(cx);
-        if !self.settings_open {
+        if !self.settings_page_open() {
             self.toggle_settings(cx);
         }
     }
 
+    /// 设置齿轮：在设置页上再点一次＝关抽屉；在热词页上点＝翻回设置页。
     pub(crate) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
-        let open = !self.settings_open;
-        if open {
-            // Snapshot on open. Closing the drawer is a cancel: unsaved edits
-            // roll back to whatever was last persisted, never auto-saved.
-            self.settings_snapshot = Some(self.settings.clone());
-        } else if self.is_settings_dirty(cx) {
-            if let Some(snap) = self.settings_snapshot.take() {
-                self.settings = snap;
-                self.settings_dirty = false;
-                // Probes followed the staged edits — re-run them on the
-                // restored paths so the status dots tell the truth again.
-                self.refresh_model_probe();
-            }
-        } else {
-            self.settings_snapshot = None;
+        if self.settings_page_open() {
+            self.close_drawer(cx);
+            return;
         }
-        let cur = self.settings_progress();
-        self.settings_from = cur;
-        self.settings_to = if open { 1.0 } else { 0.0 };
-        self.settings_anim_t0 = Instant::now();
-        self.settings_open = open;
-        // Drawer chrome shares the list surface — drop any floating overlays.
-        self.close_floating_overlays();
-        // The stats panel shares MENU_Z with those overlays; the drawer wins.
-        self.stats_open = false;
-        self.stats_hover_day = None;
-        // 指南面板同理：抽屉一开就收起（顺带完成首启「看过」的记账）。
-        if self.welcome_open {
-            self.close_welcome(cx);
+        self.open_drawer(DrawerPage::Settings, cx);
+    }
+
+    /// 「热词」入口（工具栏 chip / 任务行下拉底部）：在热词页上再点一次＝关抽屉；
+    /// 在设置页上点＝翻到热词页。
+    pub(crate) fn toggle_hotword_drawer(&mut self, cx: &mut Context<Self>) {
+        if self.hotword_page_open() {
+            self.close_drawer(cx);
+            return;
         }
-        if open {
-            self.play_ui(sfx::Sfx::Click);
-        }
-        cx.notify();
+        self.open_drawer(DrawerPage::Hotword, cx);
     }
 
     /// Eased 0..=1 drawer progress (works mid-animation when retoggled).

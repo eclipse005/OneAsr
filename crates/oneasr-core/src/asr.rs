@@ -32,7 +32,8 @@ mod model_check;
 
 pub use model_check::{
     check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir,
-    invalidate_all_model_checks, invalidate_model_check, is_model_ready,
+    check_sensevoice_model_dir, invalidate_all_model_checks, invalidate_model_check,
+    is_model_ready,
 };
 
 use std::fmt;
@@ -43,6 +44,7 @@ use crate::diagnostics::{pipeline_trace, trace_log};
 use crate::engine::{
     AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent, TranscribeRequest,
 };
+use crate::hotword::HotwordRun;
 use crate::i18n::{self, UiLang, t};
 use crate::lang::{to_lang_key, to_qwen_language_label};
 use crate::media::{MediaError, convert_to_16k_mono_wav, slice_wav, wav_duration_sec};
@@ -70,6 +72,8 @@ pub enum AsrError {
     EmptyTxtBody,
     LoadAsr(String),
     LoadAligner(String),
+    /// 热词粗转模型（SenseVoiceSmall）加载失败。
+    LoadRoughAsr(String),
     TranscribeChunk(usize, String),
     AlignChunk(usize, String, String),
     ModelIncomplete {
@@ -111,6 +115,7 @@ impl fmt::Display for AsrError {
             Self::EmptyTxtBody => write!(f, "{}", t(i18n::ERR_EMPTY_TXT_BODY)),
             Self::LoadAsr(e) => write!(f, "{}", i18n::load_asr_failed(e)),
             Self::LoadAligner(e) => write!(f, "{}", i18n::load_aligner_failed(e)),
+            Self::LoadRoughAsr(e) => write!(f, "{}", i18n::load_rough_asr_failed(e)),
             Self::TranscribeChunk(i, e) => write!(f, "{}", i18n::transcribe_chunk(*i, e)),
             Self::AlignChunk(i, inner, e) => write!(f, "{}", i18n::align_chunk(*i, inner, e)),
             Self::ModelIncomplete { role, missing, dir } => {
@@ -149,8 +154,8 @@ const MIN_SILENCE_FALLBACK: f32 = 0.3;
 /// Fine-grained pipeline stage for live UI status and timing breakdown.
 ///
 /// Order in a successful run:
-/// `Converting` → `Planning` → `LoadingAsr` → `Transcribing` →
-/// `LoadingAligner` → `Aligning` → `Exporting`.
+/// `Converting` → `Planning` → [`AsrStage::RoughTranscribing`]（只在选了热词组时）
+/// → `LoadingAsr` → `Transcribing` → `LoadingAligner` → `Aligning` → `Exporting`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrStage {
     /// ffmpeg → 16 kHz mono master WAV.
@@ -159,6 +164,8 @@ pub enum AsrStage {
     Separating,
     /// VAD + chunk plan (or single-chunk plan for short audio).
     Planning,
+    /// 热词第一趟：SenseVoice 粗转 + 逐块召回（只有选了热词组时出现）。
+    RoughTranscribing,
     /// Load Qwen ASR weights.
     LoadingAsr,
     /// ASR inference over planned chunks.
@@ -180,6 +187,8 @@ impl AsrStage {
             (Self::Separating, UiLang::En) => "Separating vocals",
             (Self::Planning, UiLang::Zh) => "分段规划",
             (Self::Planning, UiLang::En) => "Planning segments",
+            (Self::RoughTranscribing, UiLang::Zh) => "热词粗转",
+            (Self::RoughTranscribing, UiLang::En) => "Hotword rough pass",
             (Self::LoadingAsr, UiLang::Zh) => "加载识别模型",
             (Self::LoadingAsr, UiLang::En) => "Loading ASR model",
             (Self::Transcribing, UiLang::Zh) => "转写中",
@@ -647,9 +656,25 @@ impl<'a> Pipeline<'a> {
         if needs_alignment(self.settings, &export) {
             check_aligner_model_dir(&self.settings.aligner_model_dir)?;
         }
+        // 热词粗转同样在昂贵阶段之前确认模型在位：缺模型不该等转码 / VAD 跑完才报。
+        //
+        // 判据是 `is_usable()` 而不是「有没有选组」：组已被删除时
+        // `resolve_run` 返回 `None`，这里直接跳过——那一行本来就显示「无热词」，
+        // 不该反过来拿一个用不到的粗转模型把任务挡在门外。
+        if self
+            .settings
+            .hotword_run
+            .as_ref()
+            .is_some_and(HotwordRun::is_usable)
+        {
+            check_sensevoice_model_dir(&self.settings.resolved_sensevoice_model_dir())?;
+        }
         let conv = self.stage_prepare(input, data_root)?;
         let vad = self.stage_vad_plan(&conv)?;
-        let asr = self.stage_transcribe_all(&conv, &vad)?;
+        // 热词第一趟：SenseVoice 粗转 → 逐块召回 → 拼成 Qwen 的 context。
+        // 它在正式 ASR **之前**跑完并释放模型，两个模型不会同时占显存。
+        let hotword_contexts = self.stage_rough_transcribe(&conv, &vad)?;
+        let asr = self.stage_transcribe_all(&conv, &vad, hotword_contexts.as_deref())?;
         let txt_body = self.txt_body(&asr);
         if !needs_alignment(self.settings, &export) {
             return self.stage_export_txt_only(input, media_name, txt_body);
@@ -909,10 +934,67 @@ impl<'a> Pipeline<'a> {
 
     // ── Stage 3: load ASR + transcribe all chunks ───────────────────────
 
+    /// 热词第一趟：SenseVoice 粗转 + 逐块召回，返回**与 `vad.chunks` 一一对应**
+    /// 的 context 串；`None` = 本次不用热词。
+    ///
+    /// 两趟共用同一批分块，召回出来的词才不会跨块错位；粗转引擎用完即弃
+    /// （`drop`），所以它不会和 Qwen 同时驻留显存。召回是**召回**不是纠错：
+    /// 阈值与 `top_k` 都偏松，多给几条不致命，而漏掉一条就是白跑一趟。
+    fn stage_rough_transcribe(
+        &self,
+        conv: &ConvertedAudio,
+        vad: &VadPlan,
+    ) -> Result<Option<Vec<String>>, AsrError> {
+        // 只认**已经解析好**的运行参数：这里没有组 id 可查，也就没有「组被删了
+        // 却仍按热词去要求模型」的那类悬空状态。
+        let Some(run) = self
+            .settings
+            .hotword_run
+            .as_ref()
+            .filter(|run| run.is_usable())
+        else {
+            return Ok(None);
+        };
+        let index = crate::hotword::HotwordIndex::new(&run.text, run.threshold);
+        if index.is_empty() {
+            // 词表里一个能音素化的词都没有（全是标点之类）：没有可注入的提示。
+            return Ok(None);
+        }
+        self.emit(StageUpdate::new(AsrStage::RoughTranscribing));
+        let mut rough = self
+            .provider
+            .load_rough_asr()
+            .map_err(|e| AsrError::LoadRoughAsr(e.message().to_string()))?;
+        let chunks: Vec<(f32, f32)> = vad
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.start, chunk.end))
+            .collect();
+        let texts = rough
+            .transcribe_chunks(&conv.wav_path, &chunks)
+            .map_err(|e| AsrError::Other(e.message().to_string()))?;
+        drop(rough);
+
+        let top_k = run.top_k;
+        let contexts: Vec<String> = texts
+            .iter()
+            .map(|text| {
+                let words: Vec<String> = index
+                    .recall(text, top_k)
+                    .into_iter()
+                    .map(|(word, _score)| word)
+                    .collect();
+                crate::hotword::context_line(&words)
+            })
+            .collect();
+        Ok(Some(contexts))
+    }
+
     fn stage_transcribe_all(
         &self,
         conv: &ConvertedAudio,
         vad: &VadPlan,
+        hotword_contexts: Option<&[String]>,
     ) -> Result<AsrOutput, AsrError> {
         self.emit(StageUpdate::new(AsrStage::LoadingAsr));
         check_asr_model_dir(&self.settings.asr_model_dir)?;
@@ -943,11 +1025,17 @@ impl<'a> Pipeline<'a> {
                 conv.wav_path.as_path()
             };
 
+            // 热词提示词逐块给：这一段的召回结果只对这一段有效（位置越靠前越有效，
+            // 所以顺序就是 `recall` 给的降序）。
+            let context = hotword_contexts
+                .and_then(|all| all.get(i))
+                .map(String::as_str);
             let report = asr
                 .transcribe(TranscribeRequest {
                     wav: chunk_path,
                     language: &force_lang,
                     max_new_tokens: self.settings.max_new_tokens,
+                    context,
                 })
                 .map_err(|e| AsrError::TranscribeChunk(i + 1, e.message().to_string()))?;
             let text = clean_asr_text(&report.text);
