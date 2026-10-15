@@ -2,10 +2,11 @@
 //!
 //! 与 Qwen 对齐器并存的第二个引擎（设置里选择）。
 //!
-//! **这里不做任何分组**。crate 的 `AlignOutput::words` 已经是成品对齐单元：
-//! 脚本不带空格的（中日韩、假名、谚文）逐字，脚本带空格的整词，标点零时长
-//! 搭在前面的单元上，`space_before` 带的是文稿自己的空格。判断在 crate 的
-//! `spans::unit_runs` 里，一处回答，`words` 与它自己的断句器读的是同一份。
+//! **这里不做任何分组**（日语是唯一例外，见下）。crate 的 `AlignOutput::words`
+//! 已经是成品对齐单元：脚本不带空格的（中日韩、假名、谚文）逐字，脚本带空格
+//! 的整词，标点零时长搭在前面的单元上，`space_before` 带的是文稿自己的空格。
+//! 判断在 crate 的 `spans::unit_runs` 里，一处回答，`words` 与它自己的断句器
+//! 读的是同一份。
 //!
 //! 别在这里补分组。`AlignOutput::tokens` 是另一个视图：逐 CTC target，而这个
 //! checkpoint 的词表是字符级的，所以**每个脚本**都是逐字符的。上层曾经直接吃
@@ -13,7 +14,12 @@
 //! 于是 `Whisper` 被渲染成 `W h i s p e r`、`AI` 变成 `A I`。要更细的粒度
 //! （例如卡拉OK 逐字）时读 `tokens`，那是刻意的选择，不是漏了分组。
 //!
-//! `language` 参数 CTC 不需要（脚本判定逐段做，不查语言表），忽略。
+//! **例外只有一个：日语**（[`super::ja_units`]）。Qwen 对齐器对日语按 nagisa
+//! 的 morpheme 出单元，CTC 是逐字——两条对齐器给同一条管线喂两种粒度，断句
+//! 层为此背了一族日语手写绑定。产品要求两条对齐器在日语上同粒度，所以日语
+//! 在 `align()` 的最后一步按 Qwen 的 `split_words` 口径把逐字单元重分组为词；
+//! 任何映射失败原样回退逐字。`language` 参数只为这个例外而读——其余语言
+//! CTC 仍然不看语言表（脚本判定逐段做）。
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -72,6 +78,8 @@ impl Aligner for CtcAlignerAdapter {
         req: AlignRequest<'_>,
         on_progress: Option<AlignProgress<'_>>,
     ) -> Result<Vec<AlignedToken>, EngineError> {
+        let language = req.language;
+        let text = req.text;
         let out = match on_progress {
             None => self.align_inner(req, None)?,
             Some(sink) => {
@@ -88,7 +96,7 @@ impl Aligner for CtcAlignerAdapter {
                 )?
             }
         };
-        Ok(out
+        let units: Vec<AlignedToken> = out
             .words
             .into_iter()
             .map(|w| AlignedToken {
@@ -96,7 +104,9 @@ impl Aligner for CtcAlignerAdapter {
                 start_sec: w.start,
                 end_sec: w.end,
             })
-            .collect())
+            .collect();
+        // 日语按 Qwen 口径重分组（见 `ja_units`）；其余语言原样返回。
+        Ok(super::ja_units::apply(language, text, units))
     }
 }
 

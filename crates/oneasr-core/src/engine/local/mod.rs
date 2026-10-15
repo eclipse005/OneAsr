@@ -13,6 +13,7 @@ mod backend;
 mod ctc_aligner;
 mod demucs;
 mod device;
+mod ja_units;
 mod provider;
 mod qwen_asr;
 mod sensevoice;
