@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oneasr_core::engine::AlignedToken;
-use oneasr_core::engine::testing::{FakeProvider, FakeSeparation};
+use oneasr_core::engine::testing::{
+    FAKE_DEGENERATE_RETRY_TEXT, FAKE_DEGENERATE_TEXT, FakeDegeneration, FakeProvider,
+    FakeSeparation,
+};
 use oneasr_core::{ProcessExportOptions, Settings, StageUpdate, process_media_file_with_provider};
 use oneasr_core::{TranscriptInput, process_media_file_with_transcript};
 
@@ -705,6 +708,92 @@ fn a_selected_hotword_group_runs_the_rough_pass_and_injects_context() {
         contexts.iter().flatten().all(|c| !c.is_empty()),
         "给了提示就不能是空串（空串等于没给）：{contexts:?}"
     );
+}
+
+/// 热词提示引发的解码退化要能自愈：带 context 的第一跑跑飞（撞顶截断），
+/// 管线去掉 context 重试一次并采用干净结果——提示词引发的跑飞不许让内容静默丢失。
+///
+/// 用 TXT-only 输出断言正文：SRT 的最终文字来自对齐结果（假对齐器固定输出），
+/// 拿它断「用的是哪一跑」会断错东西。
+///
+/// 断骨锚点：删掉 `stage_transcribe_all` 里的退化重试块，本测试立刻变红——
+/// TXT 里出现 `FAKE_DEGENERATE_TEXT`，且 `asr.transcribe` 只被调用一次。
+#[test]
+fn a_degenerate_hotword_decode_is_retried_without_context() {
+    let mut run = Run::new("hotword_selfheal", false);
+    run.settings.output_srt = false;
+    run.settings.output_txt = true;
+    run.settings.sensevoice_model_dir = install_fake_sensevoice(&run.app_root);
+    run.settings.hotword_run = Some(oneasr_core::HotwordRun {
+        group_id: "default".into(),
+        group_name: "测试".into(),
+        text: "窦神归来\n".into(),
+        top_k: 20,
+        threshold: 0.85,
+    });
+
+    let provider = FakeProvider::new("今天讲窦神归来的故事。", tokens())
+        .with_rough_text("今天讲逗神归来的故事")
+        .with_degenerate_asr(FakeDegeneration::WithContext);
+    let (_stages, result) = run.run(&provider);
+    let txt = result.expect("pipeline should succeed");
+
+    let text = std::fs::read_to_string(&txt).unwrap();
+    assert!(
+        text.contains("今天讲窦神归来的故事"),
+        "应该采用去掉 context 的干净结果：{text}"
+    );
+    assert!(
+        !text.contains(FAKE_DEGENERATE_TEXT),
+        "退化结果不许进正文：{text}"
+    );
+
+    let contexts = provider.asr_contexts();
+    assert_eq!(contexts.len(), 2, "必须恰好重试一次：{contexts:?}");
+    assert!(
+        contexts[0]
+            .as_deref()
+            .is_some_and(|c| c.contains("窦神归来")),
+        "第一跑必须带热词提示：{contexts:?}"
+    );
+    assert_eq!(contexts[1], None, "重试必须不带 context：{contexts:?}");
+}
+
+/// 重试也救不回来时（音频层面的退化）：保留**带热词**的第一次结果并记日志，
+/// 不许盲换成同样退化的重试结果，也不许让任务失败。
+///
+/// 断骨锚点：把「重试干净才替换」的守卫去掉（无条件用重试结果覆盖原文），
+/// TXT 里会变成 `FAKE_DEGENERATE_RETRY_TEXT`，本测试立刻变红。
+#[test]
+fn a_degeneration_that_survives_the_retry_keeps_the_first_result() {
+    let mut run = Run::new("hotword_selfheal_fail", false);
+    run.settings.output_srt = false;
+    run.settings.output_txt = true;
+    run.settings.sensevoice_model_dir = install_fake_sensevoice(&run.app_root);
+    run.settings.hotword_run = Some(oneasr_core::HotwordRun {
+        group_id: "default".into(),
+        group_name: "测试".into(),
+        text: "窦神归来\n".into(),
+        top_k: 20,
+        threshold: 0.85,
+    });
+
+    let provider = FakeProvider::new("不会用到的干净文本", tokens())
+        .with_rough_text("今天讲逗神归来的故事")
+        .with_degenerate_asr(FakeDegeneration::Always);
+    let (_stages, result) = run.run(&provider);
+    let txt = result.expect("pipeline should still succeed");
+
+    let text = std::fs::read_to_string(&txt).unwrap();
+    assert!(
+        text.contains(FAKE_DEGENERATE_TEXT),
+        "救不回来时要保留第一次的结果：{text}"
+    );
+    assert!(
+        !text.contains(FAKE_DEGENERATE_RETRY_TEXT),
+        "不许把重试结果当正文：{text}"
+    );
+    assert_eq!(provider.asr_contexts().len(), 2, "还是只重试一次");
 }
 
 /// 语言门禁：日语任务即使绑了**可用**的热词组，也整趟不跑热词——粗转引擎不加载、

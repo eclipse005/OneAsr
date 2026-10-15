@@ -42,7 +42,8 @@ use std::time::Instant;
 
 use crate::diagnostics::{pipeline_trace, trace_log};
 use crate::engine::{
-    AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent, TranscribeRequest,
+    AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent,
+    TranscribeRequest, degenerate_transcript,
 };
 use crate::hotword::HotwordRun;
 use crate::i18n::{self, UiLang, t};
@@ -1045,7 +1046,10 @@ impl<'a> Pipeline<'a> {
             let context = hotword_contexts
                 .and_then(|all| all.get(i))
                 .map(String::as_str);
-            let report = asr
+            // 带 context 的**非空**提示才算「这一趟真的注入了热词」：空串在适配层
+            // 就被过滤掉（等于没给），去掉 context 重试不会有任何不同。
+            let had_context = context.is_some_and(|c| !c.is_empty());
+            let mut report = asr
                 .transcribe(TranscribeRequest {
                     wav: chunk_path,
                     language: &force_lang,
@@ -1053,6 +1057,39 @@ impl<'a> Pipeline<'a> {
                     context,
                 })
                 .map_err(|e| AsrError::TranscribeChunk(i + 1, e.message().to_string()))?;
+
+            // 自愈：带热词提示的解码退化（撞顶截断 / 复读被折叠）时，去掉 context
+            // 重试一次。提示词是**建议**，它引发的跑飞不该让这一段的内容静默丢失。
+            // 只重试一次、且只在重试干净时替换；救不回来就保留原结果——这个守卫
+            // 的最坏情况等价于今天的行为（多花一次解码）。
+            if had_context && degenerate_transcript(&report) {
+                trace_log(format!(
+                    "asr#{} degenerate with context (stop={:?} raw={} chars) → retry without it",
+                    i + 1,
+                    report.stop_reason,
+                    report.raw_output.chars().count(),
+                ));
+                match asr.transcribe(TranscribeRequest {
+                    wav: chunk_path,
+                    language: &force_lang,
+                    max_new_tokens: self.settings.max_new_tokens,
+                    context: None,
+                }) {
+                    Ok(retry) if !degenerate_transcript(&retry) => {
+                        trace_log(format!("asr#{} recovered without context", i + 1));
+                        report = retry;
+                    }
+                    Ok(_) => trace_log(format!(
+                        "asr#{} still degenerate without context; keeping the hotword result",
+                        i + 1
+                    )),
+                    Err(e) => trace_log(format!(
+                        "asr#{} retry failed ({}); keeping the hotword result",
+                        i + 1,
+                        e.message()
+                    )),
+                }
+            }
             let text = clean_asr_text(&report.text);
 
             if vad.multi_chunk {

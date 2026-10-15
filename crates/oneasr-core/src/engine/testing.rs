@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::engine::{
     AlignProgress, AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider,
-    SeparateRequest, SeparationEvent, Separator, TranscribeRequest, Transcript,
+    SeparateRequest, SeparationEvent, Separator, StopReason, TranscribeRequest, Transcript,
 };
 
 /// Shared, ordered record of engine lifecycle events (`asr.load`, `asr.drop`, …).
@@ -55,6 +55,24 @@ impl Default for FakeSeparation {
     }
 }
 
+/// 假 ASR 的退化剧本（测试自愈重试用）。
+///
+/// - `WithContext`：带 context 的调用返回退化结果（撞顶 + 复读被折叠），
+///   去掉 context 的重试恢复正常——模拟「热词提示引发的跑飞」；
+/// - `Always`：两种调用都退化——管线必须保留原结果，不许把内容弄丢。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FakeDegeneration {
+    WithContext,
+    Always,
+}
+
+/// `FakeDegeneration` 开启时，假 ASR 返回的短文本；测试用它断言**最终结果里的
+/// 是哪一个**：带 context 的第一跑用 `FAKE_DEGENERATE_TEXT`，不带 context 的重试
+/// 用 `FAKE_DEGENERATE_RETRY_TEXT`（两者必须不同——否则「保留原结果」和「盲目
+/// 换成重试结果」在断言上无从区分）。
+pub const FAKE_DEGENERATE_TEXT: &str = "假退化带提示";
+pub const FAKE_DEGENERATE_RETRY_TEXT: &str = "假退化无提示";
+
 /// Engine provider returning recording fakes.
 pub struct FakeProvider {
     log: EngineLog,
@@ -68,6 +86,8 @@ pub struct FakeProvider {
     /// 每次 `transcribe` 收到的热词 `context`（`None` = 没给提示）。
     asr_contexts: Arc<Mutex<Vec<Option<String>>>>,
     separator_loads: Arc<AtomicUsize>,
+    /// 假 ASR 的退化剧本；`None` = 永远正常。
+    asr_degeneration: Option<FakeDegeneration>,
 }
 
 impl FakeProvider {
@@ -83,7 +103,14 @@ impl FakeProvider {
             align_inputs: Arc::new(Mutex::new(Vec::new())),
             asr_contexts: Arc::new(Mutex::new(Vec::new())),
             separator_loads: Arc::new(AtomicUsize::new(0)),
+            asr_degeneration: None,
         }
+    }
+
+    /// 让假 ASR 按 [`FakeDegeneration`] 的剧本回答（自愈重试测试用）。
+    pub fn with_degenerate_asr(mut self, mode: FakeDegeneration) -> Self {
+        self.asr_degeneration = Some(mode);
+        self
     }
 
     /// Make the fake aligner report `1..=total` against the sink it is handed,
@@ -137,6 +164,7 @@ impl EngineProvider for FakeProvider {
             log: self.log.clone(),
             text: self.transcript.clone(),
             contexts: self.asr_contexts.clone(),
+            degeneration: self.asr_degeneration,
         }))
     }
 
@@ -192,7 +220,11 @@ struct FakeAsr {
     log: EngineLog,
     text: String,
     contexts: Arc<Mutex<Vec<Option<String>>>>,
+    degeneration: Option<FakeDegeneration>,
 }
+
+/// 退化剧本里的「原始输出」：一段复读，折叠器会把它折成短文本。
+const FAKE_DEGENERATE_RAW: &str = "lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower lower ";
 
 impl AsrEngine for FakeAsr {
     fn transcribe(&self, req: TranscribeRequest<'_>) -> Result<Transcript, EngineError> {
@@ -201,8 +233,28 @@ impl AsrEngine for FakeAsr {
             .lock()
             .unwrap()
             .push(req.context.map(str::to_owned));
+        let has_context = req.context.is_some_and(|c| !c.is_empty());
+        let degenerate = match self.degeneration {
+            None => false,
+            Some(FakeDegeneration::WithContext) => has_context,
+            Some(FakeDegeneration::Always) => true,
+        };
+        if degenerate {
+            let text = if has_context {
+                FAKE_DEGENERATE_TEXT
+            } else {
+                FAKE_DEGENERATE_RETRY_TEXT
+            };
+            return Ok(Transcript {
+                text: text.into(),
+                raw_output: FAKE_DEGENERATE_RAW.into(),
+                stop_reason: StopReason::MaxTokens,
+            });
+        }
         Ok(Transcript {
             text: self.text.clone(),
+            raw_output: self.text.clone(),
+            stop_reason: StopReason::Eos,
         })
     }
 }

@@ -76,10 +76,45 @@ pub struct TranscribeRequest<'a> {
     pub context: Option<&'a str>,
 }
 
-/// Transcript of one call (kept minimal: the pipeline owns cleaning/punctuation).
+/// Transcript of one call (the pipeline owns cleaning/punctuation).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     pub text: String,
+    /// 引擎的原始输出（复读折叠器处理**之前**）。正常转写里与 `text` 逐字相等；
+    /// 明显更长 = 折叠器把一大段复读截掉了（见 [`degenerate_transcript`]）。
+    pub raw_output: String,
+    /// 生成为什么停下；撞顶截断是解码跑飞的硬信号。
+    pub stop_reason: StopReason,
+}
+
+/// 生成为什么停下（引擎自己的观测）。
+///
+/// `Eos` = 模型吐出结束符，正常收尾；`MaxTokens` = 撞到 `max_new_tokens`
+/// 上限也没等到结束符——文本可能被拦腰截断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StopReason {
+    /// 正常结束（假引擎、未观测路径的默认值）。
+    #[default]
+    Eos,
+    MaxTokens,
+}
+
+/// 一次转写是否**退化**：撞顶截断，或复读折叠器动过一大刀。
+///
+/// 两个信号都是观测，不是对文本内容的猜测：`stop_reason` 来自生成循环；
+/// `raw_output ≫ text` 来自引擎自带的复读折叠器——正常 chunk 两串逐字相等、
+/// 收尾必是 EOS，所以阈值给得很宽也不会误伤：raw 至少是 text 的 4 倍、
+/// 且至少多出 128 个字符，才算「折叠器动过手」。
+///
+/// 调用方（管线）只在**带热词 context** 的调用上用它决定是否去掉 context
+/// 重试一次——不带提示的调用重试也不会有任何不同。
+pub fn degenerate_transcript(t: &Transcript) -> bool {
+    if t.stop_reason == StopReason::MaxTokens {
+        return true;
+    }
+    let raw = t.raw_output.chars().count();
+    let clean = t.text.chars().count();
+    raw.saturating_sub(clean) >= 128 && raw >= clean.saturating_mul(4)
 }
 
 /// One forced-alignment call: a prepared WAV plus the *raw* transcript to align.
@@ -187,4 +222,64 @@ pub trait EngineProvider {
     /// 热词粗转用的引擎。只有「选了热词组」的运行才会调用它——TXT-only、
     /// 没选热词组的任务在引擎生命周期里都看不到它。
     fn load_rough_asr(&self) -> Result<Box<dyn RoughAsr>, EngineError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transcript(text: &str, raw: &str, stop_reason: StopReason) -> Transcript {
+        Transcript {
+            text: text.into(),
+            raw_output: raw.into(),
+            stop_reason,
+        }
+    }
+
+    /// 正常转写：两串逐字相等、EOS 收尾——任何阈值下都不许误报。
+    #[test]
+    fn a_normal_transcript_is_not_degenerate() {
+        let t = transcript("你好世界。", "你好世界。", StopReason::Eos);
+        assert!(!degenerate_transcript(&t));
+    }
+
+    /// 撞顶是硬信号：哪怕文本看起来正常（折叠器还没动过原始输出），也判退化。
+    #[test]
+    fn hitting_the_token_ceiling_is_degenerate_on_its_own() {
+        let t = transcript(
+            "像是正常的一句话",
+            "像是正常的一句话",
+            StopReason::MaxTokens,
+        );
+        assert!(degenerate_transcript(&t));
+    }
+
+    /// 复读折叠器削掉一大块（EOS 结束但原文 ≫ 清理后）——兜底信号也要亮。
+    #[test]
+    fn a_collapsed_loop_is_degenerate_even_with_eos() {
+        let t = transcript("真正的文本", &"lower ".repeat(2000), StopReason::Eos);
+        assert!(degenerate_transcript(&t));
+    }
+
+    /// 阈值一侧：多出不到 128 个字符不判（微小折叠不算跑飞）。
+    #[test]
+    fn small_collapses_stay_below_the_threshold() {
+        let t = transcript("", &"a".repeat(120), StopReason::Eos);
+        assert!(!degenerate_transcript(&t));
+    }
+
+    /// 阈值另一侧：差距够大但比例不到 4 倍也不判。
+    #[test]
+    fn a_big_but_short_ratio_is_not_degenerate() {
+        let raw = "b".repeat(200) + &"a".repeat(200);
+        let t = transcript(&"b".repeat(200), &raw, StopReason::Eos);
+        assert!(!degenerate_transcript(&t));
+    }
+
+    /// 恰好在门槛上（4 倍整、多 384 字符）算退化：边界属于退化侧。
+    #[test]
+    fn the_threshold_itself_is_degenerate() {
+        let t = transcript(&"字".repeat(128), &"字".repeat(512), StopReason::Eos);
+        assert!(degenerate_transcript(&t));
+    }
 }

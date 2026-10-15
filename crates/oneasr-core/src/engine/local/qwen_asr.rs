@@ -5,7 +5,7 @@ use std::path::Path;
 
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
-use crate::engine::{AsrEngine, EngineError, TranscribeRequest, Transcript};
+use crate::engine::{AsrEngine, EngineError, StopReason, TranscribeRequest, Transcript};
 
 pub(super) struct QwenAsrAdapter {
     inner: AsrInference,
@@ -51,7 +51,14 @@ impl AsrEngine for QwenAsrAdapter {
         }
         self.inner
             .transcribe(path, opts)
-            .map(|report| Transcript { text: report.text })
+            .map(|report| Transcript {
+                text: report.text,
+                raw_output: report.raw_output,
+                stop_reason: match report.stop_reason {
+                    qwen3_asr_wgpu::StopReason::Eos => StopReason::Eos,
+                    qwen3_asr_wgpu::StopReason::MaxTokens => StopReason::MaxTokens,
+                },
+            })
             .map_err(|e| EngineError::new(format!("{e:#}")))
     }
 }
