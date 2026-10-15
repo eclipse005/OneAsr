@@ -51,7 +51,7 @@ impl OneAsrApp {
                 let hotword_label = t
                     .hotword_group
                     .as_deref()
-                    .and_then(|id| self.hotwords.label(id));
+                    .and_then(|id| self.hotwords.label(id, ui_lang()));
                 TaskRowView {
                     id: t.id.clone(),
                     status: t.status,

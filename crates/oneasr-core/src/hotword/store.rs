@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::count_words;
+use crate::i18n::UiLang;
 
 /// 默认热词组的保留 id（也是「用户还没起名」时显示的占位名）。
 pub const DEFAULT_HOTWORD_GROUP_ID: &str = "default";
@@ -49,13 +50,17 @@ pub struct HotwordGroup {
     pub words: String,
 }
 
-/// 提示 / 报错里显示的名字：空名退化成 id，绝不显示空白。
-pub fn display_name(group: &HotwordGroup) -> &str {
-    if group.name.trim().is_empty() {
-        &group.id
-    } else {
-        &group.name
+/// 提示 / 报错里显示的名字：起过名就用名字；没起名用**本地化占位名**
+/// （「默认」/「未命名」、`Default` / `Untitled`），绝不显示 `default` / `g1`
+/// 这类机器 id。
+///
+/// 纯格式化，显式收 `lang`：单测不读全局语言，也就不会随 CI 机器的系统语言
+/// 忽绿忽红（AGENTS.md 的规矩）。
+pub fn display_name(group: &HotwordGroup, lang: UiLang) -> String {
+    if !group.name.trim().is_empty() {
+        return group.name.clone();
     }
+    crate::i18n::hotword_group_placeholder(lang, group.id == DEFAULT_HOTWORD_GROUP_ID).to_string()
 }
 
 /// 词表里有几个词（与 [`super::parse_word_list`] 同一口径）。
@@ -314,16 +319,17 @@ impl HotwordStore {
         self.groups.iter().find(|g| g.id == id)
     }
 
-    /// 界面显示用的组名；组不存在时给一个「已删除」占位而不是空白。
-    pub fn label(&self, id: &str) -> Option<String> {
-        self.group(id).map(|g| display_name(g).to_string())
+    /// 界面显示用的组名（没起名 → 本地化占位名，见 [`display_name`]）；组不存在时
+    /// `None`。
+    pub fn label(&self, id: &str, lang: UiLang) -> Option<String> {
+        self.group(id).map(|g| display_name(g, lang))
     }
 
     /// 下拉选项：`(稳定 id, 显示名)`。名字跟着改名实时变，id 不变。
-    pub fn menu_options(&self) -> Vec<(String, String)> {
+    pub fn menu_options(&self, lang: UiLang) -> Vec<(String, String)> {
         self.groups
             .iter()
-            .map(|g| (g.id.clone(), display_name(g).to_string()))
+            .map(|g| (g.id.clone(), display_name(g, lang)))
             .collect()
     }
 
@@ -343,11 +349,13 @@ impl HotwordStore {
     /// 组还在但没词 → `Some` 且 `text` 为空，由
     /// [`crate::settings::Settings::can_start`] 当错误报出来——「选了却什么都没
     /// 发生」比直接说清楚更糟。
-    pub fn resolve_run(&self, group_id: Option<&str>) -> Option<HotwordRun> {
+    ///
+    /// `lang` 只影响 `group_name`（报错文案里要显示的名字），组 id 与词表都跟语言无关。
+    pub fn resolve_run(&self, group_id: Option<&str>, lang: UiLang) -> Option<HotwordRun> {
         let group = self.group(group_id?)?;
         Some(HotwordRun {
             group_id: group.id.clone(),
-            group_name: display_name(group).to_string(),
+            group_name: display_name(group, lang),
             text: group.words.clone(),
             top_k: self.top_k,
             threshold: self.threshold,
@@ -827,7 +835,9 @@ mod tests {
         s.set_group_words(&id, "窦神归来\n柳宗元");
         s.top_k = 7;
         s.threshold = 0.42;
-        let run = s.resolve_run(Some(&id)).expect("选中的组必须解析出参数");
+        let run = s
+            .resolve_run(Some(&id), UiLang::Zh)
+            .expect("选中的组必须解析出参数");
         assert_eq!(run.group_id, id);
         assert_eq!(run.group_name, "甲");
         assert_eq!(run.text, "窦神归来\n柳宗元");
@@ -848,7 +858,7 @@ mod tests {
         let id = s.add_group("甲");
         s.set_group_words(&id, "甲词");
         s.remove_group(&id);
-        assert_eq!(s.resolve_run(Some(&id)), None);
+        assert_eq!(s.resolve_run(Some(&id), UiLang::Zh), None);
     }
 
     /// 组还在但没词：**仍然返回 `Some`**，只是不可用——留给 `can_start` 报错。
@@ -857,11 +867,13 @@ mod tests {
     fn an_empty_group_resolves_to_an_unusable_run_not_to_none() {
         let mut s = HotwordStore::default();
         let id = s.add_group("空组");
-        let run = s.resolve_run(Some(&id)).expect("选中的组要解析出来");
+        let run = s
+            .resolve_run(Some(&id), UiLang::Zh)
+            .expect("选中的组要解析出来");
         assert!(!run.is_usable(), "空组不能被当成「可用」");
         assert_eq!(run.group_name, "空组");
         assert_eq!(run.word_count(), 0);
-        assert_eq!(s.resolve_run(None), None, "没选组才是 None");
+        assert_eq!(s.resolve_run(None, UiLang::Zh), None, "没选组才是 None");
     }
 
     // ── 改名不掉绑定 / 计数口径 ───────────────────────────────────────
@@ -907,25 +919,41 @@ mod tests {
         );
     }
 
-    /// 下拉选项保留稳定 id、显示名跟着改名变；删掉中间一组不动别人的 id。
+    /// 下拉选项保留稳定 id、显示名跟着改名变；删掉中间一组不动别人的 id；
+    /// **没起名的组显示本地化占位名，不是机器 id**。
+    ///
+    /// 断骨验证：把 [`display_name`] 的兜底改回 `group.id`，第一条断言立刻变红——
+    /// 那正是用户看到的「组名叫 default」。
     #[test]
     fn menu_options_keep_stable_ids() {
         let mut s = HotwordStore {
-            groups: vec![group("default", "甲", ""), group("g1", "", "")],
+            groups: vec![group("default", "", ""), group("g1", "", "")],
             default_group: None,
             top_k: DEFAULT_TOP_K,
             threshold: DEFAULT_THRESHOLD,
         };
         assert_eq!(
-            s.menu_options(),
+            s.menu_options(UiLang::Zh),
             vec![
-                ("default".to_string(), "甲".to_string()),
-                ("g1".to_string(), "g1".to_string()),
+                ("default".to_string(), "默认".to_string()),
+                ("g1".to_string(), "未命名".to_string()),
             ],
-            "空名退化成 id"
+            "空名给本地化占位名：保留组「默认」、用户建的组「未命名」"
         );
+        assert_eq!(
+            s.menu_options(UiLang::En),
+            vec![
+                ("default".to_string(), "Default".to_string()),
+                ("g1".to_string(), "Untitled".to_string()),
+            ],
+            "英文界面同一套占位名"
+        );
+        // 起过名就照名字走，两种语言下都一样（名字是用户内容，不翻译）。
         s.rename_group("g1", "乙");
-        assert_eq!(s.menu_options()[1], ("g1".to_string(), "乙".to_string()));
+        assert_eq!(
+            s.menu_options(UiLang::En)[1],
+            ("g1".to_string(), "乙".to_string())
+        );
     }
 
     /// 删掉**中间**一个组之后，剩下的组顺序不变、id 不变（任务绑定不会串到别的组上）。
@@ -942,9 +970,29 @@ mod tests {
             threshold: DEFAULT_THRESHOLD,
         };
         s.remove_group("g1");
-        let ids: Vec<String> = s.menu_options().into_iter().map(|(id, _)| id).collect();
+        let ids: Vec<String> = s
+            .menu_options(UiLang::Zh)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
         assert_eq!(ids, vec!["default", "g2"]);
         assert_eq!(s.groups[1].name, "丙");
+    }
+
+    /// 任务行那颗 chip 走 `label`：没起名的组同样给占位名，绝不显示 id；
+    /// 组不存在（已被删）给 `None`——那一行显示「无热词」，与 `resolve_run` 的口径一致。
+    #[test]
+    fn label_uses_the_placeholder_for_unnamed_groups() {
+        let s = HotwordStore::default();
+        assert_eq!(
+            s.label(DEFAULT_HOTWORD_GROUP_ID, UiLang::Zh).as_deref(),
+            Some("默认")
+        );
+        assert_eq!(
+            s.label(DEFAULT_HOTWORD_GROUP_ID, UiLang::En).as_deref(),
+            Some("Default")
+        );
+        assert_eq!(s.label("g9", UiLang::Zh), None, "组不存在是 None");
     }
 
     /// 指向不存在的组是空操作（界面列表可能已过期）；`None` 清空默认。

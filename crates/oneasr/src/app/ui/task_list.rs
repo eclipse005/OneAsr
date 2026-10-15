@@ -89,7 +89,7 @@ impl OneAsrApp {
         let timing_visible = self.timing_popover_visible();
         let timing_progress = self.timing_popover_progress();
         // 热词组（id, 显示名）快照：改名后名字随之变，任务绑定不变。
-        let hotword_groups = self.hotwords.menu_options();
+        let hotword_groups = self.hotwords.menu_options(ui_lang());
 
         // Row-invariant state, captured once for the whole repaint.
         let row_ctx = RowCtx {

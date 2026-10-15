@@ -235,7 +235,7 @@ impl OneAsrApp {
             .iter()
             .map(|group| {
                 let id = group.id.clone();
-                let label = oneasr_core::hotword::display_name(group).to_string();
+                let label = oneasr_core::hotword::display_name(group, ui_lang());
                 let selected = edit_id.as_deref() == Some(group.id.as_str());
                 let is_default = default_id.as_deref() == Some(group.id.as_str());
                 div()

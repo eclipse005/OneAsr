@@ -132,6 +132,27 @@ pub fn hotword_group_empty(name: &str) -> String {
     }
 }
 
+/// 保留的默认组（`id == "default"`）没起名时显示的占位名。
+pub const HOTWORD_GROUP_DEFAULT: Str = Str::new("默认", "Default");
+/// 用户新建、还没起名的组显示的占位名。
+pub const HOTWORD_GROUP_UNNAMED: Str = Str::new("未命名", "Untitled");
+
+/// 热词组没起名时的占位名（纯函数，显式收语言）。
+///
+/// **不用 `id` 兜底**：`default` / `g1` 是给任务绑定用的稳定标识，出现在 chip、
+/// 下拉和报错里，用户会以为「组名就叫 default」。
+pub fn hotword_group_placeholder(lang: UiLang, is_default: bool) -> &'static str {
+    let s = if is_default {
+        HOTWORD_GROUP_DEFAULT
+    } else {
+        HOTWORD_GROUP_UNNAMED
+    };
+    match lang {
+        UiLang::Zh => s.zh,
+        UiLang::En => s.en,
+    }
+}
+
 // ---- AsrError ----
 pub const ERR_IO: Str = Str::new("I/O 错误", "I/O error");
 pub const ERR_MEDIA: Str = Str::new("音频处理错误", "Audio processing error");
