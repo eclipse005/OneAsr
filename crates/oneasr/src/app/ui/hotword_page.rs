@@ -327,6 +327,15 @@ impl OneAsrApp {
                         cx.listener(|this, _, _, cx| this.add_hotword_group_action(cx)),
                     )),
             )
+            // 召回范围：只有中英两语的发音规则进了匹配（中文拼音、英文拼写），
+            // 其他语言只能按原文比。是**常驻灰字**、不是 tooltip——填词之前就要
+            // 看得见，否则用户拿日语词表跑完才从结果里猜出「这不支持」。
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(MUTED)
+                    .child(t(L::HOTWORD_SCOPE_HINT)),
+            )
             .child(div().flex().flex_wrap().gap_1p5().children(chips))
             // 开关行：只决定「新加入的任务默认绑哪一组」，与上面那两个动作（新建 /
             // 选中某组）不是一回事，所以单独一行、上面一条细分割线。
