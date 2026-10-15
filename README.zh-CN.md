@@ -3,6 +3,10 @@
   <p>本地 · 离线 · 批量音视频 → SRT / ASS / TXT 字幕</p>
   <p>Windows / Linux / macOS · 基于 Qwen3-ASR · 不上传云端</p>
 
+  [![GitHub stars](https://img.shields.io/github/stars/eclipse005/OneAsr?style=flat-square&logo=github&color=f59e0b)](https://github.com/eclipse005/OneAsr/stargazers) [![GitHub forks](https://img.shields.io/github/forks/eclipse005/OneAsr?style=flat-square&logo=github)](https://github.com/eclipse005/OneAsr/network/members) [![CI](https://img.shields.io/github/actions/workflow/status/eclipse005/OneAsr/ci.yml?branch=master&style=flat-square&label=ci)](https://github.com/eclipse005/OneAsr/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/eclipse005/OneAsr?style=flat-square&color=16a34a)](LICENSE)
+
+  [![Windows](https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI%2BPHBhdGggZD0iTTAsMEgxMS4zNzdWMTEuMzcySDBaTTEyLjYyMywwSDI0VjExLjM3MkgxMi42MjNaTTAsMTIuNjIzSDExLjM3N1YyNEgwWm0xMi42MjMsMEgyNFYyNEgxMi42MjMiLz48L3N2Zz4%3D)](#下载安装) [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=flat-square&logo=apple&logoColor=white)](#下载安装) [![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?style=flat-square&logo=linux&logoColor=111111)](#下载安装)
+
   [下载安装](#下载安装) · [快速上手](#快速上手) · [界面预览](#界面预览) · [CLI 命令行](#cli-命令行) · [Release](https://github.com/eclipse005/OneAsr/releases)
 
   [English](README.md) · **简体中文**
@@ -41,13 +45,13 @@
 
 ## 下载安装
 
-当前版本 **[v1.2.5](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.5)**（点文件名即下载）：
+当前版本 **[v1.3.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.3.0)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_macos.dmg) |
 
 ## 快速上手
 
@@ -80,7 +84,7 @@
 - **仅转录**：只勾 TXT、不勾 SRT / ASS 时，任务转到转写为止——一行一句、按句末标点断句；完全不需要对齐模型
 - **简繁可选**：原文 / 简体 / 繁体（仅中文、粤语生效，不影响时间轴）
 - **人声分离（可选）**：内置 HTDemucs v4，带 BGM / 噪声时先压掉背景音
-- **热词（可选）**：给任务绑一份词表——先用轻量模型转一遍、召回听到的词，再作为上下文交给识别模型；音素模糊匹配兜住这一趟听错的字，所以词表只写正确写法（热词模型要另下，约 940 MB）
+- **热词（可选）**：给任务绑一份词表——先用轻量模型转一遍、召回听到的词，再作为上下文交给识别模型；音素模糊匹配兜住这一趟听错的字，所以词表只写正确写法。仅中文与英文的转录使用热词，其他语言整趟跳过、任务行里的热词选择器会置灰（热词模型要另下，约 940 MB）
 - **GPU 加速**：NVIDIA / AMD / Intel / Mac M 芯片；无独显自动走 CPU
 
 ## 模型与体积

@@ -3,6 +3,10 @@
   <p>Local · Offline · Batch audio/video → SRT / ASS / TXT subtitles</p>
   <p>Windows / Linux / macOS · Built on Qwen3-ASR · Nothing leaves your machine</p>
 
+  [![GitHub stars](https://img.shields.io/github/stars/eclipse005/OneAsr?style=flat-square&logo=github&color=f59e0b)](https://github.com/eclipse005/OneAsr/stargazers) [![GitHub forks](https://img.shields.io/github/forks/eclipse005/OneAsr?style=flat-square&logo=github)](https://github.com/eclipse005/OneAsr/network/members) [![CI](https://img.shields.io/github/actions/workflow/status/eclipse005/OneAsr/ci.yml?branch=master&style=flat-square&label=ci)](https://github.com/eclipse005/OneAsr/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/eclipse005/OneAsr?style=flat-square&color=16a34a)](LICENSE)
+
+  [![Windows](https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI%2BPHBhdGggZD0iTTAsMEgxMS4zNzdWMTEuMzcySDBaTTEyLjYyMywwSDI0VjExLjM3MkgxMi42MjNaTTAsMTIuNjIzSDExLjM3N1YyNEgwWm0xMi42MjMsMEgyNFYyNEgxMi42MjMiLz48L3N2Zz4%3D)](#download) [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?style=flat-square&logo=apple&logoColor=white)](#download) [![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?style=flat-square&logo=linux&logoColor=111111)](#download)
+
   [Download](#download) · [Quick start](#quick-start) · [Screenshots](#screenshots) · [CLI](#cli) · [Release](https://github.com/eclipse005/OneAsr/releases)
 
   **English** · [简体中文](README.zh-CN.md)
@@ -41,13 +45,13 @@
 
 ## Download
 
-Current version **[v1.2.5](https://github.com/eclipse005/OneAsr/releases/tag/v1.2.5)** (click a file name to download):
+Current version **[v1.3.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.3.0)** (click a file name to download):
 
 | Platform | Download |
 |------|------|
-| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_windows_portable.zip) |
-| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_linux_x64.tar.gz) |
-| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.2.5/OneAsr_1.2.5_macos.dmg) |
+| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_portable.zip) |
+| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.tar.gz) |
+| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_macos.dmg) |
 
 ## Quick start
 
@@ -80,7 +84,7 @@ Main window (empty state) and the task list + settings drawer (same window size,
 - **Transcribe only**: tick TXT alone (no SRT / ASS) and the task stops at transcription — one sentence per line, cut on sentence punctuation; an aligner model is not needed at all
 - **Chinese script choice**: original / Simplified / Traditional (Chinese & Cantonese only; timing is unaffected)
 - **Vocal separation (optional)**: built-in HTDemucs v4 strips BGM / noise before transcribing
-- **Hotwords (optional)**: bind a word list to a task — a lightweight model runs a first pass, recalls the entries it hears, and feeds them to the ASR model as context; phonetic matching covers what that first pass mishears, so a word only needs its correct spelling (the hotword model is a separate ~940 MB download)
+- **Hotwords (optional)**: bind a word list to a task — a lightweight model runs a first pass, recalls the entries it hears, and feeds them to the ASR model as context; phonetic matching covers what that first pass mishears, so a word only needs its correct spelling. Chinese and English transcription only — other languages skip the hotword pass and their rows show the picker grayed out (the hotword model is a separate ~940 MB download)
 - **GPU acceleration**: NVIDIA / AMD / Intel / Apple Silicon; falls back to CPU automatically when no discrete GPU is present
 
 ## Models & sizes
