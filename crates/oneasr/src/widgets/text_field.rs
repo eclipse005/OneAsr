@@ -1163,13 +1163,23 @@ impl EntityInputHandler for TextField {
 
 // ── 纯函数（可单测）────────────────────────────────────────────────────
 
+/// 可以在**其后**断行的字符：空格与逗号（中英文）。
+///
+/// 为什么不只认空格：热词表是**逗号分隔**的一长串，逗号后面常常没有空格。只认空格
+/// 的话，`API,JSON,HTTP,Base64` 整段是一个不可断的「词」，装不下就整段
+/// 推到下一行，行尾留下一大片空白（用户看到的「很多空白」就是这个）。逗号后也有
+/// 断点之后，行才填得满，而拉丁词照样不会被从中间劈开。
+fn breakable_after(ch: char) -> bool {
+    matches!(ch, ' ' | ',' | '，')
+}
+
 /// 折行：把文本切成若干视觉行，返回每行的字节区间。
 ///
 /// - `\n` 是硬换行（该字符本身不属于任何一行）；
-/// - 其余按 `advance` 给的字符宽度贪心装箱，**优先在空格后断**：拉丁词不该从中间
-///   劈开（`Machine Translation` 断成 `Machine ` / `Translation`，而不是 `Machine Translatio` / `n`），
-///   断点前那截空格留在上一行；
-/// - 一行里没有空格可断（CJK 常态，或一个超长单词）时退回按字符断；
+/// - 其余按 `advance` 给的字符宽度贪心装箱，在 [`breakable_after`] 给出的断点里取
+///   **最靠右**的那个（空格 / 逗号留在上一行行尾）：`Machine Translation` 断成 `Machine ` /
+///   `Translation`，`API,JSON,HTTP` 断成 `API,JSON,` / `HTTP`；
+/// - 一行里没有可断点（纯 CJK、或一个超长单词）时退回按字符断；
 /// - 单个字符本身就超宽时仍然独占一行（否则会死循环）。
 ///
 /// 纯函数：宽度由调用方以 `advance` 注入，所以折行规则可以脱离 GPUI 单测。
@@ -1181,7 +1191,7 @@ fn wrap_rows_with(
     let mut rows = Vec::new();
     let mut start = 0usize;
     let mut width = 0.0f32;
-    // 最近一次「可以在其后断行」的位置：`(行内断点后偏移, 断点前的累计宽度)`。
+    // 最近一次「可以在其后断行」的位置：`(断点后的偏移, 断点前的累计宽度)`。
     let mut break_after: Option<(usize, f32)> = None;
 
     for (i, ch) in text.char_indices() {
@@ -1195,7 +1205,7 @@ fn wrap_rows_with(
         let w = advance(ch);
         if i > start && width + w > max_w {
             match break_after.filter(|(at, _)| *at > start) {
-                // 在有空格的那一处断：上一行到断点为止，宽度减去断点前的部分。
+                // 在最靠右的断点处断：上一行到断点为止，宽度减去断点前的部分。
                 Some((at, w_at)) => {
                     rows.push(start..at);
                     start = at;
@@ -1211,8 +1221,8 @@ fn wrap_rows_with(
             break_after = None;
         }
         width += w;
-        if ch == ' ' {
-            // 断在空格**之后**：空格留在上一行行尾，下一行不从空格开头。
+        if breakable_after(ch) {
+            // 断在断点字符**之后**：空格 / 逗号留在上一行行尾。
             break_after = Some((i + ch.len_utf8(), width));
         }
     }
@@ -1350,15 +1360,28 @@ mod tests {
         assert_eq!(wrap("一句话很长很长", f32::INFINITY), vec![0..21]);
     }
 
-    /// 拉丁词不从中间劈开：优先在空格后断（断点前的空格留在上一行）。
+    /// 折行在词边界处断：空格与逗号都算边界，行才填得满且不从词中间劈开。
+    ///
+    /// 断骨验证：把 [`breakable_after`] 里的逗号去掉（只认空格），最后两条断言
+    /// 立刻变红——那正是「逗号串行尾一大片空白」的形状（`API,JSON,...` 整段
+    /// 被当成一个不可断的词推到了下一行）。
     #[test]
-    fn wrap_prefers_breaking_at_a_space() {
+    fn wrap_breaks_at_word_boundaries() {
         // 每字符宽 1、行宽 5："ab cd ef" → "ab " + "cd ef"
         assert_eq!(wrap("ab cd ef", 5.0), vec![0..3, 3..8]);
         // 一个词自己就超宽时仍退回按字符断（不硬撑成一行）
         assert_eq!(wrap("abcdefgh", 3.0), vec![0..3, 3..6, 6..8]);
         // 空格太靠前也不留超宽行：断点之后的部分照样重新装箱
         assert_eq!(wrap("a bbbbbbbb", 4.0), vec![0..2, 2..6, 6..10]);
+        // 逗号后没有空格时，逗号就是断点（热词表的常态）：不整段推走、也不劈词
+        assert_eq!(wrap("aa,bb,cc,dd", 5.0), vec![0..3, 3..6, 6..11]);
+        assert_eq!(
+            wrap("API,JSON,HTTP,Workflows", 12.0),
+            vec![0..9, 9..14, 14..23],
+            "API,JSON, / HTTP, / Workflows"
+        );
+        // 中文全角逗号同样是断点（按字节给区间）
+        assert_eq!(wrap("甲乙,丙丁,戊己", 7.0), vec![0..14, 14..20]);
     }
 
     // ── 撤销历史（纯状态，可单测） ──────────────────────────────────────
