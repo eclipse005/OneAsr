@@ -43,11 +43,11 @@ Current version **[v1.3.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.
 
 ## Screenshots
 
-Main window (empty state) and the task list + settings drawer (same window size, side by side):
+The main window and the settings drawer (same window size, side by side):
 
-| Main window (empty state) | Tasks & settings |
+| Main window (empty state) | Settings drawer |
 |---|---|
-| <img src="docs/images/main.png" width="420" alt="Main window, empty state" /> | <img src="docs/images/tasks-settings.png" width="420" alt="Task list and settings drawer" /> |
+| <img src="docs/images/main.png" width="420" alt="Main window, empty state" /> | <img src="docs/images/settings.png" width="420" alt="Settings drawer" /> |
 
 ## Features
 

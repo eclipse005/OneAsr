@@ -43,11 +43,11 @@
 
 ## 界面预览
 
-主界面空态与任务列表 + 设置抽屉（并排同一尺寸）：
+主界面与设置抽屉（并排同一尺寸）：
 
-| 主界面（空态） | 任务列表与设置 |
+| 主界面（空态） | 设置抽屉 |
 |---|---|
-| <img src="docs/images/main.png" width="420" alt="主界面空态" /> | <img src="docs/images/tasks-settings.png" width="420" alt="任务列表与设置抽屉" /> |
+| <img src="docs/images/main.png" width="420" alt="主界面空态" /> | <img src="docs/images/settings.png" width="420" alt="设置抽屉" /> |
 
 ## 功能
 
