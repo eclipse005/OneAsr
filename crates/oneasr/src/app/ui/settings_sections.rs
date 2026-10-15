@@ -27,7 +27,11 @@ pub(super) fn setting_title(id: &'static str, label: &str, tip: &'static str) ->
 ///
 /// 内边距比「刚好装下」再松一档：一屏塞十张各自贴着边的卡会读成一堵墙。卡与卡之间
 /// 由抽屉的 `gap_3` 分开，卡内则给内容呼吸。
-pub(super) fn settings_section(body: AnyElement) -> impl IntoElement + use<> {
+///
+/// 返回具体类型（`Div`）而不是 `impl IntoElement`：调用方要能接着挂布局修饰符——
+/// 热词页那张「组 + 编辑器」的卡就是 `flex_1()` 吃掉抽屉剩下的高度，里面的词表框
+/// 才跟着长满（见 `Rows::fill`）。
+pub(super) fn settings_section(body: AnyElement) -> gpui::Div {
     div()
         .flex()
         .flex_col()

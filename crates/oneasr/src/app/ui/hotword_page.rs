@@ -59,9 +59,10 @@ impl OneAsrApp {
                 "",
                 t(L::HOTWORD_WORDS_PLACEHOLDER),
                 FieldKind::List,
-                // 3 行起、12 行封顶（≈250px）：够看清一段词表，又不把抽屉挤成
-                // 两屏；更长的词表在框内滚（光标跟随 / 滚轮），不再把框拉成一千行。
-                Rows::up_to(3, 12),
+                // 3 行起、**填满抽屉剩下的高度**：最大化窗口时框跟着长满，57 条的
+                // 词表一屏就看得完，而不是在框下面留一大片空白（用户报的那点）。
+                // 窗口小的时候退化成 3 行 + 框内滚动。
+                Rows::fill(3),
                 move |text, cx| {
                     if let Some(app) = app.upgrade() {
                         let text = text.to_string();
@@ -286,6 +287,8 @@ impl OneAsrApp {
             .flex()
             .flex_col()
             .gap_2()
+            // 不参与收缩：空间不够时该缩的是下面的词表框，不是组名与 chip。
+            .flex_shrink_0()
             .child(
                 div()
                     .flex()
@@ -316,12 +319,19 @@ impl OneAsrApp {
                 .flex()
                 .flex_col()
                 .gap_2()
+                // 编辑器列本身吃掉剩下高度，好让里面的词表框（`Rows::fill`）长起来。
+                //
+                // 这里**不**写 `min_h_0`：自动最小高度（内容高度）才是对的——窗口矮
+                // 到装不下时，该由抽屉整体滚动，而不是让内容从卡片里溢出来。
+                .flex_1()
                 .child(match name_field {
-                    Some(field) => div().child(field).into_any_element(),
+                    Some(field) => div().flex_shrink_0().child(field).into_any_element(),
                     None => div().into_any_element(),
                 })
                 .child(match words_field {
-                    Some(field) => div().child(field).into_any_element(),
+                    // 词表框是这一页唯一「可以长」的东西：给它一层能长高的父容器，
+                    // 框自己（`Rows::fill`）就会把抽屉里剩下的高度吃满。
+                    Some(field) => div().flex().flex_1().child(field).into_any_element(),
                     None => div().into_any_element(),
                 })
                 // 词条计数贴着词表框的右下角走，而不是和两个动作按钮并排：
@@ -329,6 +339,7 @@ impl OneAsrApp {
                 // 会让人以为计数也是可点的。
                 .child(
                     div()
+                        .flex_shrink_0()
                         .text_xs()
                         .text_color(MUTED_SOFT)
                         .child(crate::i18n::hotword_word_count(word_count)),
@@ -336,6 +347,7 @@ impl OneAsrApp {
                 .child(
                     div()
                         .flex()
+                        .flex_shrink_0()
                         .items_center()
                         .justify_between()
                         .child(pill(
@@ -371,6 +383,9 @@ impl OneAsrApp {
 
         // 这一页只有**两张**卡：粗转模型（一张独立的事），以及「组 + 编辑器」
         // （一个整体）。原先拆成三张，每张都自带一圈描边和内边距，读起来碎。
+        //
+        // 第二张 `flex_1`：**吃掉抽屉里剩下的高度**。最大化窗口时，一张固定高度的
+        // 卡下面会留一大片空白——那空间该给词表框（`Rows::fill`），而不是空着。
         vec![
             settings_section(model_body).into_any_element(),
             settings_section(
@@ -378,10 +393,12 @@ impl OneAsrApp {
                     .flex()
                     .flex_col()
                     .gap_3()
+                    .flex_1()
                     .child(groups_body)
                     .child(editor_body)
                     .into_any_element(),
             )
+            .flex_1()
             .into_any_element(),
         ]
     }

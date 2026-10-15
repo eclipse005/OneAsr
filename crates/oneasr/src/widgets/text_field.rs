@@ -8,12 +8,17 @@
 //! `replace_and_mark_text_in_range`），所以 `on_key_down` 只处理非文字键
 //! （退格 / 方向 / Home/End / Enter / Ctrl 组合）。两条路都插一遍就会双写。
 //!
-//! # 高度与滚动
+//! # 高度
 //!
-//! 内容短于 `min_rows` 时框至少那么高，长于 `max_rows` 时**封顶**：
+//! 两种意图，由 [`Rows`] 表达：`Rows::SINGLE`（单行）与 `Rows::fill(min)`（吃掉父
+//! 容器给的高度、至少 `min` 行——编辑器该用掉窗口里剩下的空间，最大化之后在一小块
+//! 框下面留一大片空白才是浪费）。
 //!
-//! - 只整形**可见窗**内的行（`[first_row, first_row + 可见行数)`）：一千条词的词表
-//!   每帧也只 shape 十来行。不封顶地「按内容长高」会让每敲一个字都重新 layout 全文；
+//! 不管哪种意图，规则都一样：
+//!
+//! - 只整形**可见窗**内的行（`[first_row, first_row + 可见行数)`），而可见行数由
+//!   **真实高度**算（[`rows_that_fit`]，不足一行的余量不算）——长词表每帧也只 shape
+//!   十来行；
 //! - 容器 `overflow_hidden`：字形、光标、选区都不可能画到框外；
 //! - 可见窗跟着**光标**走（`top_row` / `scroll_x_for` 是纯函数），敲字、方向键、
 //!   程序化换文都不会把光标留在看不见的地方；
@@ -160,30 +165,38 @@ struct Geometry {
 /// 单行框横向滚动时，光标右侧至少留出的余量。
 const CARET_MARGIN: f32 = 4.0;
 
-/// 输入框的高度约束（行数）：内容少时至少 `min` 行，多时最多 `max` 行。
+/// 输入框的高度约束。只有两种意图，而且必须一起表达清楚，所以收成一个值：
 ///
-/// 收成一个值而不是两个松散的 `usize`，是因为这两条边**必须一起传**：只给最小值
-/// 就成了「无限长高」（一千条词的词表每帧都要 layout 全文），只给最大值又没了
-/// 空框的呼吸。调用方只该表达「这个框最多长到几行」。
+/// - [`Rows::SINGLE`]：单行（不换行）；
+/// - [`Rows::fill`]：**吃掉父容器给的高度**（至少 `min` 行）。
+///
+/// 没有第三种「随内容长高」：那等于让字段自己决定高度，父容器永远说不准该给多少，
+/// 而正文区本来就该由布局决定大小（编辑器长满剩下的空间，真正的长内容在框内滚动）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rows {
     min: usize,
-    max: usize,
+    /// 是否吃掉父容器给的高度（而不是固定 `min` 行）。
+    fill: bool,
 }
 
 impl Rows {
     /// 单行框（不换行，也不滚动）。
-    pub const SINGLE: Self = Self { min: 1, max: 1 };
+    pub const SINGLE: Self = Self {
+        min: 1,
+        fill: false,
+    };
 
-    /// 随内容长高，到 `max` 行封顶（超出部分框内滚动）。
-    pub const fn up_to(min: usize, max: usize) -> Self {
-        Self { min, max }
+    /// **填满父容器**给的高度，至少 `min` 行。
+    ///
+    /// 编辑器该用掉窗口里剩下的空间：最大化之后，一块固定行数的框下面留一大片空白
+    /// 才是真的浪费。父容器没给高度时（放在自适应布局里）退化成「`min` 行 + 框内滚动」。
+    pub const fn fill(min: usize) -> Self {
+        Self { min, fill: true }
     }
 
-    /// 归一化后的 `(最少行数, 最多行数)`：都至少 1，且 `max >= min`。
-    fn bounds(self) -> (usize, usize) {
-        let min = self.min.max(1);
-        (min, self.max.max(min))
+    /// 归一化后：`(最少行数, 是否填充)`——行数至少 1。
+    fn bounds(self) -> (usize, bool) {
+        (self.min.max(1), self.fill)
     }
 }
 
@@ -200,10 +213,10 @@ pub struct TextField {
     marked: Option<(usize, usize)>,
     placeholder: SharedString,
     kind: FieldKind,
-    /// 最少显示行数（内容更多时自动长高，到 `max_rows` 封顶）。
+    /// 最少显示行数（`Rows::fill` 下是底部兜底：父容器再矮也不低于它）。
     min_rows: usize,
-    /// 最多显示行数（超出的部分靠内部滚动看）。`Single` 恒为 1。
-    max_rows: usize,
+    /// 是否吃掉父容器给的高度（`Rows::fill`）。
+    fill: bool,
     /// 顶行（滚轮翻页用）。真正的可见窗每帧由 `top_row` 从它和光标一起推出来，
     /// paint 再把夹取后的结果写回来——所以滚轮下一次是从「这一帧真的在哪」继续，
     /// 而不是从一个过期的意图继续。
@@ -229,7 +242,7 @@ impl TextField {
         on_change: impl Fn(&str, &mut App) + 'static,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (min_rows, max_rows) = rows.bounds();
+        let (min_rows, fill) = rows.bounds();
         Self {
             id: id.into(),
             focus_handle: cx.focus_handle(),
@@ -240,7 +253,7 @@ impl TextField {
             placeholder: placeholder.into(),
             kind,
             min_rows,
-            max_rows,
+            fill,
             scroll_row: Rc::new(Cell::new(0)),
             history: EditHistory::default(),
             dragging: false,
@@ -612,11 +625,12 @@ impl TextField {
 
     fn render_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = self.kind;
+        let fill = self.fill;
+        let min_rows = self.min_rows;
         let placeholder = self.placeholder.clone();
         let empty = self.text.is_empty();
         let geometry = self.geometry.clone();
         let scroll_row = self.scroll_row.clone();
-        let max_rows = self.max_rows;
         let weak = cx.entity().downgrade();
         let focus_handle = self.focus_handle.clone();
         let (font_size, line_height) = field_metrics(window);
@@ -624,19 +638,11 @@ impl TextField {
         let cursor = self.cursor;
         let anchor = self.anchor;
         let marked = self.marked;
-        // 高度取**上一帧**数出来的可见行数（内容变长时下一帧才长高，见 paint_field
-        // 里那一句 request_animation_frame）；首帧还没有几何，用最少行数兜底。
-        // 可见行数已被 `max_rows` 封顶，所以长词表也不会把框拉长。
-        let rows_now = self
-            .geometry
-            .borrow()
-            .as_ref()
-            .map(|g| g.lines.len())
-            .unwrap_or(0)
-            .max(self.min_rows);
-        let content_h = px(f32::from(line_height) * rows_now as f32);
+        // 非填充模式的高度：固定 `min_rows` 行（单行框就是 1 行）。填充模式不用算
+        // 高度——父容器给多少就是多少，画布 `h_full()` 跟着长满。
+        let content_h = px(f32::from(line_height) * min_rows as f32);
 
-        div()
+        let container = div()
             .id(self.id.clone())
             .w_full()
             .min_w_0()
@@ -674,35 +680,48 @@ impl TextField {
             .on_key_down(cx.listener(|this, ev, window, cx| this.handle_key(ev, window, cx)))
             .on_scroll_wheel(
                 cx.listener(|this, ev, window, cx| this.scroll_by_wheel(ev, window, cx)),
-            )
-            .child(
-                canvas::<()>(
-                    |_bounds, _window, _cx| {},
-                    move |bounds, _, window, cx| {
-                        paint_field(
-                            bounds,
-                            font_size,
-                            line_height,
-                            kind,
-                            max_rows,
-                            &text,
-                            cursor,
-                            anchor,
-                            marked,
-                            empty,
-                            &placeholder,
-                            &geometry,
-                            &scroll_row,
-                            &focus_handle,
-                            &weak,
-                            window,
-                            cx,
-                        );
-                    },
-                )
-                .w_full()
-                .h(content_h),
-            )
+            );
+
+        // 填充模式：高度由父容器给（`flex_1` + 至少 `min_rows` 行的 `min_h`），画布
+        // 跟着长满；其余模式按内容长高（用上一帧数出来的行数）。
+        let container = if fill {
+            container
+                .flex_1()
+                .min_h(px(f32::from(line_height) * min_rows as f32))
+        } else {
+            container
+        };
+        let canvas = canvas::<()>(
+            |_bounds, _window, _cx| {},
+            move |bounds, _, window, cx| {
+                paint_field(
+                    bounds,
+                    font_size,
+                    line_height,
+                    kind,
+                    &text,
+                    cursor,
+                    anchor,
+                    marked,
+                    empty,
+                    &placeholder,
+                    &geometry,
+                    &scroll_row,
+                    &focus_handle,
+                    &weak,
+                    window,
+                    cx,
+                );
+            },
+        )
+        .w_full();
+        let canvas = if fill {
+            canvas.h_full()
+        } else {
+            canvas.h(content_h)
+        };
+
+        container.child(canvas)
     }
 }
 
@@ -726,7 +745,6 @@ fn paint_field(
     font_size: Pixels,
     line_height: Pixels,
     kind: FieldKind,
-    max_rows: usize,
     text: &str,
     cursor: usize,
     anchor: Option<usize>,
@@ -771,19 +789,17 @@ fn paint_field(
     // 折行只产出字节区间，不 shape：**整段**行表很便宜，整形只做可见窗（见下）。
     let line_starts: Vec<usize> = rows.iter().map(|row| row.start).collect();
     let total_rows = rows.len();
-    // 可见行数：内容短就按内容，长过 `max_rows` 就封顶——框的高度（render_input
-    // 里那个 content_h）用的也是它，两处必须同源。
-    let visible_rows = total_rows.min(max_rows);
+    // 可见行数取「内容行数」与「这个高度放得下几行」的较小者：
+    // - 固定高度（单行框）：高度就是那一行，放得下几行就画几行；
+    // - 填充模式：高度是父容器给的，能画多少画多少，不足一行的余量不算。
+    let visible_rows = total_rows.min(rows_that_fit(bounds.size.height, line_height));
 
     // 可见窗的顶行：光标动过（打字 / 方向键 / 点选 / 换文）就跟着光标走；只有滚轮
     // 动过就保持用户翻到的位置。判据是「上一帧画的光标和这一帧一样吗」——
     // 见 `top_row`。
-    let (prev_cursor, prev_rows) = {
+    let prev_cursor = {
         let g = geometry.borrow();
-        match g.as_ref() {
-            Some(g) => (Some(g.cursor), Some(g.lines.len())),
-            None => (None, None),
-        }
+        g.as_ref().map(|g| g.cursor)
     };
     let cursor_row = row_of(&line_starts, cursor);
     let follow_caret = prev_cursor != Some(cursor);
@@ -887,15 +903,11 @@ fn paint_field(
 
     // 几何只在这里刷新，供鼠标命中 / IME 光标定位（下一帧的输入事件用），并让
     // 滚轮下回从「这一帧真的在哪」继续。本帧已经把要用的都取在前面了。
-    let painted_rows = geom.lines.len();
+    //
+    // 这里**不需要**再请求一帧：高度不再由量出来的行数反推（固定高度由 `Rows` 定、
+    // 填充高度由父容器定），所以「画出来多少行」不会影响下一帧的布局。
     *geometry.borrow_mut() = Some(geom);
     scroll_row.set(first_row);
-
-    // 行数变了 → 需要一帧把高度改过来（高度取的是上一帧数出来的行数）。
-    // 只在真的变了才请求：否则会变成每帧自转的动画。
-    if prev_rows != Some(painted_rows) {
-        window.request_animation_frame();
-    }
 }
 
 /// 光标点（窗口坐标）。
@@ -970,6 +982,18 @@ fn max_top_row(total_rows: usize, height_rows: usize) -> usize {
 fn scroll_x_for(caret_x: f32, line_w: f32, viewport_w: f32, margin: f32) -> f32 {
     let overflow = (line_w - viewport_w).max(0.0);
     (caret_x + margin - viewport_w).max(0.0).min(overflow)
+}
+
+/// 给定高度能放下几行（不足一行的余量不算，至少 1）。
+///
+/// 这是「填满父容器」模式下的可见行数来源：高度是别人给的，能画几行就得算几行——
+/// 按行数反推高度在那一侧是不成立的。
+fn rows_that_fit(height: Pixels, line_height: Pixels) -> usize {
+    if line_height <= px(0.) {
+        return 1;
+    }
+    let rows = (f32::from(height.max(px(0.))) / f32::from(line_height)).floor();
+    (rows.max(1.0)) as usize
 }
 
 /// 可见窗内、与选区相交的每一行各画一段底色。
@@ -1477,7 +1501,24 @@ mod tests {
         assert_eq!(steps, UNDO_LIMIT, "撤销步数应当被 UNDO_LIMIT 封顶");
     }
 
-    // ── 可见窗（高度封顶 + 内部滚动）的纯函数 ────────────────────────────
+    // ── 高度与可见窗的纯函数 ────────────────────────────────────────────
+
+    /// 高度约束的归一化：行数至少 1，填充意图原样保留。
+    #[test]
+    fn rows_bounds_normalizes_and_keeps_fill() {
+        assert_eq!(Rows::SINGLE.bounds(), (1, false));
+        assert_eq!(Rows::fill(0).bounds(), (1, true), "0 行要抬到 1");
+        assert_eq!(Rows::fill(3).bounds(), (3, true));
+    }
+
+    /// 「这个高度能画几行」：不足一行的余量不算，放不满一行也至少画一行。
+    #[test]
+    fn rows_that_fit_floors_partial_rows() {
+        assert_eq!(rows_that_fit(px(100.), px(20.)), 5);
+        assert_eq!(rows_that_fit(px(109.), px(20.)), 5, "余量不足一行不算");
+        assert_eq!(rows_that_fit(px(10.), px(20.)), 1, "放不满一行也得画一行");
+        assert_eq!(rows_that_fit(px(0.), px(20.)), 1);
+    }
 
     /// 字节 → 行号：`byte == len` 落在末行（含末尾换行留下的那个空行）。
     #[test]
