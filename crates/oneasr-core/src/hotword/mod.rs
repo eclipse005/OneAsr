@@ -31,8 +31,8 @@ pub mod phrases;
 pub mod store;
 
 pub use store::{
-    DEFAULT_HOTWORD_GROUP_ID, DEFAULT_THRESHOLD, DEFAULT_TOP_K, HotwordGroup, HotwordLoadReport,
-    HotwordRun, HotwordStore, count_group_words, display_name,
+    DEFAULT_HOTWORD_GROUP_ID, DEFAULT_THRESHOLD, DEFAULT_TOP_K, GroupLookup, HotwordGroup,
+    HotwordLoadReport, HotwordRun, HotwordStore, count_group_words, display_name,
 };
 
 use fast_rag::FastRag;

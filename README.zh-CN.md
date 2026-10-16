@@ -90,7 +90,7 @@
 oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --output "out.srt"
 ```
 
-`align` 挂文稿（`--text 文稿.txt`）打轴、不跑识别；`render` 从落盘的 `timeline.json` 免加载模型重渲染其它预设。`--txt` 额外出 txt、`--script original|simplified|traditional` 切中文字形、`--vocal-separation` 先做人声分离。`--help` 看完整参数。
+`align` 挂文稿（`--text 文稿.txt`）打轴、不跑识别；`render` 从落盘的 `timeline.json` 免加载模型重渲染其它预设。`--txt` 额外出 txt、`--script original|simplified|traditional` 切中文字形、`--vocal-separation` 先做人声分离、`--hotword-group <组名>` 用保存的热词组、`--hotwords <词表>` 直接给词表（仅中文 / 英文任务）。`--help` 看完整参数。
 
 ## 配置要求
 

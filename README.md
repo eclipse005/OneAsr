@@ -90,7 +90,7 @@ The installer ships `oneasr-cli` (same pipeline as the GUI). Download the models
 oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --output "out.srt"
 ```
 
-`align` attaches a transcript (`--text script.txt`) and stamps it with timestamps without recognition; `render` re-renders a saved `timeline.json` into another preset without loading any models. `--txt` also writes a text transcript, `--script original|simplified|traditional` switches the Chinese glyph set, `--vocal-separation` separates vocals first. See `--help` for all options.
+`align` attaches a transcript (`--text script.txt`) and stamps it with timestamps without recognition; `render` re-renders a saved `timeline.json` into another preset without loading any models. `--txt` also writes a text transcript, `--script original|simplified|traditional` switches the Chinese glyph set, `--vocal-separation` separates vocals first, `--hotword-group <name>` uses a saved hotword group and `--hotwords <list>` takes an inline list (Chinese / English tasks). See `--help` for all options.
 
 ## Requirements
 

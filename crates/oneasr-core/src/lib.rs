@@ -38,7 +38,7 @@ pub use engine::{
     AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider, SeparateRequest,
     SeparationEvent, Separator, TranscribeRequest, Transcript,
 };
-pub use hotword::{DEFAULT_HOTWORD_GROUP_ID, HotwordGroup, HotwordRun, HotwordStore};
+pub use hotword::{DEFAULT_HOTWORD_GROUP_ID, GroupLookup, HotwordGroup, HotwordRun, HotwordStore};
 pub use lang::{
     SOURCE_LANGUAGES, SourceLanguage, normalize_source_language, source_language_by_id,
 };

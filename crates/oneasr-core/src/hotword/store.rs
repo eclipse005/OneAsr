@@ -171,6 +171,20 @@ impl HotwordGroup {
     }
 }
 
+/// [`HotwordStore::group_by_id_or_name`] 的结果。
+///
+/// 重名单独成一态而不是「取第一个」：组名是用户可重复起的内容，`find` 命中
+/// 第一个意味着「编辑 A 却跑的是 B」——宁可让调用方（CLI）报出来，也不猜。
+#[derive(Debug, PartialEq, Eq)]
+pub enum GroupLookup<'a> {
+    /// 唯一命中。
+    Found(&'a HotwordGroup),
+    /// 多个组都能命中：给它们的 id，让调用方报「用 id 指明哪一个」。
+    Ambiguous(Vec<&'a str>),
+    /// 没有任何组命中。
+    NotFound,
+}
+
 impl HotwordStore {
     // ── 落点 ──────────────────────────────────────────────────────────
 
@@ -343,6 +357,60 @@ impl HotwordStore {
 
     pub fn group(&self, id: &str) -> Option<&HotwordGroup> {
         self.groups.iter().find(|g| g.id == id)
+    }
+
+    /// 按 `id` 或组名找一组（CLI `--hotword-group` 的查找规则）。
+    ///
+    /// 顺序（先命中一层就不再往下走）：
+    /// 1. **精确 id**——稳定标识优先；id 由 [`Self::normalize`] 保证不重复；
+    /// 2. **精确组名**（两侧 trim）——用户记住的是 chip 上的名字；
+    /// 3. **忽略大小写**（id 或组名都试）——`glossary` 与 `Glossary` 是同一组的两种写法。
+    ///
+    /// 只认 id 与**存下来的**组名：占位名（「默认」/「未命名」）是显示层的，
+    /// 不在这里匹配——报错时调用方会用 [`Self::menu_options`] 把 id 和显示名
+    /// 一并列出来，用户照着改就行，不需要猜占位名也能拼。
+    pub fn group_by_id_or_name(&self, query: &str) -> GroupLookup<'_> {
+        let q = query.trim();
+        if q.is_empty() {
+            return GroupLookup::NotFound;
+        }
+        if let Some(g) = self.group(q) {
+            return GroupLookup::Found(g);
+        }
+        let named = |exact: bool| -> Vec<&HotwordGroup> {
+            self.groups
+                .iter()
+                .filter(|g| {
+                    let name = g.name.trim();
+                    !name.is_empty()
+                        && if exact {
+                            name == q
+                        } else {
+                            name.eq_ignore_ascii_case(q)
+                        }
+                })
+                .collect()
+        };
+        let by_name = named(true);
+        if !by_name.is_empty() {
+            return match by_name.as_slice() {
+                [g] => GroupLookup::Found(g),
+                many => GroupLookup::Ambiguous(many.iter().map(|g| g.id.as_str()).collect()),
+            };
+        }
+        let loose: Vec<&HotwordGroup> = self
+            .groups
+            .iter()
+            .filter(|g| {
+                g.id.eq_ignore_ascii_case(q)
+                    || (!g.name.trim().is_empty() && g.name.trim().eq_ignore_ascii_case(q))
+            })
+            .collect();
+        match loose.as_slice() {
+            [] => GroupLookup::NotFound,
+            [g] => GroupLookup::Found(g),
+            many => GroupLookup::Ambiguous(many.iter().map(|g| g.id.as_str()).collect()),
+        }
     }
 
     /// 界面显示用的组名（没起名 → 本地化占位名，见 [`display_name`]）；组不存在时
@@ -932,6 +1000,103 @@ mod tests {
         assert_eq!(run.group_name, "空组");
         assert_eq!(run.word_count(), 0);
         assert_eq!(s.resolve_run(None, UiLang::Zh), None, "没选组才是 None");
+    }
+
+    // ── 按 id / 组名查找（CLI `--hotword-group`）────────────────────────
+
+    /// 精确 id 直接命中；查询两侧的空白不参与比较。
+    #[test]
+    fn lookup_finds_a_group_by_exact_id() {
+        let s = HotwordStore {
+            groups: vec![
+                group(DEFAULT_HOTWORD_GROUP_ID, "", ""),
+                group("terms", "术语表", "甲词"),
+            ],
+            ..HotwordStore::default()
+        };
+        assert_eq!(
+            s.group_by_id_or_name("terms"),
+            GroupLookup::Found(&s.groups[1])
+        );
+        assert_eq!(
+            s.group_by_id_or_name("  terms  "),
+            GroupLookup::Found(&s.groups[1]),
+            "查询两侧空白该被 trim"
+        );
+    }
+
+    /// 组名命中；大小写不敏感兜底让 `Glossary` / `glossary` / `GLOSSARY` 都找得到同一组。
+    ///
+    /// 断骨验证：把 `group_by_id_or_name` 里忽略大小写那一层删掉，
+    /// `"glossary"` 一条立刻变红。
+    #[test]
+    fn lookup_falls_back_to_case_insensitive_name() {
+        let s = HotwordStore {
+            groups: vec![
+                group(DEFAULT_HOTWORD_GROUP_ID, "", ""),
+                group("g1", "Glossary", "alpha"),
+            ],
+            ..HotwordStore::default()
+        };
+        for query in ["Glossary", "glossary", "GLOSSARY"] {
+            assert_eq!(
+                s.group_by_id_or_name(query),
+                GroupLookup::Found(&s.groups[1]),
+                "query={query}"
+            );
+        }
+    }
+
+    /// 重名：不替用户挑，把候选 id 全交出去。
+    ///
+    /// 断骨验证：把重名分支改成 `find` 取第一个，本测试立刻变红。
+    #[test]
+    fn lookup_refuses_to_pick_between_duplicate_names() {
+        let s = HotwordStore {
+            groups: vec![
+                group(DEFAULT_HOTWORD_GROUP_ID, "", ""),
+                group("g1", "甲", "a"),
+                group("g2", "甲", "b"),
+            ],
+            ..HotwordStore::default()
+        };
+        assert_eq!(
+            s.group_by_id_or_name("甲"),
+            GroupLookup::Ambiguous(vec!["g1", "g2"])
+        );
+    }
+
+    /// id 的优先级高于组名：某组的组名恰好是另一组的 id 时，按 id 算。
+    #[test]
+    fn lookup_prefers_the_id_over_a_matching_name() {
+        let s = HotwordStore {
+            groups: vec![
+                group(DEFAULT_HOTWORD_GROUP_ID, "", ""),
+                group("terms", "乙", "a"),
+                group("g1", "terms", "b"),
+            ],
+            ..HotwordStore::default()
+        };
+        assert_eq!(
+            s.group_by_id_or_name("terms"),
+            GroupLookup::Found(&s.groups[1]),
+            "id 是稳定标识，同名时它赢"
+        );
+    }
+
+    /// 找不到 / 空查询：`NotFound`，不 panic。占位名不是查找面——「默认」在
+    /// 未起名的默认组上不该命中（那是显示层的词，不是存下来的组名）。
+    #[test]
+    fn lookup_returns_not_found_for_empty_queries_and_placeholders() {
+        let s = HotwordStore::default();
+        assert_eq!(s.group_by_id_or_name(""), GroupLookup::NotFound);
+        assert_eq!(s.group_by_id_or_name("   "), GroupLookup::NotFound);
+        assert_eq!(s.group_by_id_or_name("nope"), GroupLookup::NotFound);
+        assert_eq!(
+            s.group_by_id_or_name("默认"),
+            GroupLookup::NotFound,
+            "占位名是显示层的，不进查找面"
+        );
     }
 
     // ── 「新任务默认用热词」开关 ────────────────────────────────────────

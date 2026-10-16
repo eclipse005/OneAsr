@@ -26,8 +26,8 @@ use oneasr_core::i18n;
 use oneasr_core::media::slice_wav;
 use oneasr_core::model::HTDEMUCS_FT;
 use oneasr_core::{
-    ModelId, ProcessExportOptions, Settings, StageClock, StageUpdate, ffmpeg_source,
-    process_media_file_with_export, resolve_app_root,
+    GroupLookup, HotwordRun, HotwordStore, ModelId, ProcessExportOptions, Settings, StageClock,
+    StageUpdate, ffmpeg_source, process_media_file_with_export, resolve_app_root,
 };
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
@@ -114,6 +114,9 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let script = arg(args, "--script");
     let vocal_separation = flag(args, "--vocal-separation");
     let demucs_model_dir = arg(args, "--demucs-model-dir").map(PathBuf::from);
+    let hotword_group = arg(args, "--hotword-group");
+    let hotword_words = arg(args, "--hotwords");
+    let sensevoice_model_dir = arg(args, "--sensevoice-model-dir").map(PathBuf::from);
 
     let input_path = PathBuf::from(&input);
     if !input_path.is_file() {
@@ -175,6 +178,21 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     if let Some(dir) = demucs_model_dir {
         settings.demucs_model_dir = dir;
     }
+    if let Some(dir) = sensevoice_model_dir {
+        settings.sensevoice_model_dir = dir;
+    }
+    // 热词只在这一趟识别里有消费者，所以**只有给了旗标才碰 hotword.json**——
+    // 不碰它，普通转写就不会触发老配置迁移之类的写盘副作用。
+    // `--hotword-group`（从库里查组）与 `--hotwords`（即席词表）二选一。
+    if hotword_group.is_some() || hotword_words.is_some() {
+        let store = load_hotwords_or_warn();
+        settings.hotword_run = resolve_cli_hotwords(
+            &store,
+            hotword_group.as_deref(),
+            hotword_words.as_deref(),
+            i18n::ui_lang(),
+        )?;
+    }
     settings.normalize();
     if let Err(e) = settings.can_start() {
         eprintln!("{e}");
@@ -197,6 +215,18 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         "{}",
         i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.resolved_output_dir())
     );
+    if let Some(run) = &settings.hotword_run {
+        // 只报条数、不回显组名（banner 会进日志、会被贴出去，组名是用户内容）。
+        eprintln!("{}", i18n::cli_hotword_run(run.word_count()));
+        // 语言不支持时管线会整趟跳过（粗转不跑、context 不注入）：选了组却
+        // 什么都不说等于静默无视旗标，那条警告是「旗标真的被看见了」的凭据。
+        if !oneasr_core::lang::supports_hotwords(&settings.language) {
+            eprintln!(
+                "{}",
+                i18n::cli_warn(&i18n::cli_hotwords_language_skipped(&settings.language))
+            );
+        }
+    }
     eprintln!(
         "{} {}",
         i18n::cli_run_flags_decode(
@@ -678,10 +708,91 @@ fn apply_app_root_paths(
     if let Some(dir) = demucs {
         settings.demucs_model_dir = dir;
     }
+    // 热词粗转模型（SenseVoiceSmall）：与 demucs 同一个形状——数据目录优先、
+    // 安装目录兜底。都没有就保留 `Settings::default()` 解析出的落点（那会再看
+    // 一次 exe 安装目录），让 `can_start` 报缺。
+    let sensevoice = roots
+        .iter()
+        .map(|root| root.join("models").join(ModelId::SenseVoiceSmall.as_str()))
+        .find(|dir| dir.is_dir());
+    if let Some(dir) = sensevoice {
+        settings.sensevoice_model_dir = dir;
+    }
     settings.output_dir = oneasr_core::paths::output_dir_under(data_root);
     // Headless runs keep writing to {data-root}/output (GUI's "next to source"
     // default would be surprising for batch scripts).
     settings.save_next_to_source = false;
+}
+
+/// 读热词库（`{data-root}/hotword.json`）；迁移 / 自愈 / 坏文件的原因进 stderr。
+///
+/// 只在真的要热词时才调用：普通转写不该顺带触发迁移之类的写盘副作用。
+/// 「哪些算值得说的」的判据在 core 侧（`HotwordLoadReport::is_notable`），
+/// 这里只负责问——不重新枚举字段。
+fn load_hotwords_or_warn() -> HotwordStore {
+    let (store, report) = HotwordStore::load();
+    if report.is_notable() {
+        eprintln!(
+            "{}",
+            i18n::cli_warn(&i18n::cli_hotword_store_issue(&report.summary()))
+        );
+    }
+    store
+}
+
+/// `--hotword-group` / `--hotwords` → 本次运行的热词参数（`settings.hotword_run`）。
+///
+/// 纯函数：store 与语言都从参数进，单测不读进程级语言。错误直接打屏并返回
+/// 退出码 2（用法 / 取值错误），与 `--asr` 那类旗标同一口径：
+/// - 两个旗标同时给：二选一；
+/// - 组找不到或重名（查找规则见 [`HotwordStore::group_by_id_or_name`]）——
+///   报错里把可用组全列出来，照着改就行；
+/// - `--hotwords` 解析后没有词条：按用例把它当「空组」放行等于静默不跑热词，
+///   比说清楚更糟（与 `can_start` 对空组的立场一致）。
+///
+/// 组**存在但没词**不在这里拦：留给 `settings.can_start()` 用那条现成的
+/// 「热词组「X」还没有词」报错，命令行的说法与界面逐字一致。
+fn resolve_cli_hotwords(
+    store: &HotwordStore,
+    group: Option<&str>,
+    words: Option<&str>,
+    lang: i18n::UiLang,
+) -> Result<Option<HotwordRun>, i32> {
+    match (group, words) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => {
+            eprintln!("{}", i18n::cli_hotwords_both_flags());
+            Err(2)
+        }
+        (Some(query), None) => match store.group_by_id_or_name(query) {
+            GroupLookup::Found(g) => Ok(store.resolve_run(Some(&g.id), lang)),
+            GroupLookup::Ambiguous(ids) => {
+                eprintln!("{}", i18n::cli_hotword_group_ambiguous(query, &ids));
+                Err(2)
+            }
+            GroupLookup::NotFound => {
+                eprintln!(
+                    "{}",
+                    i18n::cli_hotword_group_unknown(query, &store.menu_options(lang))
+                );
+                Err(2)
+            }
+        },
+        (None, Some(raw)) => {
+            if oneasr_core::hotword::parse_word_list(raw).is_empty() {
+                eprintln!("{}", i18n::cli_hotwords_empty());
+                return Err(2);
+            }
+            // 即席词表没有组：调参沿用库里的（`hotword.json` 缺失时就是默认值）。
+            Ok(Some(HotwordRun {
+                group_id: "cli".into(),
+                group_name: i18n::t(i18n::CLI_HOTWORD_INLINE).to_string(),
+                text: raw.to_string(),
+                top_k: store.top_k,
+                threshold: store.threshold,
+            }))
+        }
+    }
 }
 
 /// `align` —— 音频 + 文稿 → 字幕，**整个识别阶段跳过**。
@@ -720,6 +831,14 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     let no_srt = flag(args, "--no-srt");
     if no_srt && !want_txt && !want_ass {
         eprintln!("{}", i18n::cli_no_srt_warning());
+    }
+    // 热词旗标只服务识别阶段；align 整个跳过识别（文字来自文稿），给了也只会
+    // 静默失效——说出来，别让用户对着「一点变化都没有」猜。
+    if arg(args, "--hotword-group").is_some() || arg(args, "--hotwords").is_some() {
+        eprintln!(
+            "{}",
+            i18n::cli_warn(i18n::t(i18n::CLI_ALIGN_HOTWORDS_IGNORED))
+        );
     }
 
     let mut settings = Settings {
@@ -1203,6 +1322,158 @@ mod tests {
         );
         assert_eq!(parse_asr_arg("ctc"), None, "对齐器的别名不该被认成识别模型");
         assert_eq!(parse_asr_arg("nope"), None);
+    }
+
+    // ── 热词：`--hotword-group` / `--hotwords` ─────────────────────────
+
+    fn hotword_group(id: &str, name: &str, words: &str) -> oneasr_core::HotwordGroup {
+        oneasr_core::HotwordGroup {
+            id: id.into(),
+            name: name.into(),
+            words: words.into(),
+        }
+    }
+
+    fn hotword_store(groups: Vec<oneasr_core::HotwordGroup>) -> HotwordStore {
+        HotwordStore {
+            groups,
+            default_group: None,
+            default_group_enabled: false,
+            top_k: 7,
+            threshold: 0.42,
+        }
+    }
+
+    /// `--hotword-group` 按 id 命中，并把组里的词表与库级调参带进 `HotwordRun`。
+    #[test]
+    fn cli_hotword_group_resolves_by_id() {
+        let store = hotword_store(vec![
+            hotword_group("default", "", ""),
+            hotword_group("terms", "术语表", "甲词, 乙词"),
+        ]);
+        let run = resolve_cli_hotwords(&store, Some("terms"), None, i18n::UiLang::Zh)
+            .expect("按 id 必须命中")
+            .expect("给了组旗标就该有 run");
+        assert_eq!(run.group_id, "terms");
+        assert_eq!(run.text, "甲词, 乙词");
+        assert_eq!(run.top_k, 7, "调参要沿用库里存的");
+        assert_eq!(run.threshold, 0.42);
+        assert!(run.is_usable());
+    }
+
+    /// 组名（含大小写不敏感）也能命中：用户记住的是 chip 上的名字，不是 id。
+    ///
+    /// 断骨验证：把 `HotwordStore::group_by_id_or_name` 的忽略大小写兜底删掉，
+    /// `"glossary"` 一条立刻变红。
+    #[test]
+    fn cli_hotword_group_resolves_by_name() {
+        let store = hotword_store(vec![
+            hotword_group("default", "", ""),
+            hotword_group("g1", "Glossary", "alpha"),
+        ]);
+        for query in ["Glossary", "glossary", "GLOSSARY"] {
+            let run = resolve_cli_hotwords(&store, Some(query), None, i18n::UiLang::Zh)
+                .expect("组名必须命中")
+                .expect("run");
+            assert_eq!(run.group_id, "g1", "query={query}");
+        }
+    }
+
+    /// 重名：报错退出（2），不默默取一个——「编辑 A 却跑的是 B」正是要防的。
+    ///
+    /// 断骨验证：把 `group_by_id_or_name` 的重名分支改成取第一个，本测试变红。
+    #[test]
+    fn cli_hotword_group_name_collision_is_refused() {
+        let store = hotword_store(vec![
+            hotword_group("default", "", ""),
+            hotword_group("g1", "甲", "a"),
+            hotword_group("g2", "甲", "b"),
+        ]);
+        assert_eq!(
+            resolve_cli_hotwords(&store, Some("甲"), None, i18n::UiLang::Zh).unwrap_err(),
+            2
+        );
+    }
+
+    /// 找不到：报错退出（2），不静默跑。
+    #[test]
+    fn cli_hotword_group_unknown_is_refused() {
+        let store = hotword_store(vec![hotword_group("default", "", "")]);
+        assert_eq!(
+            resolve_cli_hotwords(&store, Some("nope"), None, i18n::UiLang::Zh).unwrap_err(),
+            2
+        );
+    }
+
+    /// 两个旗标二选一。
+    ///
+    /// 断骨验证：去掉各自独立分支（让后给的那个静默胜出），本测试变红。
+    #[test]
+    fn cli_hotword_flags_are_mutually_exclusive() {
+        let store = hotword_store(vec![hotword_group("default", "", "")]);
+        assert_eq!(
+            resolve_cli_hotwords(&store, Some("default"), Some("甲"), i18n::UiLang::Zh)
+                .unwrap_err(),
+            2
+        );
+    }
+
+    /// 没给旗标：不解析、不碰热词库（`Ok(None)`，管线自然不跑粗转）。
+    #[test]
+    fn cli_without_hotword_flags_resolves_to_none() {
+        let store = hotword_store(vec![hotword_group("default", "", "")]);
+        assert_eq!(
+            resolve_cli_hotwords(&store, None, None, i18n::UiLang::Zh).unwrap(),
+            None
+        );
+    }
+
+    /// `--hotwords`：即席词表直接进 `HotwordRun`，调参沿用库里的。
+    #[test]
+    fn cli_inline_hotwords_carry_the_store_knobs() {
+        let store = hotword_store(vec![hotword_group("default", "", "")]);
+        let run = resolve_cli_hotwords(&store, None, Some("窦神归来, 柳宗元"), i18n::UiLang::Zh)
+            .expect("即席词表必须解析出来")
+            .expect("run");
+        assert_eq!(run.text, "窦神归来, 柳宗元");
+        assert_eq!(run.group_id, "cli");
+        assert!(
+            !run.group_name.trim().is_empty(),
+            "报错与 banner 要有个名字"
+        );
+        assert_eq!(run.word_count(), 2);
+        assert_eq!(run.top_k, 7);
+        assert_eq!(run.threshold, 0.42);
+    }
+
+    /// `--hotwords` 解析后没有词条：用法错误（2），不当「空组」放行。
+    #[test]
+    fn cli_inline_hotwords_must_contain_words() {
+        let store = hotword_store(vec![hotword_group("default", "", "")]);
+        for raw in ["", "   ", ",,,", "，", " , \n , "] {
+            assert_eq!(
+                resolve_cli_hotwords(&store, None, Some(raw), i18n::UiLang::Zh).unwrap_err(),
+                2,
+                "raw={raw:?}"
+            );
+        }
+    }
+
+    /// `apply_app_root_paths` 也认安装布局里的热词模型目录（与 demucs 同一套
+    /// 数据目录优先、安装目录兜底）。
+    ///
+    /// 断骨验证：删掉 `apply_app_root_paths` 里 sensevoice 那一段扫描，本测试变红
+    /// （`sensevoice_model_dir` 会停在 `Settings::default()` 解析的落点）。
+    #[test]
+    fn app_root_paths_also_find_the_sensevoice_model_dir() {
+        let root = env::temp_dir().join(format!("oneasr-sensevoice-pick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("models").join(ModelId::SenseVoiceSmall.as_str());
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Settings::default();
+        apply_app_root_paths(&mut s, &root, &root, None, None);
+        assert_eq!(s.sensevoice_model_dir, dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn sentence(id: usize, text: &str) -> SourceSentence {

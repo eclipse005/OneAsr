@@ -655,6 +655,14 @@ transcribe options:
   --vocal-separation       Run HTDemucs vocal separation before ASR
   --demucs-model-dir <dir> Directory holding htdemucs_ft_vocals.safetensors
   --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
+  --hotword-group <id|name>
+                           Use a saved hotword group from {data-root}/hotword.json;
+                           its terms are recalled per chunk and handed to the ASR
+                           model as a hint (Chinese / English tasks only)
+  --hotwords <list>        Word list given inline (comma / newline separated)
+                           instead of a saved group
+  --sensevoice-model-dir <dir>
+                           Directory holding the SenseVoiceSmall hotword model
 
 asr-chunk options:
   --wav <path>             16 kHz mono wav (required)
@@ -748,6 +756,12 @@ transcribe 选项：
   --vocal-separation       转写前先做人声分离
   --demucs-model-dir <目录> 存放 htdemucs_ft_vocals.safetensors 的目录
   --words-json <路径>      写出 ForcedAligner 的词/字级时间轴（JSON）
+  --hotword-group <id|组名>
+                           使用 {data-root}/hotword.json 里保存的热词组；热词逐段
+                           召回后作为提示词交给识别模型（仅对中文与英文任务生效）
+  --hotwords <词表>        直接给热词表（逗号 / 换行分隔），不经过热词组
+  --sensevoice-model-dir <目录>
+                           存放 SenseVoiceSmall 热词模型的目录
 
 asr-chunk 选项：
   --wav <路径>             16 kHz 单声道 wav（必填）
@@ -888,6 +902,104 @@ pub fn cli_asr_unknown(raw: &str) -> String {
         UiLang::Zh => format!("未知的识别模型：{raw}（可选 0.6b | 1.7b，或完整目录名）"),
         UiLang::En => {
             format!("Unknown ASR model: {raw} (choose 0.6b | 1.7b, or an exact directory name)")
+        }
+    }
+}
+
+/// `--hotwords` 即席词表在 `HotwordRun.group_name` 里的名字（banner 不回显
+/// 组名，见 [`cli_hotword_run`]；这个只服务「空词表」那条报错文案）。
+pub const CLI_HOTWORD_INLINE: Str = Str::new("命令行", "inline");
+
+/// `align` 整个跳过识别阶段（文字来自文稿），热词旗标对它没有作用。
+pub const CLI_ALIGN_HOTWORDS_IGNORED: Str = Str::new(
+    "align 不跑识别阶段，热词对它没有作用（已忽略）",
+    "align skips recognition, so hotwords have no effect here (ignored)",
+);
+
+/// `--hotword-group` 找不到组：把**可用组全列出来**（id + 显示名），
+/// 用户照着改就行。
+///
+/// `options` 是 [`crate::hotword::HotwordStore::menu_options`] 的形状
+/// `(id, 显示名)`。分隔符与括号两种语言各一套。
+pub fn cli_hotword_group_unknown(query: &str, options: &[(String, String)]) -> String {
+    let zh = matches!(ui_lang(), UiLang::Zh);
+    let list = options
+        .iter()
+        .map(|(id, name)| {
+            if zh {
+                format!("{id}（{name}）")
+            } else {
+                format!("{id} ({name})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(if zh { "、" } else { ", " });
+    if zh {
+        format!("找不到热词组「{query}」；可用组（id 或组名都行）：{list}")
+    } else {
+        format!("no hotword group matches \"{query}\"; available (id or name): {list}")
+    }
+}
+
+/// `热词组「{query}」有重名，用 id 指名：{ids}`
+/// / `hotword group "{query}" is ambiguous — use an id: {ids}`。
+pub fn cli_hotword_group_ambiguous(query: &str, ids: &[&str]) -> String {
+    let zh = matches!(ui_lang(), UiLang::Zh);
+    let list = ids.join(if zh { "、" } else { ", " });
+    if zh {
+        format!("热词组「{query}」有重名，用 id 指名：{list}")
+    } else {
+        format!("hotword group \"{query}\" is ambiguous — use an id: {list}")
+    }
+}
+
+/// `--hotword-group 与 --hotwords 只能给一个` /
+/// `pass only one of --hotword-group and --hotwords`。
+pub fn cli_hotwords_both_flags() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "--hotword-group 与 --hotwords 只能给一个",
+        UiLang::En => "pass only one of --hotword-group and --hotwords",
+    }
+}
+
+/// `--hotwords 解析后没有词条（按逗号或换行分隔）` /
+/// `--hotwords contains no words after parsing (comma or newline separated)`。
+pub fn cli_hotwords_empty() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "--hotwords 解析后没有词条（按逗号或换行分隔）",
+        UiLang::En => "--hotwords contains no words after parsing (comma or newline separated)",
+    }
+}
+
+/// 运行摘要里的热词行：`热词:    64 条` / `hotwords: 64 words`。
+///
+/// **只报条数，不回显组名**：banner 是常规输出（会进日志、会被贴出去），
+/// 组名是用户内容（「客户A」「某某项目」都可能），不该在这里复读；用户自己
+/// 命令行上写了哪个组，自己知道。需要指名道姓的是**错误路径**——找不到组、
+/// 重名、空组——那些地方用户必须知道说的是谁。
+pub fn cli_hotword_run(words: usize) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("热词:    {words} 条"),
+        UiLang::En => format!("hotwords: {words} words"),
+    }
+}
+
+/// 热词库读取异常（迁移 / 自愈 / 坏文件的原因摘要），配合 [`cli_warn`]。
+pub fn cli_hotword_store_issue(summary: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("热词库读取异常：{summary}"),
+        UiLang::En => format!("hotword store issue: {summary}"),
+    }
+}
+
+/// 语言不支持时的跳过提示（配合 [`cli_warn`]）：选了组也不会生效，必须说出来。
+pub fn cli_hotwords_language_skipped(language: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("热词已跳过：「{language}」不使用热词（只接中文与英文）"),
+        UiLang::En => {
+            format!(
+                "hotwords skipped: \"{language}\" does not use hotwords (Chinese and English only)"
+            )
         }
     }
 }
@@ -1326,6 +1438,88 @@ mod tests {
         });
     }
 
+    /// `--help` 两种语言都要把热词旗标列全：stderr 的用法是用户发现它们的唯一入口。
+    #[test]
+    fn cli_help_documents_the_hotword_flags() {
+        let zh = with_ui_lang(UiLang::Zh, cli_help);
+        let en = with_ui_lang(UiLang::En, cli_help);
+        for flag in ["--hotword-group", "--hotwords", "--sensevoice-model-dir"] {
+            assert!(zh.contains(flag), "zh help 少了 {flag}: {zh}");
+            assert!(en.contains(flag), "en help 少了 {flag}: {en}");
+        }
+        assert!(
+            zh.contains("仅对中文与英文"),
+            "zh help 要写明热词的语言范围: {zh}"
+        );
+        assert!(
+            en.contains("Chinese / English"),
+            "en help 要写明热词的语言范围: {en}"
+        );
+    }
+
+    /// 热词相关的 CLI 消息跟随界面语言（含 `--hotword-group` 的两种报错形态）。
+    #[test]
+    fn cli_hotword_messages_follow_the_ui_language() {
+        let options = vec![
+            ("default".to_string(), "默认".to_string()),
+            ("terms".to_string(), "术语表".to_string()),
+        ];
+        with_ui_lang(UiLang::Zh, || {
+            assert_eq!(
+                cli_hotword_group_unknown("nope", &options),
+                "找不到热词组「nope」；可用组（id 或组名都行）：default（默认）、terms（术语表）"
+            );
+            assert_eq!(
+                cli_hotword_group_ambiguous("甲", &["g1", "g2"]),
+                "热词组「甲」有重名，用 id 指名：g1、g2"
+            );
+            assert_eq!(
+                cli_hotwords_both_flags(),
+                "--hotword-group 与 --hotwords 只能给一个"
+            );
+            assert_eq!(
+                cli_hotwords_empty(),
+                "--hotwords 解析后没有词条（按逗号或换行分隔）"
+            );
+            assert_eq!(cli_hotword_run(64), "热词:    64 条");
+            assert_eq!(
+                cli_hotword_store_issue("parse error: bad json"),
+                "热词库读取异常：parse error: bad json"
+            );
+            assert_eq!(
+                cli_hotwords_language_skipped("ja"),
+                "热词已跳过：「ja」不使用热词（只接中文与英文）"
+            );
+        });
+        with_ui_lang(UiLang::En, || {
+            assert_eq!(
+                cli_hotword_group_unknown("nope", &options),
+                "no hotword group matches \"nope\"; available (id or name): default (默认), terms (术语表)"
+            );
+            assert_eq!(
+                cli_hotword_group_ambiguous("甲", &["g1", "g2"]),
+                "hotword group \"甲\" is ambiguous — use an id: g1, g2"
+            );
+            assert_eq!(
+                cli_hotwords_both_flags(),
+                "pass only one of --hotword-group and --hotwords"
+            );
+            assert_eq!(
+                cli_hotwords_empty(),
+                "--hotwords contains no words after parsing (comma or newline separated)"
+            );
+            assert_eq!(cli_hotword_run(64), "hotwords: 64 words");
+            assert_eq!(
+                cli_hotword_store_issue("parse error: bad json"),
+                "hotword store issue: parse error: bad json"
+            );
+            assert_eq!(
+                cli_hotwords_language_skipped("ja"),
+                "hotwords skipped: \"ja\" does not use hotwords (Chinese and English only)"
+            );
+        });
+    }
+
     #[test]
     fn cli_machine_readable_lines_stay_language_neutral() {
         // 键名就是 flag 名，两种语言必须逐字相同：贴日志的人和脚本都按它检索。
@@ -1364,6 +1558,8 @@ mod tests {
             ("CLI_KV_TIMELINE", CLI_KV_TIMELINE),
             ("CLI_ASR_TEXT_BEGIN", CLI_ASR_TEXT_BEGIN),
             ("CLI_ASR_TEXT_END", CLI_ASR_TEXT_END),
+            ("CLI_HOTWORD_INLINE", CLI_HOTWORD_INLINE),
+            ("CLI_ALIGN_HOTWORDS_IGNORED", CLI_ALIGN_HOTWORDS_IGNORED),
         ];
         for (name, s) in table {
             assert!(!s.zh.trim().is_empty(), "{name}: zh 侧为空");
