@@ -30,7 +30,17 @@ targets = [
 version = 2
 # 被 yank 的版本继续用下去会把别人踩过的坑留在产物里；Cargo.lock 是入库的，
 # 出现 yanked 就说明锁文件该更新了，直接失败。
-yanked = "deny"
+#
+# 2026-10-16 起**暂降为 warn**：zip 上游当天凌晨把 9.0.3 之前的全部版本一次性
+# yank（crates.io 上 `cargo update -p zip` 已无未撤回版本可选），而三个引擎
+# git 依赖（demucs-core / fireredvad / sensevoice-small-wgpu）都还钉在
+# `zip = "2"` —— 门禁提示的那条「更新锁文件」修复路径被堵死，硬失败只会让
+# 这条门禁长期变红、被当成噪音（与上面 unmaintained 一节同一个道理）。
+# 告警仍会打印，问题没有隐身；zip 2.4.2 本身无已知漏洞（RUSTSEC-2025-0168
+# 的修补门槛是 ≥2.3.0），这次只是注册表元数据事件、非安全事故。
+# 摘掉这个限制的条件：三个引擎仓库升级到 zip 9.x（当前未 yank 的线）并重新
+# 钉 rev 之后，把这里改回 deny。
+yanked = "warn"
 # unmaintained = "workspace"：只把「本仓库直接依赖」里的停维护 crate 当错误。
 #
 # 为什么不是默认的 "all"：2026-09-27 实测 `cargo deny check advisories` 在
