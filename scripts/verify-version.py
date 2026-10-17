@@ -64,7 +64,7 @@ def manifest_version() -> str:
     try:
         import tomllib
     except ModuleNotFoundError:  # pragma: no cover - 只可能在 Python < 3.11 上出现
-        fail(["需要 Python 3.11+（tomllib）；CI 用的是 ubuntu-latest 自带的 Python"])
+        fail(["需要 Python 3.11+（tomllib）；CI 用的是 ubuntu-24.04 自带的 Python"])
 
     try:
         with CARGO_TOML.open("rb") as handle:
