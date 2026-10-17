@@ -16,6 +16,11 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - 版本一致性：`python3 scripts/verify-version.py`（加 `--tag v<版本>` 可一并断言 tag）
 - 界面文案双语：`python3 scripts/verify-i18n.py`（改动 UI 文案后跑，CI 会拦）
 - 双语门禁的自测：`python3 scripts/test_verify_i18n.py`（改了门禁或它的测试就跑；CI 也跑）
+- Windows 本机：商店的「应用执行别名」会抢走 `python3`（跑起来是 "Python was not found"、
+  退出码 9009），而 Python 官方安装器与 conda 只装 `python`。仓库的文档、脚本提示与 CI
+  都只有 `python3` 一种拼写，所以在本机补一个转发：`pwsh -File scripts/ensure-python3.ps1`
+  —— 它挑一个 3.11+ 的解释器（`py -3` 可能还是 3.10，缺 tomllib），在它旁边写一个
+  `python3.cmd` 按名字转发（conda 切环境也跟着走）；幂等，撤销就是删掉那个文件
 - 门禁的断骨验证：`python3 scripts/bonebreak-verify-i18n.py` —— 把 11 处检查逐个还原，
   确认对应用例真的变红。**改过 `verify-i18n.py` 之后必跑**；它不进 CI（锚点是源码
   片段，实现一重构工具就会自己过期），是维护者手工用的

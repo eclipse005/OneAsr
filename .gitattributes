@@ -24,6 +24,7 @@ scripts/pack-release.ps1 text eol=crlf
 # 同一类脚本，同一条规矩（见上面的 BOM 说明）：中文注释与字符串都要能被
 # Windows PowerShell 5.1 正确解码。
 scripts/prepare-advisory-db.ps1 text eol=crlf
+scripts/ensure-python3.ps1 text eol=crlf
 
 # macOS 磁盘映像里的说明文件：原样交给用户，固定 LF。
 installer/macos/* text eol=lf
