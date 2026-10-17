@@ -40,7 +40,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::diagnostics::{pipeline_trace, trace_log};
+use crate::diagnostics::trace_log;
 use crate::engine::{
     AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent,
     TranscribeRequest, degenerate_transcript,
@@ -434,14 +434,88 @@ pub fn process_media_file_with_export<'a>(
     media_name: &str,
     settings: &Settings,
     data_root: &Path,
-    on_stage: impl FnMut(StageUpdate) + Send + 'a,
+    mut on_stage: impl FnMut(StageUpdate) + Send + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
-    let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
-        .map_err(|e| AsrError::Other(e.message().to_string()))?;
-    process_media_file_with_provider(
-        input, media_name, settings, data_root, &provider, on_stage, export,
-    )
+    // 记录最后一个阶段：设备丢失可能落在两次进度更新之间，重跑告警要挂在
+    // 用户此刻正看到的阶段上，而不是凭空写一个。
+    let last_stage = std::sync::Mutex::new(AsrStage::Converting);
+    let mut forward = |update: StageUpdate| {
+        *last_stage.lock().unwrap_or_else(|e| e.into_inner()) = update.stage;
+        on_stage(update);
+    };
+    run_local_with_device_loss_retry(settings, &mut forward, &last_stage, |settings, on_stage| {
+        let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
+            .map_err(|e| AsrError::Other(e.message().to_string()))?;
+        process_media_file_with_provider(
+            input,
+            media_name,
+            settings,
+            data_root,
+            &provider,
+            on_stage,
+            export.clone(),
+        )
+    })
+}
+
+/// 本地（真引擎）入口的抗震层：**GPU 设备丢失时，把整次任务改用 CPU 重跑一次**。
+///
+/// 设备丢失（驱动重置 / TDR / DXGI device removed）在 wgpu 里是 `Device::poll`
+/// 的致命错误——引擎内部直接 panic，而那颗设备已经不可恢复：同一进程里换回
+/// GPU 继续是做不到的。这里把 panic 接住，换 `backend = cpu` 的 settings 用同一
+/// 条管线再跑一遍，并把这件事作为 warning 播给用户：跑了 3/14 的任务不该变成
+/// 一条卡死的行。非设备丢失的 panic 原样 `resume_unwind`，交给外层（GUI worker）
+/// 既有的 panic 处理，行为不变。
+///
+/// 只包在**创建本地引擎**的两个入口上；`with_provider` 那条（测试 / 嵌入）不动
+/// ——测试替身不碰 GPU，也不该被重跑规则影响。
+fn run_local_with_device_loss_retry<T>(
+    settings: &Settings,
+    on_stage: &mut (dyn FnMut(StageUpdate) + Send),
+    last_stage: &std::sync::Mutex<AsrStage>,
+    run: impl Fn(&Settings, &mut (dyn FnMut(StageUpdate) + Send)) -> Result<T, AsrError>,
+) -> Result<T, AsrError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(settings, on_stage))) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            if should_retry_on_cpu(&error.to_string(), settings) {
+                warn_device_lost_retry(on_stage, last_stage);
+                run(&cpu_backend_settings(settings), on_stage)
+            } else {
+                Err(error)
+            }
+        }
+        Err(payload) => {
+            let message = crate::engine::panic_message(&*payload);
+            if should_retry_on_cpu(&message, settings) {
+                warn_device_lost_retry(on_stage, last_stage);
+                run(&cpu_backend_settings(settings), on_stage)
+            } else {
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+}
+
+/// 设备丢失且当前不是 CPU——才值得重跑。已是 CPU 还报设备丢失就不是这颗雷。
+fn should_retry_on_cpu(message: &str, settings: &Settings) -> bool {
+    crate::engine::is_device_lost(message) && !settings.backend.trim().eq_ignore_ascii_case("cpu")
+}
+
+fn warn_device_lost_retry(
+    on_stage: &mut (dyn FnMut(StageUpdate) + Send),
+    last_stage: &std::sync::Mutex<AsrStage>,
+) {
+    let stage = *last_stage.lock().unwrap_or_else(|e| e.into_inner());
+    on_stage(StageUpdate::new(stage).with_warning(crate::i18n::gpu_device_lost_retry_cpu()));
+}
+
+/// 重跑用的 settings 副本：只动后端，其余（模型、语言、热词、分块）原样。
+fn cpu_backend_settings(settings: &Settings) -> Settings {
+    let mut cpu = settings.clone();
+    cpu.backend = "cpu".into();
+    cpu
 }
 
 /// [`process_media_file_with_export`] with an explicit
@@ -489,14 +563,28 @@ pub fn process_media_file_with_transcript_export<'a>(
     transcript: &TranscriptInput,
     settings: &Settings,
     data_root: &Path,
-    on_stage: impl FnMut(StageUpdate) + Send + 'a,
+    mut on_stage: impl FnMut(StageUpdate) + Send + 'a,
     export: ProcessExportOptions,
 ) -> Result<PathBuf, AsrError> {
-    let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
-        .map_err(|e| AsrError::Other(e.message().to_string()))?;
-    process_media_file_with_transcript(
-        input, media_name, transcript, settings, data_root, &provider, on_stage, export,
-    )
+    let last_stage = std::sync::Mutex::new(AsrStage::Converting);
+    let mut forward = |update: StageUpdate| {
+        *last_stage.lock().unwrap_or_else(|e| e.into_inner()) = update.stage;
+        on_stage(update);
+    };
+    run_local_with_device_loss_retry(settings, &mut forward, &last_stage, |settings, on_stage| {
+        let provider = crate::engine::local::LocalEngineProvider::from_settings(settings)
+            .map_err(|e| AsrError::Other(e.message().to_string()))?;
+        process_media_file_with_transcript(
+            input,
+            media_name,
+            transcript,
+            settings,
+            data_root,
+            &provider,
+            on_stage,
+            export.clone(),
+        )
+    })
 }
 
 /// [`process_media_file_with_transcript_export`] with an explicit
@@ -824,6 +912,12 @@ impl<'a> Pipeline<'a> {
             .ok_or_else(|| AsrError::Other(t(i18n::ERR_READ_DURATION).into()))?
             as f32;
         conv.wav_path = wav_path;
+        trace_log(format!(
+            "converted: {:.3}s mono 16 kHz; work_dir={} keep_scratch={}",
+            conv.duration,
+            conv.work_dir.display(),
+            keep_scratch(),
+        ));
         Ok(conv)
     }
 
@@ -878,14 +972,13 @@ impl<'a> Pipeline<'a> {
                     let silences =
                         vad::speech_to_silences(&speech, conv.duration, MIN_SILENCE_FALLBACK);
                     let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
-                    #[cfg(debug_assertions)]
-                    eprintln!(
-                        "[vad] duration={:.1}s speech={} silence_gaps={} chunks={}",
+                    trace_log(format!(
+                        "vad: duration={:.1}s speech={} silence_gaps={} chunks={}",
                         conv.duration,
                         speech.len(),
                         silences.len(),
                         planned.len(),
-                    );
+                    ));
                     let pairs: Vec<(f64, f64)> =
                         speech.iter().map(|&(s, e)| (s as f64, e as f64)).collect();
                     (planned, pairs)
@@ -917,21 +1010,19 @@ impl<'a> Pipeline<'a> {
 
         let multi_chunk = chunks.len() > 1;
 
-        if pipeline_trace() {
-            eprintln!(
-                "[pipeline] duration={:.1}s chunk_target={} chunks={}",
-                conv.duration,
-                conv.chunk_sec,
-                chunks.len(),
-            );
-            for (i, c) in chunks.iter().enumerate() {
-                eprintln!(
-                    "[pipeline] plan#{i} {:.3}-{:.3} ({:.1}s)",
-                    c.start,
-                    c.end,
-                    c.end - c.start
-                );
-            }
+        trace_log(format!(
+            "plan: duration={:.1}s chunk_target={:.0}s chunks={}",
+            conv.duration,
+            conv.chunk_sec,
+            chunks.len(),
+        ));
+        for (i, c) in chunks.iter().enumerate() {
+            trace_log(format!(
+                "plan#{i} {:.3}-{:.3} ({:.1}s)",
+                c.start,
+                c.end,
+                c.end - c.start
+            ));
         }
 
         Ok(VadPlan {
@@ -1016,18 +1107,39 @@ impl<'a> Pipeline<'a> {
         check_asr_model_dir(&self.settings.asr_model_dir)?;
         // The provider owns backend resolution + the GPU→CPU *load* fallback;
         // a failure in the middle of a run is never retried (see `engine`).
+        let load_start = std::time::Instant::now();
         let asr = self
             .provider
             .load_asr()
             .map_err(|e| AsrError::LoadAsr(e.message().to_string()))?;
+        trace_log(format!(
+            "asr model loaded in {} ms",
+            load_start.elapsed().as_millis()
+        ));
         let force_lang = to_qwen_language_label(&self.settings.language);
         let chunk_tmp = conv.chunk_tmp();
 
         let mut transcripts = Vec::new();
-        #[cfg(debug_assertions)]
         let mut empty_chunks = Vec::new();
 
         for (i, chunk) in vad.chunks.iter().enumerate() {
+            // Logged *before* the progress update: the worker drains this ring
+            // inside its on_stage callback, so the chunk span and WAV path hit
+            // the journal before any GPU work can hang the thread.
+            let wav = if vad.multi_chunk {
+                chunk_tmp.as_path()
+            } else {
+                conv.wav_path.as_path()
+            };
+            trace_log(format!(
+                "asr chunk {}/{} span {:.3}-{:.3}s ({:.1}s) wav={}",
+                i + 1,
+                vad.chunks.len().max(1),
+                chunk.start,
+                chunk.end,
+                chunk.end - chunk.start,
+                wav.display(),
+            ));
             self.emit(StageUpdate::with_chunk(
                 AsrStage::Transcribing,
                 i + 1,
@@ -1097,16 +1209,18 @@ impl<'a> Pipeline<'a> {
             }
 
             if text.is_empty() {
-                #[cfg(debug_assertions)]
                 empty_chunks.push(i);
                 continue;
             }
 
             trace_log(format!(
-                "asr#{} {:.1}s chars={}",
+                "asr#{} {:.3}-{:.3}s ({:.1}s) chars={} stop={:?}",
                 i + 1,
+                chunk.start,
+                chunk.end,
                 chunk.end - chunk.start,
-                text.chars().count()
+                text.chars().count(),
+                report.stop_reason
             ));
             transcripts.push(ChunkTranscript {
                 start_sec: chunk.start as f64,
@@ -1119,13 +1233,12 @@ impl<'a> Pipeline<'a> {
         if transcripts.is_empty() {
             return Err(AsrError::EmptyTranscribe(vad.chunks.len().max(1)));
         }
-        #[cfg(debug_assertions)]
         if !empty_chunks.is_empty() {
-            eprintln!(
-                "[asr] skipped empty chunks: {}/{} indices={empty_chunks:?}",
+            trace_log(format!(
+                "asr skipped empty chunks: {}/{} indices={empty_chunks:?}",
                 empty_chunks.len(),
                 vad.chunks.len().max(1),
-            );
+            ));
         }
 
         Ok(AsrOutput { transcripts })
@@ -1141,10 +1254,15 @@ impl<'a> Pipeline<'a> {
     ) -> Result<AlignOutput, AsrError> {
         self.emit(StageUpdate::new(AsrStage::LoadingAligner));
         check_aligner_model_dir(&self.settings.aligner_model_dir)?;
+        let load_start = std::time::Instant::now();
         let aligner = self
             .provider
             .load_aligner()
             .map_err(|e| AsrError::LoadAligner(e.message().to_string()))?;
+        trace_log(format!(
+            "aligner model loaded in {} ms",
+            load_start.elapsed().as_millis()
+        ));
 
         let mut all_words: Vec<WordToken> = Vec::new();
         for (i, seg) in asr.transcripts.iter().enumerate() {
@@ -1782,5 +1900,135 @@ mod tests {
         assert!(err.contains("tokenizer_config.json"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设备丢失的 panic：恰好重跑一次，且重跑落在 CPU 上、挂了原阶段的 warning。
+    #[test]
+    fn device_loss_panic_retries_once_on_cpu() {
+        let settings = Settings {
+            backend: "gpu".into(),
+            ..Settings::default()
+        };
+        let updates = std::sync::Mutex::new(Vec::new());
+        let mut on_stage = |update: StageUpdate| {
+            updates
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(update);
+        };
+        let calls = std::cell::Cell::new(0usize);
+        // 预期中的 panic 不往测试输出里刷栈。
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = run_local_with_device_loss_retry::<()>(
+            &settings,
+            &mut on_stage,
+            &std::sync::Mutex::new(AsrStage::Transcribing),
+            |settings, _| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    panic!(
+                        "Error in Device::poll: Validation Error\n\nCaused by:\n  Parent device is lost"
+                    );
+                }
+                assert_eq!(settings.backend, "cpu", "重跑必须换成 CPU");
+                Ok(())
+            },
+        );
+        std::panic::set_hook(hook);
+
+        assert!(result.is_ok());
+        assert_eq!(calls.get(), 2, "设备丢失恰好重跑一次");
+        let updates = updates.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(updates.len(), 1, "只该有重跑那一条 warning 更新");
+        assert_eq!(updates[0].stage, AsrStage::Transcribing);
+        assert!(updates[0].warning.is_some(), "用户要被告知已改 CPU");
+    }
+
+    /// 引擎把设备丢失当返回错误而不是 panic 时，同一条重跑规则也要生效。
+    #[test]
+    fn device_loss_error_also_retries_on_cpu() {
+        let settings = Settings {
+            backend: "auto".into(),
+            ..Settings::default()
+        };
+        let mut on_stage = |_: StageUpdate| {};
+        let calls = std::cell::Cell::new(0usize);
+        let result = run_local_with_device_loss_retry::<()>(
+            &settings,
+            &mut on_stage,
+            &std::sync::Mutex::new(AsrStage::Aligning),
+            |settings, _| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    return Err(AsrError::Other("dxgi_error_device_removed".into()));
+                }
+                assert_eq!(settings.backend, "cpu");
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls.get(), 2);
+    }
+
+    /// 非设备丢失的 panic 原样还给外层（GUI worker 的既有 panic 处理），不许重跑。
+    #[test]
+    fn non_device_loss_panic_is_resumed_not_retried() {
+        let settings = Settings {
+            backend: "gpu".into(),
+            ..Settings::default()
+        };
+        let mut on_stage = |_: StageUpdate| {};
+        let calls = std::cell::Cell::new(0usize);
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_local_with_device_loss_retry::<()>(
+                &settings,
+                &mut on_stage,
+                &std::sync::Mutex::new(AsrStage::Exporting),
+                |_, _| {
+                    calls.set(calls.get() + 1);
+                    panic!("decode blew up");
+                },
+            )
+        }));
+        std::panic::set_hook(hook);
+
+        let payload = outcome.expect_err("panic 必须继续往外传");
+        assert_eq!(crate::engine::panic_message(&*payload), "decode blew up");
+        assert_eq!(calls.get(), 1, "非设备丢失不许重跑");
+    }
+
+    /// 已经在 CPU 上还报设备丢失，就不是这颗雷——照旧失败，别原地重跑。
+    #[test]
+    fn device_loss_on_cpu_does_not_rerun() {
+        let settings = Settings {
+            backend: "cpu".into(),
+            ..Settings::default()
+        };
+        let mut on_stage = |_: StageUpdate| {};
+        let calls = std::cell::Cell::new(0usize);
+        let result = run_local_with_device_loss_retry::<()>(
+            &settings,
+            &mut on_stage,
+            &std::sync::Mutex::new(AsrStage::Transcribing),
+            |_, _| {
+                calls.set(calls.get() + 1);
+                Err(AsrError::Other("Parent device is lost".into()))
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1);
+    }
+
+    /// 重跑告警是成对的用户可见文案。
+    #[test]
+    fn device_lost_retry_warning_is_bilingual() {
+        let zh = i18n::with_ui_lang(UiLang::Zh, i18n::gpu_device_lost_retry_cpu);
+        let en = i18n::with_ui_lang(UiLang::En, i18n::gpu_device_lost_retry_cpu);
+        assert!(zh.contains("CPU"), "{zh}");
+        assert!(en.contains("CPU"), "{en}");
+        assert_ne!(zh, en);
     }
 }

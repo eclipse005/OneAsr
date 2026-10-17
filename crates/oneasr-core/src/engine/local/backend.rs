@@ -26,6 +26,46 @@ impl ComputeBackend {
 /// Live GPU facts from wgpu adapter enumeration (cached — first call is slow).
 pub(crate) struct GpuProbe {
     pub(crate) description: String,
+    /// Multi-line adapter list + the one Auto would pick. Written to the task
+    /// journal before any model is loaded, so a GPU that dies later still has
+    /// its make/model/API/driver on record.
+    pub(crate) report: String,
+}
+
+/// Multi-line adapter report for the task journal.
+///
+/// Lines come from the engine's own `DeviceTarget::describe()` (name, backend,
+/// device type, driver, binding size, subgroup) — the same enumeration Auto
+/// uses, so the journal and the engine cannot disagree about the order.
+fn format_gpu_report(descriptions: &[String], chosen: Option<&str>) -> String {
+    let mut report = String::from("adapters (auto order):");
+    if descriptions.is_empty() {
+        report.push_str("\n  <none>");
+    } else {
+        for line in descriptions {
+            report.push_str("\n  ");
+            report.push_str(line);
+        }
+    }
+    match chosen {
+        Some(spec) => {
+            report.push_str("\nchosen: ");
+            report.push_str(spec);
+        }
+        None => report.push_str("\nchosen: <none>"),
+    }
+    report
+}
+
+/// Adapter report for the GUI's task journal.
+///
+/// Never empty: a machine with no usable adapter gets an `unavailable (...)`
+/// line instead, which is itself the answer to "why did this run fall back?".
+pub fn gpu_report() -> String {
+    match probe_gpu_device() {
+        Ok(probe) => probe.report.clone(),
+        Err(error) => format!("unavailable ({error})"),
+    }
 }
 
 /// Probe adapters once per process. A driver is enough; there is no extra
@@ -55,9 +95,33 @@ pub(super) fn probe_gpu_device() -> Result<&'static GpuProbe, String> {
             .find(|t| format!("{:?}", t.info.device_type) != "Cpu")
     });
     match gpu {
-        Some(t) => Ok(PROBE.get_or_init(|| GpuProbe {
-            description: t.describe(),
-        })),
+        Some(t) => {
+            let descriptions: Vec<String> = targets
+                .iter()
+                .map(|target| {
+                    let mut line = target.describe();
+                    // Vulkan's AdapterInfo.driver is the vendor name; the version
+                    // lives in driver_info. Normalize it to one line first:
+                    // Intel's string contains a newline ("101.886\n0").
+                    let driver_info = target
+                        .info
+                        .driver_info
+                        .replace(['\n', '\r'], " ")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !driver_info.is_empty() && !line.contains(&driver_info) {
+                        line.push_str(" | ");
+                        line.push_str(&driver_info);
+                    }
+                    line
+                })
+                .collect();
+            Ok(PROBE.get_or_init(|| GpuProbe {
+                description: t.describe(),
+                report: format_gpu_report(&descriptions, Some(t.spec.as_str())),
+            }))
+        }
         None => Err(crate::i18n::no_gpu_detected()),
     }
 }
@@ -95,4 +159,35 @@ pub(super) fn gpu_load_failure_msg(e: &impl std::fmt::Display) -> String {
         Err(_) => String::new(),
     };
     crate::i18n::asr_gpu_load_failed(&format!("{e:#}"), &probe_hint)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_gpu_report;
+
+    /// The journal needs the API/driver of every adapter and the one Auto picks.
+    #[test]
+    fn gpu_report_lists_adapters_and_choice() {
+        let report = format_gpu_report(
+            &[
+                "* vulkan:0  NVIDIA GeForce RTX 3060 (Vulkan, DiscreteGpu, driver 580.88)".into(),
+                "  dx12:1  Intel UHD Graphics 770 (Dx12, IntegratedGpu, driver 31.0.101.5333)"
+                    .into(),
+            ],
+            Some("vulkan:0"),
+        );
+        assert!(report.starts_with("adapters (auto order):"), "{report}");
+        assert!(report.contains("vulkan:0"), "{report}");
+        assert!(report.contains("NVIDIA GeForce RTX 3060"), "{report}");
+        assert!(report.contains("Intel UHD Graphics 770"), "{report}");
+        assert!(report.contains("chosen: vulkan:0"), "{report}");
+    }
+
+    /// No adapter is a fact to record, not an empty block.
+    #[test]
+    fn gpu_report_records_absence() {
+        let report = format_gpu_report(&[], None);
+        assert!(report.contains("<none>"), "{report}");
+        assert!(report.contains("chosen: <none>"), "{report}");
+    }
 }

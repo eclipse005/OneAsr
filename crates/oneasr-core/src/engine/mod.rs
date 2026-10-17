@@ -62,6 +62,45 @@ impl From<String> for EngineError {
     }
 }
 
+/// 一次 panic 载荷的可读文本（`catch_unwind` 的 `Err` 侧）。
+///
+/// 只为识别设备丢失而生：认不出来的载荷给空串，调用方据此走
+/// `resume_unwind` 把原 panic 还给外层，而不是把它变成一句丢信息的错误。
+pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// 这段错误 / panic 文本是否表示 **GPU 设备丢失**（驱动重置、TDR、
+/// DXGI device removed/hung）。
+///
+/// wgpu 在设备丢失时走 `handle_error_fatal` 直接 panic，文本没有类型可判，
+/// 所以判据只能是文案。名单宁可多认（一次多余的 CPU 重跑好过看着任务卡死），
+/// 但也不放无关字样进来。
+pub fn is_device_lost(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    const NEEDLES: [&str; 12] = [
+        "parent device is lost",
+        "device is lost",
+        "gpu device is lost",
+        "gpu device was lost",
+        "device lost",
+        "device_lost",
+        "device removed",
+        "device_removed",
+        "device hung",
+        "device_hung",
+        "dxgi_error_device_removed",
+        "dxgi_error_device_hung",
+    ];
+    NEEDLES.iter().any(|needle| lower.contains(needle))
+}
+
 /// One transcription call: a prepared 16 kHz mono WAV plus the language hint
 /// the engine expects (Qwen label such as `Chinese`).
 #[derive(Debug, Clone, Copy)]
@@ -281,5 +320,49 @@ mod tests {
     fn the_threshold_itself_is_degenerate() {
         let t = transcript(&"字".repeat(128), &"字".repeat(512), StopReason::Eos);
         assert!(degenerate_transcript(&t));
+    }
+
+    /// 用户在 3060 上报的那条原文必须被认出来——判据坏了管线就不会退 CPU。
+    #[test]
+    fn device_loss_messages_are_recognized() {
+        for message in [
+            "Error in Device::poll: Validation Error\n\nCaused by:\n  Parent device is lost\n",
+            "wgpu error: Validation Error\n\nCaused by:\n    Parent device is lost",
+            "DXGI_ERROR_DEVICE_REMOVED",
+            "dxgi_error_device_hung",
+            "VK_ERROR_DEVICE_LOST",
+            "The GPU device was lost",
+            "queue submit failed: device removed",
+            "the device hung and the driver was reset",
+        ] {
+            assert!(is_device_lost(message), "not recognized: {message}");
+        }
+    }
+
+    /// 普通失败文案不能被误判成设备丢失（否则会白跑一趟 CPU）。
+    #[test]
+    fn ordinary_failures_are_not_device_loss() {
+        for message in [
+            "加载语音识别模型失败: no such file or directory",
+            "转写第 3 段失败: audio path is not valid UTF-8",
+            "EmptyTranscribe: all chunks were empty",
+            "seq 2048 + max_new 2048 exceeds decoder max_seq",
+        ] {
+            assert!(!is_device_lost(message), "false positive: {message}");
+        }
+    }
+
+    /// 认不出来的载荷给空串：不能把任意 panic 都当成设备丢失。
+    #[test]
+    fn unknown_panic_payload_is_not_device_loss() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42u32);
+        assert_eq!(panic_message(&*payload), "");
+        assert!(!is_device_lost(&panic_message(&*payload)));
+
+        let text: Box<dyn std::any::Any + Send> = Box::new("Parent device is lost".to_string());
+        assert_eq!(panic_message(&*text), "Parent device is lost");
+
+        let borrowed: Box<dyn std::any::Any + Send> = Box::new("dxgi_error_device_removed");
+        assert_eq!(panic_message(&*borrowed), "dxgi_error_device_removed");
     }
 }

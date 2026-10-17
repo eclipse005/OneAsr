@@ -37,6 +37,13 @@ const LOG_FILE_NAME: &str = "oneasr-error.log";
 const TASK_JOURNAL_PREFIX: &str = "oneasr-task-";
 const TASK_JOURNAL_SUFFIX: &str = ".pending";
 
+/// `ONEASR_KEEP_JOURNAL=1` keeps a **successful** task journal as `.log`
+/// in the data root and writes one INFO line pointing at it. Default off: a
+/// normal run must neither grow the error log nor leave journals behind.
+fn keep_journal() -> bool {
+    std::env::var_os("ONEASR_KEEP_JOURNAL").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 static SESSION_CONTEXT: OnceLock<Mutex<SessionContext>> = OnceLock::new();
 
@@ -146,10 +153,33 @@ impl TaskJournal {
         file.sync_data()
     }
 
-    pub fn complete(mut self) {
+    pub fn complete(self) {
+        match self.finish(keep_journal()) {
+            Ok(Some(path)) => log_info(format!("task journal kept: {}", path.display())),
+            Ok(None) => {}
+            Err(error) => log_warn(format!("task journal keep failed: {error}")),
+        }
+    }
+
+    /// 成功收尾：默认删掉；`keep` 为真时改名成 `.log` 留给诊断
+    /// （`ONEASR_KEEP_JOURNAL=1`）。写成功标记失败不改变结局。
+    fn finish(mut self, keep: bool) -> std::io::Result<Option<PathBuf>> {
         // 若写入成功标记后清理被中断，恢复时只删除记录，不报成任务崩溃。
         let _ = self.record("task completed successfully");
-        self.remove_file();
+        if !keep {
+            self.remove_file();
+            return Ok(None);
+        }
+        self.keep().map(Some)
+    }
+
+    /// 关闭文件句柄后把 `.pending` 改名成 `.log`；同名旧文件先删掉。
+    fn keep(mut self) -> std::io::Result<PathBuf> {
+        let kept = self.path.with_extension("log");
+        drop(self.file.take());
+        let _ = fs::remove_file(&kept);
+        fs::rename(&self.path, &kept)?;
+        Ok(kept)
     }
 
     pub fn promote_failure(mut self, summary: &str) -> std::io::Result<()> {
@@ -180,7 +210,7 @@ impl TaskJournal {
     }
 }
 
-fn recover_interrupted_task_journals() {
+pub fn recover_interrupted_task_journals() {
     let dir = oneasr_core::paths::data_dir();
     let Ok(entries) = fs::read_dir(&dir) else {
         return;
@@ -316,7 +346,6 @@ pub fn log_session_start() {
             oneasr_core::paths::data_root_log_line()
         ),
     );
-    recover_interrupted_task_journals();
 }
 
 /// Font probe result (after GPUI text system is up).
@@ -330,6 +359,13 @@ pub fn log_error(msg: impl AsRef<str>) {
 
 pub fn log_warn(msg: impl AsRef<str>) {
     let _ = append_problem("WARN", msg.as_ref());
+}
+
+/// Opt-in diagnostic only. Normal success paths never call this: the error log
+/// is for problems, and a kept task journal is the one exception the user
+/// explicitly asked for with `ONEASR_KEEP_JOURNAL=1`.
+pub fn log_info(msg: impl AsRef<str>) {
+    let _ = append_problem("INFO", msg.as_ref());
 }
 
 /// Local wall-clock stamp formatted as `YYYY-MM-DD HH:MM:SS.mmm`.
@@ -579,9 +615,37 @@ mod tests {
             .expect("temporary task journal should open");
 
         assert!(path.exists(), "journal should exist while the task runs");
-        journal.complete();
+        journal.finish(false).expect("successful finish");
 
         assert!(!path.exists(), "successful task journal should be deleted");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `ONEASR_KEEP_JOURNAL` path: a successful journal survives as `.log`.
+    #[test]
+    fn kept_task_journal_survives() {
+        let dir =
+            std::env::temp_dir().join(format!("oneasr-task-kept-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("oneasr-task-test.pending");
+        let mut journal = TaskJournal::begin_at(path.clone(), "task-test", "file: input.wav")
+            .expect("temporary task journal should open");
+        journal.record("chunk 1/2").unwrap();
+
+        let kept = journal
+            .finish(true)
+            .expect("keep should succeed")
+            .expect("kept path");
+        assert!(!path.exists(), "pending name should be gone");
+        assert!(
+            kept.exists(),
+            "kept journal should exist at {}",
+            kept.display()
+        );
+        let text = fs::read_to_string(&kept).unwrap();
+        assert!(text.contains("chunk 1/2"), "{text}");
+        assert!(text.contains("task completed successfully"), "{text}");
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

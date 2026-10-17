@@ -367,20 +367,22 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                         name,
                         settings,
                         transcript,
+                        duration_sec,
                     } => {
                         let id_for_progress = id.clone();
                         let ptx = worker_tx.clone();
                         let worker_started = Instant::now();
                         let mut clock = StageClock::new();
                         let mut active_stage: Option<(AsrStage, Instant)> = None;
-                        let journal_context = format!(
-                            "  file: {}\n  asr_model: {}\n  backend: {}\n  language: {}\n  vocal_separation: {}\n  transcript_mode: {}",
-                            path.display(),
-                            settings.asr_model_dir.display(),
-                            settings.backend,
-                            settings.language,
-                            settings.vocal_separation,
-                            transcript.is_some()
+                        let mut chunks = ChunkTracker::default();
+                        let mut last_stage = AsrStage::Converting;
+                        // A previous task's tail must not leak into this journal.
+                        let _ = oneasr_core::take_trace();
+                        let journal_context = build_journal_context(
+                            &path,
+                            &settings,
+                            transcript.is_some(),
+                            duration_sec,
                         );
                         let mut journal = match crashlog::TaskJournal::begin(&id, &journal_context)
                         {
@@ -397,6 +399,21 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                         // worker (that would strand `Processing` rows forever).
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             run_task(&path, &name, &settings, transcript.as_ref(), |update| {
+                                let now_ms = worker_started.elapsed().as_millis() as u64;
+                                drain_trace_into_journal(
+                                    &mut journal,
+                                    &mut journal_write_warned,
+                                    &id,
+                                );
+                                for event in chunks.note(update.chunk, now_ms) {
+                                    record_task_journal(
+                                        &mut journal,
+                                        &mut journal_write_warned,
+                                        &id,
+                                        &chunk_event_text(&id, &event),
+                                    );
+                                }
+                                last_stage = update.stage;
                                 clock.note(&update);
                                 if active_stage.as_ref().map(|(stage, _)| *stage)
                                     != Some(update.stage)
@@ -463,6 +480,22 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                             crashlog::log_error(format!("ASR worker panic (task {id}): {message}"));
                             Err(crate::i18n::task_thread_panic(&message))
                         });
+                        let ended_ms = worker_started.elapsed().as_millis() as u64;
+                        let last_chunk = chunks.last();
+                        let chunk_end = if result.is_ok() {
+                            chunks.finish(ended_ms)
+                        } else {
+                            chunks.interrupt(ended_ms)
+                        };
+                        if let Some(event) = chunk_end {
+                            record_task_journal(
+                                &mut journal,
+                                &mut journal_write_warned,
+                                &id,
+                                &chunk_event_text(&id, &event),
+                            );
+                        }
+                        drain_trace_into_journal(&mut journal, &mut journal_write_warned, &id);
                         if let Some((stage, started)) = active_stage.take() {
                             record_task_journal(
                                 &mut journal,
@@ -490,8 +523,18 @@ fn spawn_asr_worker() -> (Sender<WorkerMsg>, Receiver<WorkerMsg>, Sender<AsrJob>
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             let error = result.as_ref().expect_err("checked task failure");
+                            let last_chunk = last_chunk
+                                .map(|(current, total, started)| {
+                                    format!("{current}/{total} (started +{started}ms)")
+                                })
+                                .unwrap_or_else(|| "<none>".to_string());
+                            let process = crate::sysinfo::process_memory()
+                                .unwrap_or_else(|| "<unavailable>".into());
+                            let gpu_memory = crate::sysinfo::gpu_memory()
+                                .map(|lines| format!("\n  gpu_memory:\n{}", indented(&lines)))
+                                .unwrap_or_default();
                             let summary = format!(
-                                "task failed: {id}\n  total_ms: {}\n  stages: {}\n  error: {error}",
+                                "task failed: {id}\n  total_ms: {}\n  stages: {}\n  last_stage: {last_stage:?}\n  last_chunk: {last_chunk}\n  process: {process}{gpu_memory}\n  error: {error}",
                                 timing.total_ms,
                                 if stage_summary.is_empty() {
                                     "<no stage reported>"
@@ -638,6 +681,201 @@ fn record_task_journal(
     }
 }
 
+/// Indent a multi-line block so it reads as one section of a journal entry.
+fn indented(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("    {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Header of the per-task journal: effective run settings + the adapter list.
+///
+/// Built on the worker before the model is loaded, so a task that hangs on the
+/// GPU still leaves the parameters that produced the hang.
+fn build_journal_context(
+    path: &std::path::Path,
+    settings: &Settings,
+    transcript_mode: bool,
+    duration_sec: Option<f64>,
+) -> String {
+    let duration = duration_sec
+        .map(|seconds| format!("{seconds:.1}s"))
+        .unwrap_or_else(|| "<unknown>".into());
+    let hotword = match settings.hotword_run.as_ref() {
+        Some(run) => format!(
+            "{} ({}, {} words)",
+            run.group_name,
+            run.group_id,
+            run.word_count()
+        ),
+        None => "none".to_string(),
+    };
+    let mut formats = Vec::new();
+    if settings.output_srt {
+        formats.push("srt");
+    }
+    if settings.output_txt {
+        formats.push("txt");
+    }
+    if settings.output_ass {
+        formats.push("ass");
+    }
+    let output = if formats.is_empty() {
+        "none".to_string()
+    } else {
+        formats.join("+")
+    };
+    let process = crate::sysinfo::process_memory().unwrap_or_else(|| "<unavailable>".into());
+    let gpu_memory = crate::sysinfo::gpu_memory()
+        .map(|lines| format!("\n  gpu_memory:\n{}", indented(&lines)))
+        .unwrap_or_default();
+    format!(
+        "  file: {}\n  media_duration: {duration}\n  asr_model: {} ({})\n  backend: {}\n  language: {}\n  chunk_target: {}s\n  max_new_tokens: {}\n  aligner: {}\n  hotword: {hotword}\n  output: {output}\n  vocal_separation: {}\n  transcript_mode: {transcript_mode}\n  process: {process}\n  gpu:\n{}{gpu_memory}",
+        path.display(),
+        settings.selected_asr_id().as_str(),
+        settings.asr_model_dir.display(),
+        settings.backend,
+        settings.language,
+        settings.chunk_target_seconds_clamped(),
+        settings.max_new_tokens,
+        settings.selected_aligner_id().as_str(),
+        settings.vocal_separation,
+        indented(&oneasr_core::engine::local::gpu_report()),
+    )
+}
+
+/// Drain the pipeline trace ring into the journal.
+///
+/// Called before work that might hang and again right after it returns, so the
+/// journal carries the chunk plan/span lines even though a release GUI has no
+/// stderr.
+fn drain_trace_into_journal(
+    journal: &mut Option<crashlog::TaskJournal>,
+    write_warned: &mut bool,
+    task_id: &str,
+) {
+    let lines = oneasr_core::take_trace();
+    if lines.is_empty() {
+        return;
+    }
+    let mut block = String::from("pipeline trace:");
+    for line in lines {
+        block.push_str("\n  ");
+        block.push_str(&line);
+    }
+    record_task_journal(journal, write_warned, task_id, &block);
+}
+
+/// One chunk boundary seen by the worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkEvent {
+    Started {
+        current: usize,
+        total: usize,
+        at_ms: u64,
+    },
+    Finished {
+        current: usize,
+        total: usize,
+        elapsed_ms: u64,
+    },
+    Interrupted {
+        current: usize,
+        total: usize,
+        elapsed_ms: u64,
+    },
+}
+
+/// Tracks the chunk in flight so every chunk gets a write-ahead journal line.
+///
+/// Time is passed in (now_ms) instead of read here, which makes the whole
+/// transition table testable without sleeping.
+#[derive(Debug, Default)]
+struct ChunkTracker {
+    current: Option<(usize, usize, u64)>,
+}
+
+impl ChunkTracker {
+    /// Feed one StageUpdate.chunk; returns the boundaries to journal.
+    fn note(&mut self, chunk: Option<(usize, usize)>, now_ms: u64) -> Vec<ChunkEvent> {
+        let next = chunk.filter(|(current, total)| *current > 0 && *total > 0);
+        if self.current.map(|(current, total, _)| (current, total)) == next {
+            return Vec::new();
+        }
+        let mut events = Vec::new();
+        if let Some((current, total, started)) = self.current.take() {
+            events.push(ChunkEvent::Finished {
+                current,
+                total,
+                elapsed_ms: now_ms.saturating_sub(started),
+            });
+        }
+        if let Some((current, total)) = next {
+            self.current = Some((current, total, now_ms));
+            events.push(ChunkEvent::Started {
+                current,
+                total,
+                at_ms: now_ms,
+            });
+        }
+        events
+    }
+
+    /// The chunk still in flight, if any (for the failure summary).
+    fn last(&self) -> Option<(usize, usize, u64)> {
+        self.current
+    }
+
+    /// Close the chunk at task end (success).
+    fn finish(&mut self, now_ms: u64) -> Option<ChunkEvent> {
+        self.current
+            .take()
+            .map(|(current, total, started)| ChunkEvent::Finished {
+                current,
+                total,
+                elapsed_ms: now_ms.saturating_sub(started),
+            })
+    }
+
+    /// Close the chunk at task end (failure): it did not complete.
+    fn interrupt(&mut self, now_ms: u64) -> Option<ChunkEvent> {
+        self.current
+            .take()
+            .map(|(current, total, started)| ChunkEvent::Interrupted {
+                current,
+                total,
+                elapsed_ms: now_ms.saturating_sub(started),
+            })
+    }
+}
+
+fn chunk_event_text(task_id: &str, event: &ChunkEvent) -> String {
+    match event {
+        ChunkEvent::Started {
+            current,
+            total,
+            at_ms,
+        } => format!(
+            "task chunk started: {task_id}\n  chunk: {current}/{total}\n  task_elapsed_ms: {at_ms}"
+        ),
+        ChunkEvent::Finished {
+            current,
+            total,
+            elapsed_ms,
+        } => format!(
+            "task chunk finished: {task_id}\n  chunk: {current}/{total}\n  elapsed_ms: {elapsed_ms}"
+        ),
+        ChunkEvent::Interrupted {
+            current,
+            total,
+            elapsed_ms,
+        } => format!(
+            "task chunk interrupted: {task_id}\n  chunk: {current}/{total}\n  elapsed_ms: {elapsed_ms}"
+        ),
+    }
+}
+
 /// Human-readable message from a caught panic payload.
 pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
@@ -733,4 +971,129 @@ pub(crate) enum LangMenuLayout {
     Chip,
     /// Stretch to the settings field width.
     FullWidth,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The header must carry the knobs that decide the GPU workload.
+    #[test]
+    fn journal_context_names_the_run_settings() {
+        let settings = Settings::default();
+        let context = build_journal_context(
+            std::path::Path::new("clip.wav"),
+            &settings,
+            false,
+            Some(12.5),
+        );
+        assert!(context.contains("media_duration: 12.5s"), "{context}");
+        assert!(context.contains("chunk_target: 60s"), "{context}");
+        assert!(context.contains("max_new_tokens: 2048"), "{context}");
+        assert!(context.contains("gpu:"), "{context}");
+    }
+
+    /// First chunk starts; repeating the same chunk must not duplicate lines.
+    #[test]
+    fn chunk_tracker_starts_and_ignores_repeats() {
+        let mut tracker = ChunkTracker::default();
+        assert!(tracker.note(None, 0).is_empty());
+        assert_eq!(
+            tracker.note(Some((1, 3)), 100),
+            vec![ChunkEvent::Started {
+                current: 1,
+                total: 3,
+                at_ms: 100
+            }]
+        );
+        assert!(tracker.note(Some((1, 3)), 250).is_empty());
+        assert_eq!(tracker.last(), Some((1, 3, 100)));
+    }
+
+    /// Advancing the chunk closes the previous one and starts the next.
+    #[test]
+    fn chunk_tracker_closes_the_previous_chunk() {
+        let mut tracker = ChunkTracker::default();
+        tracker.note(Some((1, 3)), 100);
+        assert_eq!(
+            tracker.note(Some((2, 3)), 1000),
+            vec![
+                ChunkEvent::Finished {
+                    current: 1,
+                    total: 3,
+                    elapsed_ms: 900
+                },
+                ChunkEvent::Started {
+                    current: 2,
+                    total: 3,
+                    at_ms: 1000
+                },
+            ]
+        );
+    }
+
+    /// A stage without a chunk closes the one in flight.
+    #[test]
+    fn chunk_tracker_closes_on_stage_change() {
+        let mut tracker = ChunkTracker::default();
+        tracker.note(Some((2, 3)), 1000);
+        assert_eq!(
+            tracker.note(None, 1500),
+            vec![ChunkEvent::Finished {
+                current: 2,
+                total: 3,
+                elapsed_ms: 500
+            }]
+        );
+        assert_eq!(tracker.last(), None);
+    }
+
+    /// Task end closes once; a second call has nothing left to close.
+    #[test]
+    fn chunk_tracker_finish_is_idempotent() {
+        let mut tracker = ChunkTracker::default();
+        tracker.note(Some((1, 2)), 10);
+        assert_eq!(
+            tracker.finish(30),
+            Some(ChunkEvent::Finished {
+                current: 1,
+                total: 2,
+                elapsed_ms: 20
+            })
+        );
+        assert_eq!(tracker.finish(40), None);
+    }
+
+    /// A failed task must not label the in-flight chunk as finished.
+    #[test]
+    fn chunk_tracker_interrupts_the_open_chunk() {
+        let mut tracker = ChunkTracker::default();
+        tracker.note(Some((2, 3)), 100);
+        assert_eq!(
+            tracker.interrupt(400),
+            Some(ChunkEvent::Interrupted {
+                current: 2,
+                total: 3,
+                elapsed_ms: 300
+            })
+        );
+        assert_eq!(tracker.last(), None);
+    }
+
+    /// Non-progress updates (0/0) are not chunks; clock skew saturates at zero.
+    #[test]
+    fn chunk_tracker_ignores_non_progress_and_saturates() {
+        let mut tracker = ChunkTracker::default();
+        assert!(tracker.note(Some((0, 3)), 100).is_empty());
+        assert!(tracker.note(Some((4, 0)), 200).is_empty());
+        tracker.note(Some((1, 1)), 100);
+        assert_eq!(
+            tracker.finish(50),
+            Some(ChunkEvent::Finished {
+                current: 1,
+                total: 1,
+                elapsed_ms: 0
+            })
+        );
+    }
 }

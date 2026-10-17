@@ -34,6 +34,7 @@ pub use asr::{
     process_media_file_with_progress, process_media_file_with_provider,
     process_media_file_with_transcript, process_media_file_with_transcript_export,
 };
+pub use diagnostics::take_trace;
 pub use engine::{
     AlignRequest, AlignedToken, Aligner, AsrEngine, EngineError, EngineProvider, SeparateRequest,
     SeparationEvent, Separator, TranscribeRequest, Transcript,

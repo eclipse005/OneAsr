@@ -370,6 +370,18 @@ pub fn sep_gpu_load_failed_reason() -> &'static str {
     }
 }
 
+/// `显卡设备丢失（驱动已重置），已自动改用 CPU 重跑本次任务（速度明显变慢）`
+/// / `The GPU device was lost (the driver was reset); re-running this task on CPU (much slower)`。
+pub fn gpu_device_lost_retry_cpu() -> String {
+    match ui_lang() {
+        UiLang::Zh => "显卡设备丢失（驱动已重置），已自动改用 CPU 重跑本次任务（速度明显变慢）".into(),
+        UiLang::En => {
+            "The GPU device was lost (the driver was reset); re-running this task on CPU (much slower)"
+                .into()
+        }
+    }
+}
+
 /// `ONEASR_DEVICE 无效（{spec}）: {e}` / `Invalid ONEASR_DEVICE ({spec}): {e}`
 /// （设备选择 spec 解析失败——显式指定的卡名/runtime 拼错时直接报错，不静默回退）。
 pub fn device_spec_invalid(spec: &str, e: &str) -> String {

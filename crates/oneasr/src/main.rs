@@ -15,6 +15,7 @@ mod crashlog;
 mod i18n;
 mod sfx;
 mod shell;
+mod sysinfo;
 mod theme;
 mod tray;
 mod ui_font;
@@ -37,6 +38,11 @@ fn main() {
     // Install-dir error log + panic capture (see `oneasr-error.log`).
     crashlog::install_panic_hook();
     crashlog::log_session_start();
+    // Hardware/OS context goes in before journal recovery, so a task that
+    // ended with a killed process still gets the machine facts in its recovery
+    // entry.
+    crashlog::set_session_context("system", sysinfo::system_report());
+    crashlog::recover_interrupted_task_journals();
 
     // `on_reopen` 返回共享引用，不能插在 with_assets → run 的所有权链中间；
     // 单独注册一次（macOS dock 重开；其余平台此回调不会触发，restore 在

@@ -62,6 +62,8 @@ pub(crate) enum AsrJob {
         settings: Settings,
         /// 挂了这行任务的文稿就整段跳过识别，只做打轴。
         transcript: Option<oneasr_core::TranscriptInput>,
+        /// 媒体时长（行上已探测到时）；只进任务日志，不参与管线。
+        duration_sec: Option<f64>,
     },
 }
 

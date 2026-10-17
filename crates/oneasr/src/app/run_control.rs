@@ -205,6 +205,10 @@ impl OneAsrApp {
         let task_lang = task.language.clone();
         let task_sep = task.vocal_separation;
         let task_hotword = task.hotword_group.clone();
+        let task_duration = match task.duration {
+            DurationState::Known(seconds) if seconds.is_finite() && seconds > 0.0 => Some(seconds),
+            _ => None,
+        };
         // 挂了文稿就走「只打轴」那条路。
         let task_transcript = task
             .transcript
@@ -307,6 +311,7 @@ impl OneAsrApp {
                 name,
                 settings,
                 transcript: task_transcript,
+                duration_sec: task_duration,
             })
             .is_err()
         {
