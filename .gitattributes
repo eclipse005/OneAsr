@@ -21,6 +21,9 @@ scripts/ffmpeg-checksums.txt text eol=lf
 # 让整个脚本解析失败。release.yml 用的是 pwsh（默认 UTF-8），所以这个坑只在本地显形。
 # 加 BOM 对两个版本都安全，不要去掉。
 scripts/pack-release.ps1 text eol=crlf
+# 同一类脚本，同一条规矩（见上面的 BOM 说明）：中文注释与字符串都要能被
+# Windows PowerShell 5.1 正确解码。
+scripts/prepare-advisory-db.ps1 text eol=crlf
 
 # macOS 磁盘映像里的说明文件：原样交给用户，固定 LF。
 installer/macos/* text eol=lf

@@ -28,16 +28,35 @@ targets = [
 
 [advisories]
 version = 2
+# 公告库本身也钉死：`vendor/advisory-db` 是 RustSec 官方库的 submodule，锁在
+# 某个 commit 上；CI 与本地读的是同一份快照，**不会**因为上游 main 新增通告而
+# 把与本次提交无关的东西弄红（2026-10-16 的 zip 被 yank、2026-10-17 的 zip 三条
+# 漏洞都是这么进来的：同一份代码，前一天绿、后一天红）。
+#
+# cargo-deny 的 db-path 是「缓存根」而不是库本体，每个库要落在
+# <root>/<name>-<hash> 里；准备这份快照是 scripts/prepare-advisory-db.ps1 的职责
+# （CI 在跑 deny 之前调用它，本地也一样）：
+#   pwsh -File scripts/prepare-advisory-db.ps1
+#   cargo deny check advisories sources
+# 脚本把 submodule 克隆成本地镜像放进 cargo-deny 的默认缓存根，fetch 只连本地镜像。
+#
+# 更新是手动动作，只在明确要升的时候做（没有定时任务，也不跟随上游）：
+#   git -C vendor/advisory-db fetch origin
+#   git -C vendor/advisory-db checkout <新 commit>   # 然后 git add vendor/advisory-db
+#   pwsh -File scripts/prepare-advisory-db.ps1       # 重建缓存后重跑上面的检查
+# 首次 clone 后需要：git submodule update --init vendor/advisory-db
 # 被 yank 的版本继续用下去会把别人踩过的坑留在产物里；Cargo.lock 是入库的，
 # 出现 yanked 就说明锁文件该更新了，直接失败。
 #
 # 2026-10-16 起**暂降为 warn**：zip 上游当天凌晨把 9.0.3 之前的全部版本一次性
 # yank（crates.io 上 `cargo update -p zip` 已无未撤回版本可选），而三个引擎
-# git 依赖（demucs-core / fireredvad / sensevoice-small-wgpu）都还钉在
-# `zip = "2"` —— 门禁提示的那条「更新锁文件」修复路径被堵死，硬失败只会让
+# 依赖链（demucs-core / sensevoice-small-wgpu 直接钉 `zip = "2"`；fireredvad
+# 经 ndarray-npy 0.9 间接钉 `zip = "2"`）都还停在 2.x —— 门禁提示的那条
+# 「更新锁文件」修复路径被堵死，硬失败只会让
 # 这条门禁长期变红、被当成噪音（与上面 unmaintained 一节同一个道理）。
-# 告警仍会打印，问题没有隐身；zip 2.4.2 本身无已知漏洞（RUSTSEC-2025-0168
-# 的修补门槛是 ≥2.3.0），这次只是注册表元数据事件、非安全事故。
+# 告警仍会打印，问题没有隐身。zip 2.4.2 随后在 2026-10-16 又被收录三条
+# extract() 路径的通告（RUSTSEC-2026-0367/0368/0369，修复在 9.0.0）；它们与
+# 本图的实际调用面无关，见下面 ignore 的说明。
 # 摘掉这个限制的条件：三个引擎仓库升级到 zip 9.x（当前未 yank 的线）并重新
 # 钉 rev 之后，把这里改回 deny。
 yanked = "warn"
@@ -58,8 +77,22 @@ yanked = "warn"
 #   cargo deny check advisories --config 'advisories.unmaintained="all"'
 # 摘掉这个限制的条件：gpui/usvg 换掉 ttf-parser + rustybuzz 之后。
 unmaintained = "workspace"
-# 空列表是刻意的：不靠 ignore 屏蔽具体通告，让真正的漏洞如实暴露在 CI 上。
-ignore = []
+# 默认空：不靠 ignore 屏蔽通告，真正的漏洞如实暴露。
+# 例外只允许「已确认不可达、且图上暂时升不上去」的通告，必须写清理由与移除条件；
+# 公告库已钉住，所以例外集合不会随上游自己变化。
+ignore = [
+    # 2026-10-16 收录，均只影响 zip < 9.0.0 的 extract()/extract_stream 路径
+    # （SUID/SGID 位保留、符号链接越界、经符号链接套用权限）。
+    # 本依赖图只调 ZipArchive::new + by_name/by_index 读模型归档，没有任何一处
+    # 调用 extract()，也不解压用户提供的 zip；对 OneAsr 不可达。
+    # zip 9 目前进不来：demucs-core / sensevoice 直接钉 zip="2"，ndarray-npy 0.9.1
+    # 钉 "2"（其最新 0.10.0 也只到 ^6），fireredvad 用 ndarray-npy 0.9。
+    # 移除条件：ndarray-npy 支持 zip>=9（或 fireredvad 去掉它）且三个引擎 rev
+    # 升到 zip 9 之后，删掉这三行。
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
 
 [sources]
 # 依赖只允许来自 crates.io（默认）与 allow-git 里逐个列出的仓库。

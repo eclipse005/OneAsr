@@ -1,0 +1,6 @@
+[submodule "vendor/advisory-db"]
+	path = vendor/advisory-db
+	url = https://github.com/RustSec/advisory-db.git
+	# 只取钉住的那个提交就够了：公告库的历史对检查没有用，浅克隆让本地
+	# （以及任何走 git submodule update 的地方）少拉几十 MB。
+	shallow = true

@@ -26,6 +26,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 镜像标签一律写死具体版本，不用 *-latest：2026-10-19 起 ubuntu-latest 迁到
+# 26.04，同一份提交会在没人改代码的情况下换一套 glibc / apt 源。要换是一次显式提交。
+#   ubuntu-24.04 / windows-2022 / macos-15（arm64，与发布产物的 --arch arm64 对齐）
+
 env:
   CARGO_TERM_COLOR: always
   # 与发布构建保持一致；CI 里增量编译没有收益，只会占满磁盘。
@@ -35,7 +39,7 @@ jobs:
   # ── 1. 格式：最便宜的一道门，先失败先报 ──────────────────────────────
   fmt:
     name: rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,7 +57,7 @@ jobs:
   # ── 2. lint + 测试：同一个 job 共用编译产物，不为同一套依赖编两遍 ──────
   check:
     name: clippy + test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +91,7 @@ jobs:
   # 三样都只用 Python 标准库、不碰 Rust 工具链，所以这个 job 秒完。
   version:
     name: version + i18n consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,10 +114,14 @@ jobs:
   # ── 4. 供应链：外部二进制的哈希 + 依赖漏洞与来源 ───────────────────────
   supply-chain:
     name: supply chain
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # 公告库快照是 submodule，必须一起检出；下面的 prepare 步骤会把它铺成
+      # cargo-deny 的缓存布局（它认的是 <root>/<name>-<hash>，不是库本体目录）。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
       # ffmpeg 来自上游 Tyrrrz/FFmpegBin 的版本化 tag，归档仍可被重新上传，
       # 所以用哈希清单锁内容：资产被换掉时在这里就红，而不是等打包或用户下载后才发现。
       # 来源（base-url）与哈希都由 scripts/ffmpeg-checksums.txt 声明，本步骤不含硬编码 URL。
@@ -128,6 +136,10 @@ jobs:
       # 随资产发布的 sha256 —— 与我们对待 ffmpeg 的做法一致。少了这个 action，
       # 也就少了「action 内部下载二进制、而这一步没有任何校验」的环节。
       # 升级版本：改 VER，脚本会自己用新资产自带的 .sha256 校验，校验不过就红。
+      #
+      # 公告库不联网：vendor/advisory-db 这份 submodule 快照由 prepare 脚本铺成
+      # cargo-deny 的缓存布局，它随后的 fetch 只在本地镜像里打转。上游 main 新增
+      # 通告因此不会把与本次提交无关的东西弄红（更新是显式动作，见 deny.toml）。
       - id: toolchain
         name: Read pinned toolchain
         shell: bash
@@ -135,6 +147,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
+      # 脚本用 pwsh 写（本地 Windows PowerShell 5.1 也能跑），ubuntu 的 runner 自带 pwsh。
+      - name: Pin the advisory database snapshot
+        shell: pwsh
+        run: pwsh -NoProfile -File ./scripts/prepare-advisory-db.ps1
       - name: cargo-deny (advisories + sources)
         shell: bash
         run: |
@@ -163,7 +179,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # 同样钉死：macos-15 是 arm64（与发布产物的 --arch arm64 对齐），
+        # windows-2022 是当前稳定的 Server 镜像。要换版本是一次显式提交。
+        os: [macos-15, windows-2022]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

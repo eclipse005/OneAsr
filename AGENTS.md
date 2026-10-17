@@ -22,6 +22,9 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - 打包（Windows）：`./scripts/pack-release.ps1` —— 版本号从 `Cargo.toml` 读，**没有 `-Version` 参数了**
   （以前会写回 `Cargo.toml`，等于两处真相）；开关只有 `-SkipBuild` / `-SkipInstaller`
 - 打包（Linux / macOS）：`./scripts/pack-unix.sh --os macos --arch arm64` —— 同样没有 `--version`，可加 `--skip-build`
+- 漏洞检查（钉住的公告库快照，先铺缓存再跑）：`pwsh -File scripts/prepare-advisory-db.ps1` 然后
+  `cargo deny check advisories sources` —— 首次还需要 `git submodule update --init vendor/advisory-db`；
+  更新公告库是显式动作，没有定时任务（见「发版注意」）
 - 工具链：`rust-toolchain.toml` 钉死版本，本地与 CI 都以它为准，workflow 里不写第二个版本号
 - 跑起来看效果：`target/release/oneasr.exe`（app_root 会自动向上找含 `bin/ffmpeg` 的目录）
 
@@ -172,6 +175,15 @@ CI 只在 `push: master` 与 PR 上跑，直接提交到 `master` 同样会拿�
 - 依赖来源与漏洞由 `deny.toml` + CI 的 `cargo deny check advisories sources` 把关：
   git 依赖只许来自白名单里的仓库、且必须带 tag/rev。已知的 6 条「已停维护」通告都是传递依赖，
   记在配置注释里；真实漏洞仍然是硬错误
+- 门禁的**输入也钉死**：漏洞库是 `vendor/advisory-db` 这个 submodule（钉在某个 commit），
+  CI 与本地读同一份快照，上游 main 新增通告不会再把无关提交弄红（2026-10-16 的 zip yank
+  与 10-17 的三条通告就是这么进来的）。跑检查前先铺缓存：
+  `pwsh -File scripts/prepare-advisory-db.ps1`（CI 的 supply-chain job 自动调它）；
+  首次 clone 需要 `git submodule update --init vendor/advisory-db`。更新公告库是**显式动作**
+  （`git -C vendor/advisory-db fetch origin` → `checkout <新 commit>` → `git add`），
+  **没有定时任务**，也不跟随上游
+- runner 镜像同样写死版本（`ubuntu-24.04` / `windows-2022` / `macos-15`），不用 `*-latest`：
+  2026-10-19 起 `ubuntu-latest` 迁往 26.04，同一份提交会换一套 glibc / apt 源
 - 打包前确认 `cargo check --locked --workspace --all-targets` 是 0 警告——这件事现在由 CI 保证，不再靠人记
 
 ## 不要提交的东西

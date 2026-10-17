@@ -30,13 +30,17 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# 镜像标签写死具体版本，不用 *-latest —— 与 ci.yml 同一套（2026-10-19 起
+# ubuntu-latest 迁到 26.04）。换版本是一次显式提交，不让发版机器悄悄漂移。
+#   ubuntu-24.04 / windows-2022 / macos-15（arm64）
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
       version: ${{ steps.ver.outputs.version }}
@@ -59,7 +63,7 @@ jobs:
 
   windows:
     needs: version
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,7 +97,7 @@ jobs:
 
   linux:
     needs: version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -133,7 +137,7 @@ jobs:
 
   macos:
     needs: version
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,7 +164,7 @@ jobs:
   publish:
     needs: [version, windows, linux, macos]
     if: ${{ always() && !cancelled() && needs.version.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # 只有这一步真的需要写权限（建 release、传资产）。
     permissions:
