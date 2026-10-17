@@ -20,8 +20,10 @@
 # Crash/error log written next to the exe (rotated to .old)
 /oneasr-error.log
 /oneasr-error.log.old
-# 活动任务临时记录：失败时并入错误日志，成功时删除
+# 活动任务临时记录：失败时并入错误日志，成功时删除；
+# ONEASR_KEEP_JOURNAL=1 成功后改名保留，供诊断
 /oneasr-task-*.pending
+/oneasr-task-*.log
 # Release packaging output
 /dist
 /release
@@ -40,6 +42,9 @@ __pycache__/
 .DS_Store
 *.pdb
 # Local evaluation audio (large; keep manifest/README in git if desired)
+# 素材、术语清单与期望清单含版权/隐私（尤其交易领域），terms/ 与 cases/ 也不入库
+/testdata/terms/
+/testdata/cases/
 /testdata/clips/
 /testdata/refs/
 /testdata/gold/
