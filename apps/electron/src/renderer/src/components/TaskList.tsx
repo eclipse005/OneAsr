@@ -233,26 +233,22 @@ export function TaskList({
                     title={s.vocalSep}
                     onClick={() => onSetVocalSeparation(task.id, !task.vocalSeparation)}
                   >
-                    {s.vocalSep}
+                    {task.vocalSeparation ? `✓ ${s.vocalSep}` : s.vocalSep}
                   </button>
                 </div>
 
-                {task.status === 'queued' && task.queueRank != null && (
-                  <span className="badge rank">
-                    <span>{queueRank(lang, task.queueRank)}</span>
-                  </span>
-                )}
+                {/* 状态就一个药丸：排队位次并进它（原来是「排队第 1 位」+「排队」两个胶囊） */}
                 {task.status === 'running' ? (
                   <span className="badge running" title={stageText}>
                     <span>{stageText || s.running}</span>
                   </span>
+                ) : task.status === 'queued' && task.queueRank != null ? (
+                  <span className="badge queued" title={queueRank(lang, task.queueRank)}>
+                    <span>{queueRank(lang, task.queueRank)}</span>
+                  </span>
                 ) : (
                   <span className={`badge ${task.status}`} title={label(task.status)}>
-                    <span>
-                      {task.status === 'queued' && task.queueRank == null
-                        ? s.pending
-                        : label(task.status)}
-                    </span>
+                    <span>{task.status === 'queued' ? s.pending : label(task.status)}</span>
                   </span>
                 )}
 
@@ -261,14 +257,24 @@ export function TaskList({
                   <button className="btn btn-ghost btn-danger-ghost" onClick={() => onCancel(task.id)}>
                     {s.cancel}
                   </button>
+                ) : task.status === 'queued' && task.queueRank != null ? (
+                  // 已经在队列里，主操作是「撤下来」，而不是再点一次开始
+                  <button className="btn btn-ghost btn-danger-ghost" onClick={() => onCancel(task.id)}>
+                    {s.cancelQueued}
+                  </button>
+                ) : doneWithOutput ? (
+                  // 跑完了：主操作是看结果，重跑降级（避免"手一滑把跑完的覆盖了"）
+                  <button className="btn btn-primary" onClick={() => onOpen(task.outputPath!)}>
+                    {s.openOutput}
+                  </button>
                 ) : (
                   <button className="btn btn-primary" onClick={() => onStart(task.id)}>
                     {task.status === 'error' ? s.retry : s.start}
                   </button>
                 )}
                 {doneWithOutput && (
-                  <button className="btn btn-ghost" onClick={() => onOpen(task.outputPath!)}>
-                    {s.openOutput}
+                  <button className="btn btn-ghost" onClick={() => onStart(task.id)}>
+                    {s.retranscribe}
                   </button>
                 )}
                 <button
