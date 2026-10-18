@@ -64,6 +64,10 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
           `document.querySelector('[data-shot="settings-tab-models"]')?.click()`
         )
         await capture(`${lang}-02b-settings-models`)
+        await win.webContents.executeJavaScript(
+          `document.querySelector('[data-shot="settings-tab-compute"]')?.click()`
+        )
+        await capture(`${lang}-02c-settings-system`)
       }
       await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
       await sleep(250)

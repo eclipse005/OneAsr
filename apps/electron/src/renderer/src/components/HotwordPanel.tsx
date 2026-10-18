@@ -103,7 +103,7 @@ export function HotwordPanel({
   return (
     <div className="overlay" onClick={tryClose}>
       <motion.div
-        className="modal-shell wide tall dense"
+        className="modal-shell hw-shell"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -123,7 +123,7 @@ export function HotwordPanel({
           </button>
         </div>
 
-        <div className="modal-body dense" style={{ gap: 8 }}>
+        <div className="modal-body" style={{ gap: 8, overflow: "hidden" }}>
           <div className="hw-layout">
             <aside className="hw-sidebar">
               <div className="hw-sidebar-head">{s.groups}</div>

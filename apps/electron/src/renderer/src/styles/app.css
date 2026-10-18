@@ -182,7 +182,19 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .modal-shell.wide { width: min(840px, 100%); }
 .modal-shell.tall { max-height: min(90vh, 860px); }
-.modal-shell.settings-shell { width: min(860px, 100%); max-height: min(78vh, 620px); height: min(78vh, 620px); }
+.modal-shell.hw-shell {
+  width: min(880px, 100%);
+  height: auto;
+  max-height: min(90vh, 720px);
+}
+.modal-shell.settings-shell {
+  width: min(860px, 100%);
+  height: auto;
+  max-height: min(90vh, 760px);
+  /* grow with content; only the whole shell scrolls if viewport is tiny */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
 
 .modal-header {
   display: flex; align-items: center; gap: 8px;
@@ -217,8 +229,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .field {
   display: grid; grid-template-columns: 108px 1fr;
-  gap: 10px; align-items: center;
-  min-height: 32px;
+  gap: 8px 10px; align-items: center;
+  min-height: 30px;
 }
 .field > label { color: var(--muted); font-size: 0.84rem; line-height: 1.3; }
 .field.stack { grid-template-columns: 1fr; gap: 4px; }
@@ -468,6 +480,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   .hw-layout { grid-template-columns: 1fr; min-height: 0; }
   .hw-params { grid-template-columns: 1fr; }
   .modal-shell, .modal-shell.wide, .modal-shell.settings-shell { width: 100%; max-height: 92vh; height: auto; }
+  .modal-shell.settings-shell { overflow: auto; }
 }
 
 .hw-topbar {
@@ -487,27 +500,26 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 /* Settings left-nav layout */
 .settings-body {
-  flex: 1;
-  min-height: 0;
   display: grid;
-  grid-template-columns: 152px 1fr;
+  grid-template-columns: 148px 1fr;
   background: var(--panel);
+  flex: 0 1 auto;
 }
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 8px;
+  padding: 8px 6px;
   background: #f8fafb;
   border-right: 1px solid var(--line);
-  overflow: auto;
+  overflow: visible;
 }
 .settings-nav-item {
   text-align: left;
-  padding: 9px 12px;
+  padding: 8px 10px;
   border-radius: 8px;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.84rem;
   font-weight: 600;
   border: 1px solid transparent;
   border-left: 3px solid transparent;
@@ -524,18 +536,18 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-weight: 750;
 }
 .settings-pane {
-  overflow: auto;
-  padding: 14px 18px 16px;
+  overflow: visible;
+  padding: 12px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   background: var(--panel);
   min-width: 0;
 }
 .pane-divider {
   height: 1px;
   background: var(--line-soft);
-  margin: 2px 0;
+  margin: 0;
 }
 
 /* Connected segmented control (exclusive) */
@@ -610,8 +622,8 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 36px;
-  padding: 4px 2px;
+  min-height: 32px;
+  padding: 2px 2px;
   border-bottom: 1px solid var(--line-soft);
 }
 .pref-row:last-of-type { border-bottom: none; }
@@ -625,9 +637,9 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .models-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 2px 0 4px;
+  padding: 0 0 2px;
 }
 .models-status { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
 .models-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }

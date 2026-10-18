@@ -94,10 +94,10 @@ const zh = {
 4. 完成后「打开目录」查看字幕；默认优先写到源文件旁。
 5. 热词：编辑组与词表（落盘 hotword.json）。完整粗转召回需 CLI 支持 --hotwords。
 6. 人声分离适合嘈杂背景，需要 Demucs 权重且更慢。`,
-  sectionGeneral: '界面与语言',
+  sectionGeneral: '通用',
   sectionOutput: '输出',
   sectionModels: '模型',
-  sectionCompute: '计算与其它',
+  sectionCompute: '系统',
   close: '关闭',
   pickModel: '选择模型目录',
   hotwordTitle: '热词 / 术语',
@@ -231,10 +231,10 @@ const en: Dict = {
 4. Open folder when done; default prefers saving beside the source.
 5. Hotwords: edit groups in hotword.json. Full recall needs CLI --hotwords support.
 6. Vocal separation needs Demucs weights and more time.`,
-  sectionGeneral: 'UI & language',
+  sectionGeneral: 'General',
   sectionOutput: 'Output',
   sectionModels: 'Models',
-  sectionCompute: 'Compute & more',
+  sectionCompute: 'System',
   close: 'Close',
   pickModel: 'Choose model folder',
   hotwordTitle: 'Hotwords / Terms',
