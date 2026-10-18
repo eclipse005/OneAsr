@@ -127,8 +127,8 @@ export function TaskList({
               key={task.id}
               {...rowMotion}
             >
-              <div>
-                {/* 固定四列：图标 / 文件名 / 状态 / 位次。空槽也占位，列宽才不会被内容推着走 */}
+              {/* 左：文件名一行，下面是 大小 · 时长 · 耗时（GPUI 版就是这个形状） */}
+              <div className="card-info">
                 <div className="name">
                   {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到就先留空位 */}
                   {task.mediaKind ? (
@@ -137,45 +137,32 @@ export function TaskList({
                     <span aria-hidden />
                   )}
                   {/* 完整路径放 title：文件名放不下或者需要确认位置时，悬停就能看到 */}
-                  <span className="name-main">
-                    <span className="task-name" title={`${task.name}\n${task.input}`}>
-                      {task.name}
-                    </span>
-                    {/* 一行：正常时是元数据，失败时换成错误摘要（错误比尺寸更重要，
-                        而且**不能另起一行把卡片撑高**——失败行与其它行一样高） */}
-                    {task.error ? (
-                      <span className="name-error" title={task.errorDetail ?? task.error}>
-                        {task.error}
-                      </span>
-                    ) : (
-                      meta && <span className="name-meta">{meta}</span>
-                    )}
+                  <span className="task-name" title={`${task.name}\n${task.input}`}>
+                    {task.name}
                   </span>
-                  {task.status === 'running' ? (
-                    <span className="badge running" title={stageText}>
-                      <span>{stageText || s.running}</span>
-                    </span>
-                  ) : (
-                    <span className={`badge ${task.status}`} title={label(task.status)}>
-                      <span>
-                        {task.status === 'queued' && task.queueRank == null
-                          ? s.pending
-                          : label(task.status)}
+                </div>
+                <div className="meta-line">
+                  {meta && <span className="name-meta">{meta}</span>}
+                  {task.stageTimings && task.stageTimings.length > 0 && (
+                    <span className="timing-chip" title={s.timing}>
+                      {s.timing}
+                      {timingMs != null ? ` ${formatDuration(timingMs / 1000)}` : ''}
+                      <span className="timing-pop">
+                        {task.stageTimings.map((t2, i) => (
+                          <span className="timing-line" key={`${t2.key ?? t2.stage}-${i}`}>
+                            <i>{stageLabel(lang, t2.key, t2.stage)}</i>
+                            <b>{formatDuration(t2.ms / 1000)}</b>
+                          </span>
+                        ))}
                       </span>
                     </span>
-                  )}
-                  {task.status === 'queued' && task.queueRank != null ? (
-                    <span className="badge rank">
-                      <span>{queueRank(lang, task.queueRank)}</span>
-                    </span>
-                  ) : (
-                    <span aria-hidden />
                   )}
                 </div>
-                {/* 路径默认不占行（文件名已经在上面，留着只是噪音）；
-                    只有**同名不同目录**时才显示——那时它是唯一能区分两者的信息 */}
+                {/* 路径默认不占行（文件名已经在上面）；同名不同目录时才显示 */}
                 {duplicateName && <div className="meta">{task.input}</div>}
-
+              </div>
+              {/* 右：术语 chips + 状态 + 动作（与 GPUI 一致：术语贴着右侧，动作在最右） */}
+              <div className="controls">
                 <div className="row-chips">
                   <button
                     type="button"
@@ -211,25 +198,26 @@ export function TaskList({
                   >
                     {s.vocalSep}
                   </button>
-
-                  {task.stageTimings && task.stageTimings.length > 0 && (
-                    <span className="row-chip timing-chip">
-                      {s.timing}
-                      {timingMs != null ? ` ${formatDuration(timingMs / 1000)}` : ''}
-                      <span className="timing-pop">
-                        {task.stageTimings.map((t2, i) => (
-                          <span className="timing-line" key={`${t2.key ?? t2.stage}-${i}`}>
-                            <i>{stageLabel(lang, t2.key, t2.stage)}</i>
-                            <b>{formatDuration(t2.ms / 1000)}</b>
-                          </span>
-                        ))}
-                      </span>
-                    </span>
-                  )}
                 </div>
 
-
-              </div>
+                {task.status === 'queued' && task.queueRank != null && (
+                  <span className="badge rank">
+                    <span>{queueRank(lang, task.queueRank)}</span>
+                  </span>
+                )}
+                {task.status === 'running' ? (
+                  <span className="badge running" title={stageText}>
+                    <span>{stageText || s.running}</span>
+                  </span>
+                ) : (
+                  <span className={`badge ${task.status}`} title={label(task.status)}>
+                    <span>
+                      {task.status === 'queued' && task.queueRank == null
+                        ? s.pending
+                        : label(task.status)}
+                    </span>
+                  </span>
+                )}
 
               <div className="actions">
                 {task.status === 'running' ? (
@@ -246,14 +234,6 @@ export function TaskList({
                     {s.openOutput}
                   </button>
                 )}
-                {task.error && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => onCopyError(task.errorDetail ?? task.error ?? '')}
-                  >
-                    {s.copyError}
-                  </button>
-                )}
                 <button
                   className="btn btn-ghost btn-danger-ghost"
                   disabled={locked}
@@ -262,6 +242,18 @@ export function TaskList({
                   {s.remove}
                 </button>
               </div>
+              </div>
+
+              {/* 错误：单独占最下面一行，点一下即复制全文（不留「复制错误」按钮） */}
+              {task.error && (
+                <div
+                  className="row-error"
+                  title={task.errorDetail ?? task.error}
+                  onClick={() => onCopyError(task.errorDetail ?? task.error ?? '')}
+                >
+                  <span className="err-text">{task.error}</span>
+                </div>
+              )}
 
               {menu?.key === langKey && (
                 <ChipMenu anchor={menu.rect} onClose={closeMenu}>

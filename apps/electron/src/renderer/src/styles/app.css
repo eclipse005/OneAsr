@@ -153,7 +153,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .task-card .row-meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 2px; }
 .badge.rank { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
-.row-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.row-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .chip-wrap { position: relative; }
 .row-chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -190,14 +190,20 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .chip-menu-item:hover { background: var(--row-hover); }
 .chip-menu-item.active { background: var(--accent-soft); color: var(--logo); font-weight: 650; }
 .row-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 5px; }
-/* 失败摘要就占**一行**（元数据那一格），全文在 title 与「复制错误」里：
-   失败行因此和别的行一样高，不会把卡片撑开。 */
-.task-card .name-error {
-  flex: 1 1 auto; min-width: 0; color: var(--danger); font-size: 0.78rem; font-weight: 500;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* 错误：单独占最下面一行（拉通两列），全文折行显示；点一下即复制 */
+.task-card .row-error {
+  grid-column: 1 / -1;
+  display: flex; align-items: flex-start;
+  padding: 7px 9px; margin-top: 2px; border-radius: 8px;
+  background: var(--danger-soft); cursor: pointer;
+  transition: background .12s;
 }
-/* 有错误时：文件名**不参与收缩**（只在自己超长时才截到 45%），剩下的空间全给错误行 */
-.task-card .name-main:has(.name-error) .task-name { flex: 0 0 auto; max-width: 45%; }
+.task-card .row-error:hover { background: #fee2e2; }
+.task-card .row-error .err-text {
+  min-width: 0; color: var(--danger); font-size: 0.78rem; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 5.8em; overflow: auto;
+}
 .btn-mini {
   flex: none; height: 22px; padding: 0 8px; border-radius: 6px;
   border: 1px solid var(--line); background: #fff; font-size: 0.72rem; color: var(--muted);
@@ -205,9 +211,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-mini:hover { border-color: var(--danger); color: var(--danger); }
 .task-card {
   position: relative;
-  /* 两列都定宽：信息列吃掉余量，动作列**固定 252px**——否则完成行多一个
-     「打开输出」就会把动作列撑宽、连带把状态药丸整列左移（实测 821 → 721）。 */
-  display: grid; grid-template-columns: minmax(0, 1fr) 252px; gap: 10px;
+  /* 左：文件名 + 大小·时长·耗时；右：术语 chips + 状态 + 动作；错误另起一行（grid-column 拉通）。
+     右侧是 auto 列，所以术语多长都不会影响文件名那一列。 */
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px;
+  align-items: center;
   padding: 11px 14px 11px 18px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--line);
   box-shadow: 0 4px 16px rgba(15,23,42,0.04);
@@ -223,21 +230,26 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .task-card.status-error::before { background: var(--danger); }
 .task-card.status-cancelled::before { background: var(--warn); }
 .task-card:hover { border-color: var(--divider); box-shadow: var(--shadow); }
-/* 任务行首行是**固定列**：媒体图标 15 / 文件名（吃掉余量、省略号截断）/ 状态 122 / 位次 96。
-   状态药丸的位置只由列定义决定——文件名再长也推不动它，也不会把行高撑成两行。 */
-.task-card .name {
-  display: grid;
-  grid-template-columns: 15px minmax(0, 1fr) 110px 88px;
-  align-items: center;
-  gap: 8px;
-  font-weight: 650;
+/* 左列：文件名一行，下面一行是 大小 · 时长 · 耗时（跟 GPUI 一样） */
+.task-card .card-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.task-card .name { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 650; }
+.task-card .name .task-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* 文件名吃掉余量并截断；元数据紧随其后、不参与挤压（列宽固定，内容不推列） */
-.task-card .name-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.task-card .name-meta {
-  flex: none; color: var(--muted); font-size: 0.75rem; font-weight: 500;
-  font-variant-numeric: tabular-nums;
+.task-card .meta-line {
+  display: flex; align-items: center; gap: 10px; min-height: 18px;
+  color: var(--muted); font-size: 0.75rem; font-weight: 500;
 }
+.task-card .name-meta { font-variant-numeric: tabular-nums; }
+/* 右列：术语 + 状态 + 动作；状态药丸定宽并居中（「或者说居中」） */
+.task-card .controls { display: flex; align-items: center; gap: 8px; flex: none; }
+.task-card .controls .badge {
+  width: 110px; justify-content: center; min-height: 30px; overflow: hidden;
+}
+.task-card .controls .badge > span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-card .controls .badge.rank { width: auto; }
 .task-card .name .task-name {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -247,8 +259,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .task-card .meta { color: var(--muted); font-size: 0.82rem; word-break: break-all; }
 .task-card .actions {
-  /* 顶对齐：状态药丸也在首行，两者同一条基线（以前按钮在整卡居中，和药丸错开半行） */
-  display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; justify-content: flex-end;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
 }
 /* 行内按钮压到 30px 高（基类 .btn 是固定 34px，padding 改不动它），
    状态药丸也定到 30px —— 两者顶边与文字基线在首行精确重合 */
