@@ -171,11 +171,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .timing-chip:hover .timing-pop { display: flex; }
 .timing-line { display: flex; justify-content: space-between; gap: 12px; font-size: 0.76rem; color: var(--muted); }
 .timing-line b { color: var(--text); font-weight: 600; }
+/* 行内 chip 的下拉：portal 到 body + fixed 定位（不被 .task-list 裁剪），位置由 JS 给 */
 .chip-menu {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
-  min-width: 130px; max-height: 240px; overflow: auto;
+  z-index: 70;
+  min-width: 130px; max-height: 260px; overflow: auto;
   padding: 4px; background: #fff; border: 1px solid var(--line);
-  border-radius: 10px; box-shadow: var(--shadow);
+  border-radius: 10px; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column;
 }
 .chip-menu-item { text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; color: var(--text); }
@@ -218,6 +219,16 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--muted); font-size: 0.78rem;
 }
 .statusbar .sep { width: 1px; height: 14px; background: var(--line); }
+/* 状态栏的「最近一条提示」：可点击复制，toast 消失后还能回看 */
+.statusbar .status-chip {
+  max-width: 44ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  height: 20px; padding: 0 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: #fff; color: var(--text); font-size: 0.72rem;
+}
+.statusbar .status-chip:hover { border-color: var(--accent); color: var(--logo); }
+.statusbar .status-chip.success { border-color: #a7f3d0; background: #f0fdf9; color: #047857; }
+.statusbar .status-chip.warn { border-color: #fed7aa; background: var(--warn-soft); color: var(--warn); }
+.statusbar .status-chip.error { border-color: #fecaca; background: #fff7f7; color: var(--danger); }
 .dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--warn);
   box-shadow: 0 0 0 3px rgba(217,119,6,0.15);

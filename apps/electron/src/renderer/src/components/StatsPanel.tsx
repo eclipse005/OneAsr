@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { formatDuration, moreItems, t, UiLang } from '../i18n'
+import { useEscClose } from '../esc'
 import type { StatsSnapshot } from '../../../shared/types'
 
 /**
@@ -48,6 +49,8 @@ export function StatsPanel({
   const langs = stats.langs.slice(0, LANGS_MAX)
   const recent = stats.recentSession.slice(0, RECENT_MAX)
   const hasRecent = recent.length > 0 || !!stats.lastOutput
+
+  useEscClose(onClose)
 
   return (
     <div className="overlay" onClick={onClose}>

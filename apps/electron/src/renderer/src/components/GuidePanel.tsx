@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { t, UiLang } from '../i18n'
+import { useEscClose } from '../esc'
 
 export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => void }) {
   const s = t(lang)
@@ -9,6 +10,8 @@ export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => voi
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => line.replace(/^\d+[.、]\s*/, ''))
+
+  useEscClose(onClose)
 
   return (
     <div className="overlay" onClick={onClose}>

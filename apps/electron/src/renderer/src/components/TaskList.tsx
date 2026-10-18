@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { LANG_OPTIONS, formatDuration, queueRank, t, UiLang } from '../i18n'
+import { useEscClose } from '../esc'
 import type { HotwordGroup, TaskSnapshot } from '../../../shared/types'
 
 /** 文件大小：GB / MB / KB 自适应。 */
@@ -13,6 +15,51 @@ function formatSize(bytes?: number): string | undefined {
 
 function mediaKind(name: string): 'video' | 'audio' {
   return /\.(mp4|mkv|mov|webm|avi|flv|ts|m4v)$/i.test(name) ? 'video' : 'audio'
+}
+
+/**
+ * 行内 chip 的下拉菜单：**渲染到 body**（portal），不用行内绝对定位。
+ * 理由：`.task-list` 是滚动容器，行内菜单会被它裁掉——列表最后几行点开就只剩半截。
+ * 固定在触发按钮下方；下面放不下就翻到上方；滚动/缩放/点外部/Esc 都关掉。
+ */
+function ChipMenu({
+  anchor,
+  onClose,
+  children
+}: {
+  anchor: DOMRect
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  useEscClose(onClose)
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent): void => {
+      if ((e.target as HTMLElement).closest('.chip-menu')) return
+      onClose()
+    }
+    const onMove = (): void => onClose()
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('scroll', onMove, true)
+    window.addEventListener('resize', onMove)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('scroll', onMove, true)
+      window.removeEventListener('resize', onMove)
+    }
+  }, [onClose])
+
+  const flipUp = anchor.bottom + 264 > window.innerHeight
+  const style: React.CSSProperties = flipUp
+    ? { position: 'fixed', left: anchor.left, bottom: window.innerHeight - anchor.top + 6 }
+    : { position: 'fixed', left: anchor.left, top: anchor.bottom + 6 }
+
+  return createPortal(
+    <div className="chip-menu" style={style} onClick={(e) => e.stopPropagation()}>
+      {children}
+    </div>,
+    document.body
+  )
 }
 
 export function TaskList({
@@ -44,7 +91,13 @@ export function TaskList({
   onCopyError: (text: string) => void
 }) {
   const s = t(lang)
-  const [menu, setMenu] = useState<string | null>(null)
+  /** 同时只开一个菜单：记 key 与触发按钮的位置（菜单用 fixed 定位） */
+  const [menu, setMenu] = useState<{ key: string; rect: DOMRect } | null>(null)
+
+  const toggleMenu = (key: string, el: HTMLElement): void => {
+    setMenu((cur) => (cur?.key === key ? null : { key, rect: el.getBoundingClientRect() }))
+  }
+  const closeMenu = (): void => setMenu(null)
 
   const label = (st: string): string =>
     st === 'running'
@@ -72,6 +125,8 @@ export function TaskList({
           const meta = [size, duration].filter(Boolean).join('  ·  ')
           const timingMs =
             task.totalMs ?? (task.stageTimings?.reduce((a, b) => a + b.ms, 0) || undefined)
+          const langKey = `${task.id}:lang`
+          const hwKey = `${task.id}:hw`
 
           return (
             <motion.div
@@ -106,77 +161,29 @@ export function TaskList({
                 <div className="meta">{task.input}</div>
 
                 <div className="row-chips">
-                  <div className="chip-wrap">
-                    <button
-                      type="button"
-                      className={`row-chip ${menu === `${task.id}:lang` ? 'open' : ''}`}
-                      disabled={locked}
-                      title={s.recognitionLanguage}
-                      onClick={() => setMenu(menu === `${task.id}:lang` ? null : `${task.id}:lang`)}
-                    >
-                      {langLabel}
-                      <span className="caret">▾</span>
-                    </button>
-                    {menu === `${task.id}:lang` && (
-                      <div className="chip-menu">
-                        {LANG_OPTIONS.map((o) => (
-                          <button
-                            type="button"
-                            key={o.id}
-                            className={`chip-menu-item ${o.id === language ? 'active' : ''}`}
-                            onClick={() => {
-                              onSetLanguage(task.id, o.id)
-                              setMenu(null)
-                            }}
-                          >
-                            {o.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    className={`row-chip ${menu?.key === langKey ? 'open' : ''}`}
+                    disabled={locked}
+                    title={s.recognitionLanguage}
+                    onClick={(e) => toggleMenu(langKey, e.currentTarget)}
+                  >
+                    {langLabel}
+                    <span className="caret">▾</span>
+                  </button>
 
-                  <div className="chip-wrap">
-                    <button
-                      type="button"
-                      className={`row-chip ${menu === `${task.id}:hw` ? 'open' : ''} ${
-                        boundGroup ? '' : 'muted'
-                      }`}
-                      disabled={locked}
-                      title={s.hotwords}
-                      onClick={() => setMenu(menu === `${task.id}:hw` ? null : `${task.id}:hw`)}
-                    >
-                      <span className="ellipsis">{boundGroup ? boundGroup.name : s.hotwordNone}</span>
-                      <span className="caret">▾</span>
-                    </button>
-                    {menu === `${task.id}:hw` && (
-                      <div className="chip-menu">
-                        <button
-                          type="button"
-                          className={`chip-menu-item ${task.hotwordGroupId ? '' : 'active'}`}
-                          onClick={() => {
-                            onSetHotwordGroup(task.id, null)
-                            setMenu(null)
-                          }}
-                        >
-                          {s.hotwordNone}
-                        </button>
-                        {hotwordGroups.map((g) => (
-                          <button
-                            type="button"
-                            key={g.id}
-                            className={`chip-menu-item ${g.id === task.hotwordGroupId ? 'active' : ''}`}
-                            onClick={() => {
-                              onSetHotwordGroup(task.id, g.id)
-                              setMenu(null)
-                            }}
-                          >
-                            {g.name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    className={`row-chip ${menu?.key === hwKey ? 'open' : ''} ${
+                      boundGroup ? '' : 'muted'
+                    }`}
+                    disabled={locked}
+                    title={s.hotwords}
+                    onClick={(e) => toggleMenu(hwKey, e.currentTarget)}
+                  >
+                    <span className="ellipsis">{boundGroup ? boundGroup.name : s.hotwordNone}</span>
+                    <span className="caret">▾</span>
+                  </button>
 
                   <button
                     type="button"
@@ -204,7 +211,6 @@ export function TaskList({
                     </span>
                   )}
                 </div>
-
 
                 {task.error && (
                   <div className="row-error">
@@ -243,6 +249,52 @@ export function TaskList({
                   {s.remove}
                 </button>
               </div>
+
+              {menu?.key === langKey && (
+                <ChipMenu anchor={menu.rect} onClose={closeMenu}>
+                  {LANG_OPTIONS.map((o) => (
+                    <button
+                      type="button"
+                      key={o.id}
+                      className={`chip-menu-item ${o.id === language ? 'active' : ''}`}
+                      onClick={() => {
+                        onSetLanguage(task.id, o.id)
+                        closeMenu()
+                      }}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </ChipMenu>
+              )}
+
+              {menu?.key === hwKey && (
+                <ChipMenu anchor={menu.rect} onClose={closeMenu}>
+                  <button
+                    type="button"
+                    className={`chip-menu-item ${task.hotwordGroupId ? '' : 'active'}`}
+                    onClick={() => {
+                      onSetHotwordGroup(task.id, null)
+                      closeMenu()
+                    }}
+                  >
+                    {s.hotwordNone}
+                  </button>
+                  {hotwordGroups.map((g) => (
+                    <button
+                      type="button"
+                      key={g.id}
+                      className={`chip-menu-item ${g.id === task.hotwordGroupId ? 'active' : ''}`}
+                      onClick={() => {
+                        onSetHotwordGroup(task.id, g.id)
+                        closeMenu()
+                      }}
+                    >
+                      {g.name}
+                    </button>
+                  ))}
+                </ChipMenu>
+              )}
             </motion.div>
           )
         })}

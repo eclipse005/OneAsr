@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
 import type { HotwordStore, ModelStatus, Settings } from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
+import { useEscClose } from '../esc'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
@@ -169,6 +170,8 @@ export function SettingsDrawer({
     { id: 'hotwords', label: s.sectionHotwords },
     { id: 'compute', label: s.sectionCompute }
   ]
+
+  useEscClose(tryClose)
 
   return (
     <div className="overlay" onClick={tryClose}>

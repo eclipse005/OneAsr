@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { GuidePanel } from './components/GuidePanel'
 import { SettingsDrawer, type SettingsTab } from './components/SettingsDrawer'
 import { StatsPanel } from './components/StatsPanel'
@@ -41,6 +41,8 @@ export default function App() {
   const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [toasts, setToasts] = useState<ToastPayload[]>([])
+  const [statusMsg, setStatusMsg] = useState<{ kind: string; text: string } | null>(null)
+  const statusTimer = useRef<number | undefined>(undefined)
 
   const lang = useMemo(
     () => resolveUiLang(draft?.ui_language || settings?.ui_language || 'system'),
@@ -120,6 +122,13 @@ export default function App() {
     const id = `toast-${++toastSeq}`
     setToasts((prev) => [...prev, { id, kind, message }])
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4200)
+    // 状态栏再留一份：toast 4.2s 就没了，长路径/报错要能回看与复制
+    setStatusMsg({ kind, text: message })
+    if (statusTimer.current) window.clearTimeout(statusTimer.current)
+    statusTimer.current = window.setTimeout(
+      () => setStatusMsg(null),
+      kind === 'warn' || kind === 'error' ? 6000 : 3000
+    )
   }, [])
 
   const refreshModels = useCallback(async () => {
@@ -340,7 +349,13 @@ export default function App() {
         )}
       </div>
 
-      <StatusBar lang={lang} models={models} tasks={tasks} />
+      <StatusBar
+        lang={lang}
+        models={models}
+        tasks={tasks}
+        message={statusMsg}
+        onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => pushToast('success', s.copied))}
+      />
 
       <div className="toast-stack">
         <AnimatePresence>
