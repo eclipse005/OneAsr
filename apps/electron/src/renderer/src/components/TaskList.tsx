@@ -52,6 +52,40 @@ function ChipMenu({
   )
 }
 
+/**
+ * 悬停弹卡（阶段耗时明细）。
+ *
+ * **必须 portal 到 body**：列表容器是 `.task-list{overflow:auto}`，卡片内部的绝对定位弹卡
+ * 会被它裁掉——阶段名那一列就是这么丢的（行内菜单当初修过同一类问题，这个漏了）。
+ * 位置由鼠标进入时的 rect 现算，底部放不下就翻到上方。
+ */
+function HoverCard({ trigger, children }: { trigger: React.ReactNode; children: React.ReactNode }) {
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  const flipUp = rect ? rect.bottom + 260 > window.innerHeight : false
+  const style: React.CSSProperties | undefined = rect
+    ? flipUp
+      ? { position: 'fixed', left: rect.left, bottom: window.innerHeight - rect.top + 6 }
+      : { position: 'fixed', left: rect.left, top: rect.bottom + 6 }
+    : undefined
+  return (
+    <span
+      className="timing-chip"
+      onMouseEnter={(e) => setRect(e.currentTarget.getBoundingClientRect())}
+      onMouseLeave={() => setRect(null)}
+    >
+      {trigger}
+      {rect &&
+        style &&
+        createPortal(
+          <div className="hover-card" style={style}>
+            {children}
+          </div>,
+          document.body
+        )}
+    </span>
+  )
+}
+
 export function TaskList({
   lang,
   tasks,
@@ -144,18 +178,21 @@ export function TaskList({
                 <div className="meta-line">
                   {meta && <span className="name-meta">{meta}</span>}
                   {task.stageTimings && task.stageTimings.length > 0 && (
-                    <span className="timing-chip" title={s.timing}>
-                      {s.timing}
-                      {timingMs != null ? ` ${formatDuration(timingMs / 1000)}` : ''}
-                      <span className="timing-pop">
-                        {task.stageTimings.map((t2, i) => (
-                          <span className="timing-line" key={`${t2.key ?? t2.stage}-${i}`}>
-                            <i>{stageLabel(lang, t2.key, t2.stage)}</i>
-                            <b>{formatDuration(t2.ms / 1000)}</b>
-                          </span>
-                        ))}
-                      </span>
-                    </span>
+                    <HoverCard
+                      trigger={
+                        <>
+                          {s.timing}
+                          {timingMs != null ? ` ${formatDuration(timingMs / 1000)}` : ''}
+                        </>
+                      }
+                    >
+                      {task.stageTimings.map((t2, i) => (
+                        <span className="timing-line" key={`${t2.key ?? t2.stage}-${i}`}>
+                          <i>{stageLabel(lang, t2.key, t2.stage)}</i>
+                          <b>{formatDuration(t2.ms / 1000)}</b>
+                        </span>
+                      ))}
+                    </HoverCard>
                   )}
                 </div>
                 {/* 路径默认不占行（文件名已经在上面）；同名不同目录时才显示 */}
@@ -251,6 +288,10 @@ export function TaskList({
                   title={task.errorDetail ?? task.error}
                   onClick={() => onCopyError(task.errorDetail ?? task.error ?? '')}
                 >
+                  {/* 失败在哪一步是**结构上确定**的（CLI 的阶段事件），照实标出来；
+                      错误原文一个字不解释、不翻译——ffmpeg 报什么就是什么，
+                      点一下复制的是完整 stderr，拿去搜就行 */}
+                  {stageText && <span className="err-stage">{stageText}</span>}
                   <span className="err-text">{task.error}</span>
                 </div>
               )}

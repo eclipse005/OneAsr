@@ -168,14 +168,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .row-chip .caret { color: var(--muted); font-size: 0.6rem; line-height: 1; }
 .row-chip .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-chip.sep-chip.is-on { border-color: var(--accent); background: var(--accent-soft); color: var(--logo); font-weight: 650; }
-.timing-chip { position: relative; cursor: default; color: var(--muted); }
-.timing-pop {
-  display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+.timing-chip { cursor: default; color: var(--muted); }
+.timing-chip:hover { color: var(--text); }
+/* 悬停弹卡：portal 到 body + fixed 定位（卡片内的绝对定位会被 .task-list 的
+   overflow:auto 裁掉），位置由 JS 给，底部放不下会翻到上方 */
+.hover-card {
+  z-index: 80; display: flex; flex-direction: column; gap: 4px;
   min-width: 210px; padding: 8px 10px; background: #fff;
   border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
-  flex-direction: column; gap: 4px;
 }
-.timing-chip:hover .timing-pop { display: flex; }
 .timing-line { display: flex; justify-content: space-between; gap: 12px; font-size: 0.76rem; color: var(--muted); }
 .timing-line b { color: var(--text); font-weight: 600; }
 /* 行内 chip 的下拉：portal 到 body + fixed 定位（不被 .task-list 裁剪），位置由 JS 给 */
@@ -199,8 +200,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   transition: background .12s;
 }
 .task-card .row-error:hover { background: #fee2e2; }
+.task-card .row-error .err-stage {
+  flex: none; margin-right: 8px; padding: 1px 7px; border-radius: 6px;
+  background: #fff; color: var(--danger); font-size: 0.72rem; font-weight: 700;
+}
 .task-card .row-error .err-text {
-  min-width: 0; color: var(--danger); font-size: 0.78rem; line-height: 1.45;
+  min-width: 0; color: var(--danger); font-size: 0.76rem; line-height: 1.45;
+  /* 等宽：错误里全是路径、参数、ffmpeg 的十六进制指针，等宽更好扫也更好复制去搜 */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap; word-break: break-word;
   max-height: 5.8em; overflow: auto;
 }
