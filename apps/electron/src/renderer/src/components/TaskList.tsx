@@ -115,6 +115,8 @@ export function TaskList({
           const meta = [size, duration].filter(Boolean).join('  ·  ')
           const timingMs =
             task.totalMs ?? (task.stageTimings?.reduce((a, b) => a + b.ms, 0) || undefined)
+          // 阶段文案按 CLI 的稳定 key 出（label 只是兜底），药丸与耗时明细共用
+          const stageText = stageLabel(lang, task.stageKey, task.stage)
           const langKey = `${task.id}:lang`
           const hwKey = `${task.id}:hw`
 
@@ -125,29 +127,36 @@ export function TaskList({
               {...rowMotion}
             >
               <div>
+                {/* 固定四列：图标 / 文件名 / 状态 / 位次。空槽也占位，列宽才不会被内容推着走 */}
                 <div className="name">
-                  {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到时先不画图标 */}
-                  {task.mediaKind && (
+                  {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到就先留空位 */}
+                  {task.mediaKind ? (
                     <span className={`media-icon ${task.mediaKind}`} aria-hidden />
+                  ) : (
+                    <span aria-hidden />
                   )}
-                  {task.name}
-                  {/* 跑的时候药丸直接写阶段名（跟 GPUI 一样，不画进度条——百分比是拿阶段序号
-                      估的，本来也不代表真实进度） */}
+                  <span className="task-name" title={task.name}>
+                    {task.name}
+                  </span>
                   {task.status === 'running' ? (
-                    <span className="badge running">
-                      {task.stageKey || task.stage
-                        ? stageLabel(lang, task.stageKey, task.stage)
-                        : s.running}
+                    <span className="badge running" title={stageText}>
+                      <span>{stageText || s.running}</span>
                     </span>
                   ) : (
-                    <span className={`badge ${task.status}`}>
-                      {task.status === 'queued' && task.queueRank == null
-                        ? s.pending
-                        : label(task.status)}
+                    <span className={`badge ${task.status}`} title={label(task.status)}>
+                      <span>
+                        {task.status === 'queued' && task.queueRank == null
+                          ? s.pending
+                          : label(task.status)}
+                      </span>
                     </span>
                   )}
-                  {task.status === 'queued' && task.queueRank != null && (
-                    <span className="badge rank">{queueRank(lang, task.queueRank)}</span>
+                  {task.status === 'queued' && task.queueRank != null ? (
+                    <span className="badge rank">
+                      <span>{queueRank(lang, task.queueRank)}</span>
+                    </span>
+                  ) : (
+                    <span aria-hidden />
                   )}
                 </div>
                 {meta && <div className="row-meta">{meta}</div>}

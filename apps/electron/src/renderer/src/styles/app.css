@@ -204,7 +204,23 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   transition: border-color .15s, box-shadow .15s, transform .15s;
 }
 .task-card:hover { border-color: var(--divider); box-shadow: var(--shadow); }
-.task-card .name { font-weight: 650; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 任务行首行是**固定列**：媒体图标 15 / 文件名（吃掉余量、省略号截断）/ 状态 122 / 位次 96。
+   状态药丸的位置只由列定义决定——文件名再长也推不动它，也不会把行高撑成两行。 */
+.task-card .name {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) 122px 96px;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+.task-card .name .task-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-card .name .badge { justify-self: start; max-width: 100%; }
+.task-card .name .badge > span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .task-card .meta { color: var(--muted); font-size: 0.82rem; word-break: break-all; }
 .task-card .actions { display: flex; gap: 6px; align-items: start; flex-wrap: wrap; justify-content: flex-end; }
 
