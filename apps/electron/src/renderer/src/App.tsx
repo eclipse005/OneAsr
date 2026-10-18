@@ -9,9 +9,6 @@ import { TitleBar } from './components/TitleBar'
 import { WelcomeModal } from './components/WelcomeModal'
 import { resolveUiLang, t, unsupportedCount } from './i18n'
 import { toastMotion } from './motion'
-
-/** 支持的媒体扩展名（与主进程文件对话框的过滤器保持一致）。 */
-const MEDIA_RE = /\.(wav|mp3|flac|m4a|aac|ogg|mp4|mkv|mov|webm|avi)$/i
 import type {
   HotwordStore,
   DownloadState,
@@ -243,8 +240,15 @@ export default function App() {
         return
       }
     }
-    // 拖进来的可能什么都有：只收媒体，其余报一次数——不静默吞掉（GPUI 是静默跳过并记日志）
-    const media = list.filter((p) => MEDIA_RE.test(p))
+    // 拖进来的可能什么都有：只收后端认的媒体，其余报一次数——不静默吞掉
+    // （扩展名清单来自 `status --json`，壳不再自己维护正则；状态还没拿到时不拦，
+    //   免得刚启动那几百毫秒里把正常文件也当成不支持）
+    const exts = status?.media_exts ?? []
+    const isSupported = (p: string): boolean => {
+      const lower = p.toLowerCase()
+      return exts.some((e) => lower.endsWith(`.${e}`))
+    }
+    const media = exts.length ? list.filter(isSupported) : list
     const skipped = list.length - media.length
     if (skipped > 0) {
       pushToast(media.length === 0 ? 'warn' : 'info', unsupportedCount(lang, skipped))

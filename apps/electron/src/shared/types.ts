@@ -75,6 +75,8 @@ export interface StatusSnapshot {
     sensevoice: ModelSlot
   }
   catalog: CatalogEntry[]
+  /** 后端认的媒体扩展名（全小写、不带点）——壳的拖放过滤用它，不再自己维护正则 */
+  media_exts: string[]
   can_start: { ok: boolean; reason: string | null }
 }
 
@@ -83,7 +85,8 @@ export interface ProbeResult {
   input: string
   size_bytes: number
   duration_sec: number | null
-  kind: 'audio' | 'video'
+  /** other = 后端不认这个扩展名（如 .txt），壳据此不画媒体图标 */
+  kind: 'audio' | 'video' | 'other'
 }
 
 /** 下载进度（对应 CLI stdout 的机器行）。 */
@@ -129,7 +132,7 @@ export interface TaskSnapshot {
   /** CLI 报的总耗时（含模型加载） */
   totalMs?: number
   /** 媒体类型：由 `oneasr-cli probe` 判定（壳不自己按扩展名猜） */
-  mediaKind?: 'audio' | 'video'
+  mediaKind?: 'audio' | 'video' | 'other'
 }
 
 /** One finished-task row from stats.jsonl (oneasr-core compatible). */

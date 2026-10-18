@@ -200,9 +200,10 @@ export function TaskList({
               <div className="card-info">
                 <div className="name">
                   {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到就先留空位 */}
-                  {task.mediaKind ? (
+                  {task.mediaKind === 'audio' || task.mediaKind === 'video' ? (
                     <span className={`media-icon ${task.mediaKind}`} aria-hidden />
                   ) : (
+                    // 后端报 other（如 .txt）或还没探到：留空位不画图标
                     <span aria-hidden />
                   )}
                   {/* 完整路径放 title：文件名放不下或者需要确认位置时，悬停就能看到 */}
