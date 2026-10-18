@@ -44,6 +44,7 @@ export interface OneAsrApi {
   setTaskVocalSeparation: (id: string, on: boolean) => Promise<TaskSnapshot[]>
   setTaskHotwordGroup: (id: string, groupId: string | null) => Promise<TaskSnapshot[]>
   copyText: (text: string) => Promise<void>
+  openLog: () => Promise<void>
   getStats: () => Promise<StatsSnapshot>
   getHotwords: () => Promise<HotwordStore>
   saveHotwords: (store: HotwordStore) => Promise<HotwordStore>

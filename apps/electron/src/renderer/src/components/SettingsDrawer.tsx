@@ -460,6 +460,23 @@ export function SettingsDrawer({
                   <span className="pref-label">{s.sounds}</span>
                   <Toggle on={draft.sound} onChange={(v) => set('sound', v)} />
                 </div>
+                <div className="pref-row">
+                  <span className="pref-label">{s.closeToTray}</span>
+                  <Toggle
+                    on={!!draft.close_to_tray}
+                    onChange={(v) => set('close_to_tray', v)}
+                  />
+                </div>
+                <div className="pref-row">
+                  <span className="pref-label">{s.diagnostics}</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void window.oneasr.openLog()}
+                  >
+                    {s.openLog}
+                  </button>
+                </div>
               </>
             )}
           </div>

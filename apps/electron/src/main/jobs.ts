@@ -17,6 +17,7 @@ import {
   resolveCli
 } from './settings'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
+import { logError, logWarn, writeTaskLog } from './log'
 import { loadHotwords, wordsCsv } from './hotword'
 
 let seq = 0
@@ -387,6 +388,7 @@ export class JobManager extends EventEmitter {
       this.runningId = task.id
       this.emitUpdate()
 
+      const cmdline = [cli, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
       const child = spawn(cli, args, {
         cwd: appRoot,
         env: { ...process.env, ONEASR_DATA_DIR: appRoot }
@@ -474,6 +476,10 @@ export class JobManager extends EventEmitter {
           task.error = (stderr || `exit ${code}`).slice(-600)
           task.progress = 'error'
           task.progressPct = 100
+          // 失败的现场全部落盘：命令行、退出码、耗时、stderr 尾部（截 8 KB）
+          logError(
+            `task failed: ${task.name}\n  cmd: ${cmdline}\n  exit: ${code} · ${(durationMs / 1000).toFixed(1)}s · input=${task.input}\n  stderr:\n${stderr.slice(-8000)}`
+          )
         }
 
         // media_sec 用加入时探到的时长：统计页的「处理媒体 / 节省时长 / 平均倍速」全靠它，
@@ -494,6 +500,21 @@ export class JobManager extends EventEmitter {
           /* non-fatal */
         }
 
+        // 成功时默认不留盘；要现场就 ONEASR_KEEP_TASK_LOG=1
+        writeTaskLog(
+          task.id,
+          [
+            `task: ${task.name}`,
+            `input: ${task.input}`,
+            `cmd: ${cmdline}`,
+            `exit: ${code} · ${(durationMs / 1000).toFixed(1)}s`,
+            `output: ${task.outputPath ?? '(none)'}`,
+            `stages: ${(task.stageTimings ?? []).map((s) => `${s.stage}=${s.ms}ms`).join(', ') || '(none)'}`,
+            'stderr:',
+            stderr
+          ].join('\n')
+        )
+
         this.sessionRecent.unshift({
           name: task.name,
           status: task.status,
@@ -511,6 +532,7 @@ export class JobManager extends EventEmitter {
         this.runningId = null
         task.status = 'error'
         task.error = String(err)
+        logError(`task spawn failed: ${task.name}\n  cmd: ${cmdline}`, err)
         task.finishedAt = Date.now()
         this.emitUpdate()
         resolve()

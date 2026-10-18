@@ -10,6 +10,7 @@ import {
   saveSettings
 } from './settings'
 import { JobManager } from './jobs'
+import { addSessionContext, initLog, installProcessHandlers, logPathname } from './log'
 import { loadHotwords, saveHotwords } from './hotword'
 import type { HotwordStore, Settings } from '../shared/types'
 
@@ -21,6 +22,10 @@ app.commandLine.appendSwitch('no-sandbox')
 // GPUI 是用 winresource 把图标嵌进 exe，Electron 必须在运行时显式交给窗口。
 // AppUserModelID 让任务栏把窗口归到 OneAsr 名下，而不是并进 electron.exe。
 app.setAppUserModelId('com.eclipse005.oneasr')
+
+// 诊断日志：`{app_root}/oneasr-error.log`（会话上下文先缓存，出问题才落盘）
+initLog(DEFAULT_APP_ROOT)
+installProcessHandlers()
 
 /** 定位仓库里那份图标：源码树里跑与将来打包后的 resources 两种落点都试。 */
 function resolveAppIcon(): string | undefined {
@@ -132,10 +137,28 @@ function windowChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
 function createWindow(): void {
   const icon = resolveAppIcon()
   // 一行启动诊断：窗口装饰归谁、图标从哪来，出问题时先看这条（Electron 33 没有 getTitleBarOverlay 可查）。
+  const chrome = windowChrome()
   console.log(
     `[oneasr] platform=${process.platform} appRoot=${DEFAULT_APP_ROOT} cli=${resolveCli()}\n` +
-      `[oneasr] icon=${icon ?? '(none)'} chrome=${JSON.stringify(windowChrome())}`
+      `[oneasr] icon=${icon ?? '(none)'} chrome=${JSON.stringify(chrome)}`
   )
+  // 这些信息平时只留在内存里；一旦有 WARN/ERROR/PANIC，会连同第一条日志一起写入
+  addSessionContext('window', `chrome=${JSON.stringify(chrome)}\nicon=${icon ?? '(none)'}\ncli=${resolveCli()}`)
+  try {
+    const models = checkModels(loadSettings())
+    addSessionContext(
+      'models',
+      `asr=${models.asrLabel} ready=${models.asrReady} path=${models.asrPath}\n` +
+        `aligner=${models.alignerLabel} ready=${models.alignerReady} path=${models.alignerPath}\n` +
+        `demucs=${models.demucsReady} sensevoice=${models.sensevoiceReady} backend=${models.backend}`
+    )
+  } catch {
+    /* 探针失败不影响启动 */
+  }
+  void app
+    .getGPUInfo('basic')
+    .then((info) => addSessionContext('gpu', JSON.stringify(info).slice(0, 800)))
+    .catch(() => undefined)
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -238,6 +261,12 @@ function registerIpc(): void {
   // 复制走主进程的 clipboard：渲染层 file:// 下 navigator.clipboard 不保证可用
   ipcMain.handle('shell:copyText', (_e, text: string) => {
     clipboard.writeText(String(text ?? ''))
+  })
+  /** 出问题时一键把日志拿出来（还没写过就只打开所在目录）。 */
+  ipcMain.handle('shell:openLog', async () => {
+    const file = logPathname()
+    if (file && fs.existsSync(file)) await shell.openPath(file)
+    else await shell.openPath(DEFAULT_APP_ROOT)
   })
   ipcMain.handle('shell:openOutputFolder', async (_e, filePath: string) => {
     if (filePath) shell.showItemInFolder(filePath)

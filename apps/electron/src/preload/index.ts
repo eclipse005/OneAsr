@@ -29,6 +29,7 @@ const api: OneAsrApi = {
   setTaskHotwordGroup: (id: string, groupId: string | null) =>
     ipcRenderer.invoke('tasks:setHotwordGroup', id, groupId),
   copyText: (text: string) => ipcRenderer.invoke('shell:copyText', text),
+  openLog: () => ipcRenderer.invoke('shell:openLog'),
   getStats: () => ipcRenderer.invoke('stats:get'),
   getHotwords: () => ipcRenderer.invoke('hotword:get'),
   saveHotwords: (store: HotwordStore) => ipcRenderer.invoke('hotword:save', store),
