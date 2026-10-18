@@ -8,7 +8,6 @@ import { TaskList } from './components/TaskList'
 import { TitleBar } from './components/TitleBar'
 import { WelcomeModal } from './components/WelcomeModal'
 import { resolveUiLang, t, unsupportedCount } from './i18n'
-import { toastMotion } from './motion'
 import type {
   HotwordStore,
   DownloadState,
@@ -17,14 +16,12 @@ import type {
   StartResult,
   StatsSnapshot,
   TaskSnapshot,
-  ToastPayload
 } from '../../shared/types'
 
 function deepEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-let toastSeq = 0
 
 export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -43,7 +40,13 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
-  const [toasts, setToasts] = useState<ToastPayload[]>([])
+  /**
+   * 提示只有**一条通道**：底部状态栏右侧那枚可点的消息片。
+   *
+   * 之前是 toast（右下角浮层）+ 状态栏各来一份，同一个「已复制」显示两遍；
+   * 而且 toast 浮在列表上方会挡住内容。状态栏在最下方、不挡东西、还支持点击复制，
+   * 留它就够了。
+   */
   const [statusMsg, setStatusMsg] = useState<{ kind: string; text: string } | null>(null)
   const statusTimer = useRef<number | undefined>(undefined)
   /** 正在开系统文件对话框（防重入） */
@@ -127,16 +130,13 @@ export default function App() {
     }
   }, [])
 
-  const pushToast = useCallback((kind: ToastPayload['kind'], message: string) => {
-    const id = `toast-${++toastSeq}`
-    setToasts((prev) => [...prev, { id, kind, message }])
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4200)
-    // 状态栏再留一份：toast 4.2s 就没了，长路径/报错要能回看与复制
+  const notify = useCallback((kind: 'info' | 'success' | 'warn' | 'error', message: string) => {
     setStatusMsg({ kind, text: message })
     if (statusTimer.current) window.clearTimeout(statusTimer.current)
+    // 没有 toast 了，报错/警告多留一会儿（8s），普通提示 4s
     statusTimer.current = window.setTimeout(
       () => setStatusMsg(null),
-      kind === 'warn' || kind === 'error' ? 6000 : 3000
+      kind === 'warn' || kind === 'error' ? 8000 : 4000
     )
   }, [])
 
@@ -176,8 +176,8 @@ export default function App() {
   const downloadPhase = download?.state
   useEffect(() => {
     if (downloadPhase !== 'done' && downloadPhase !== 'error') return
-    if (downloadPhase === 'done') pushToast('success', s.downloadDone)
-    else pushToast('error', s.downloadFailed)
+    if (downloadPhase === 'done') notify('success', s.downloadDone)
+    else notify('error', s.downloadFailed)
     void refreshModels()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadPhase])
@@ -189,9 +189,9 @@ export default function App() {
   const reportStart = useCallback(
     (r: StartResult) => {
       if (r.ok) return
-      pushToast('warn', r.reason ?? s.blockNothing)
+      notify('warn', r.reason ?? s.blockNothing)
     },
-    [s, pushToast]
+    [s, notify]
   )
 
   const saveAllSettings = async () => {
@@ -205,7 +205,7 @@ export default function App() {
     setSettingsBaseline(structuredClone(saved))
     setHotwordsBaseline(structuredClone(savedHw))
     await refreshModels()
-    pushToast('success', s.saved)
+    notify('success', s.saved)
   }
 
 
@@ -228,7 +228,7 @@ export default function App() {
       try {
         const r = await window.oneasr.pickFiles()
         if (!r.ok) {
-          pushToast('error', `${s.dialogFailed}: ${r.error || ''}`)
+          notify('error', `${s.dialogFailed}: ${r.error || ''}`)
           return
         }
         list = r.paths
@@ -236,7 +236,7 @@ export default function App() {
         setPicking(false)
       }
       if (!list.length) {
-        pushToast('info', s.noFiles)
+        notify('info', s.noFiles)
         return
       }
     }
@@ -251,7 +251,7 @@ export default function App() {
     const media = exts.length ? list.filter(isSupported) : list
     const skipped = list.length - media.length
     if (skipped > 0) {
-      pushToast(media.length === 0 ? 'warn' : 'info', unsupportedCount(lang, skipped))
+      notify(media.length === 0 ? 'warn' : 'info', unsupportedCount(lang, skipped))
     }
     if (!media.length) return
     setTasks(await window.oneasr.addTasks(media))
@@ -266,7 +266,7 @@ export default function App() {
       .map((f) => (f as File & { path?: string }).path)
       .filter((p): p is string => !!p)
     if (paths.length) void addFiles(paths)
-    else pushToast('warn', s.noFiles)
+    else notify('warn', s.noFiles)
   }
 
   const emptyStats: StatsSnapshot = {
@@ -310,7 +310,7 @@ export default function App() {
             void window.oneasr.clearTasks().then((next) => {
               setTasks(next)
               // 正在跑的那条不再被一起清掉；说一声，免得以为没生效
-              if (next.some((t) => t.status === 'running')) pushToast('info', s.clearedKeptRunning)
+              if (next.some((t) => t.status === 'running')) notify('info', s.clearedKeptRunning)
             })
           }
         >
@@ -393,7 +393,7 @@ export default function App() {
               void window.oneasr.setTaskHotwordGroup(id, groupId).then(setTasks)
             }
             onCopyError={(text) =>
-              void window.oneasr.copyText(text).then(() => pushToast('success', s.copied))
+              void window.oneasr.copyText(text).then(() => notify('success', s.copied))
             }
           />
         )}
@@ -404,22 +404,8 @@ export default function App() {
         status={status}
         tasks={tasks}
         message={statusMsg}
-        onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => pushToast('success', s.copied))}
+        onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => notify('success', s.copied))}
       />
-
-      <div className="toast-stack">
-        <AnimatePresence>
-          {toasts.map((toast) => (
-            <motion.div
-              key={toast.id}
-              className={`toast ${toast.kind}`}
-              {...toastMotion}
-            >
-              {toast.message}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
 
       <AnimatePresence>
         {welcomeOpen && (
@@ -449,7 +435,7 @@ export default function App() {
             onReset={() => {
               if (settingsBaseline) setDraft(structuredClone(settingsBaseline))
               if (hotwordsBaseline) setHotwordDraft(structuredClone(hotwordsBaseline))
-              pushToast('info', s.discardChanges)
+              notify('info', s.discardChanges)
             }}
             onRestoreDefaults={() => {
               // 真·恢复默认：写盘（settings:reset），再把草稿与基线对齐
@@ -458,7 +444,7 @@ export default function App() {
                 setSettingsBaseline(structuredClone(saved))
                 setDraft(structuredClone(saved))
                 void refreshModels()
-                pushToast('success', s.restored)
+                notify('success', s.restored)
               })
             }}
             onClose={() => {
@@ -470,7 +456,7 @@ export default function App() {
             onPickDir={() =>
               void window.oneasr.pickDirectory(draft.output_dir).then((r) => {
                 if (!r.ok) {
-                  pushToast('error', `${s.dialogFailed}: ${r.error || ''}`)
+                  notify('error', `${s.dialogFailed}: ${r.error || ''}`)
                   return
                 }
                 if (r.path) setDraft({ ...draft, output_dir: r.path })
@@ -479,7 +465,7 @@ export default function App() {
             onPickModel={(field) =>
               void window.oneasr.pickModelDir(draft[field] as string).then((r) => {
                 if (!r.ok) {
-                  pushToast('error', `${s.dialogFailed}: ${r.error || ''}`)
+                  notify('error', `${s.dialogFailed}: ${r.error || ''}`)
                   return
                 }
                 if (r.path) setDraft({ ...draft, [field]: r.path })

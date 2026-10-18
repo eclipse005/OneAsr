@@ -352,6 +352,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--muted); font-size: 0.78rem;
 }
 .statusbar .sep { width: 1px; height: 14px; background: var(--line); }
+.statusbar .grow { flex: 1 1 auto; min-width: 8px; }
 /* 状态栏的「最近一条提示」：可点击复制，toast 消失后还能回看 */
 .statusbar .status-chip {
   max-width: 44ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -600,17 +601,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   direction: rtl; text-align: left;
 }
 
-.toast-stack {
-  position: fixed; right: 16px; bottom: 48px; z-index: 60;
-  display: flex; flex-direction: column; gap: 8px; max-width: min(360px, calc(100% - 32px));
-}
-.toast {
-  padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line);
-  background: var(--panel); box-shadow: var(--shadow); font-size: 0.86rem; color: var(--text);
-}
-.toast.error { border-color: #fecaca; background: #fff7f7; color: var(--danger); }
-.toast.success { border-color: #a7f3d0; background: #f0fdf9; color: #047857; }
-.toast.warn { border-color: #fed7aa; background: var(--warn-soft); color: var(--warn); }
+
 
 .note {
   font-size: 0.75rem; color: var(--muted); background: var(--accent-mist);

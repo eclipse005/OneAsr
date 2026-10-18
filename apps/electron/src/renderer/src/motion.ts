@@ -23,10 +23,3 @@ export const rowMotion = {
   transition: { duration: 0.2, ease: EASE_OUT }
 }
 
-/** 提示（toast）：从右下角推入 */
-export const toastMotion = {
-  initial: { opacity: 0, y: 10, x: 6 },
-  animate: { opacity: 1, y: 0, x: 0 },
-  exit: { opacity: 0, y: 6 },
-  transition: { duration: 0.18, ease: EASE_OUT }
-}

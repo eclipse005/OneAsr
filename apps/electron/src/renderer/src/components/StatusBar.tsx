@@ -63,6 +63,8 @@ export function StatusBar({
           </span>
         </>
       )}
+      {/* 提示贴着右下角：左侧是"环境信息"，右侧是"最近发生的事" */}
+      <span className="grow" />
       {message && (
         <>
           <span className="sep" />
