@@ -133,28 +133,19 @@ impl OneAsrApp {
         self.picking = true;
         let tx = self.tx.clone();
         thread::spawn(move || {
+            // 媒体清单来自 core 那张唯一的表（media_filter_exts）；文稿三种是另一类
+            // 东西，单独列——媒体表里加了扩展名，这里和「全部」自动跟上。
+            let media = media_filter_exts();
+            let mut all: Vec<&str> = media.clone();
+            all.extend_from_slice(TRANSCRIPT_FILTER_EXTS);
             let files = rfd::FileDialog::new()
                 .set_title(t(L::DLG_ADD_MEDIA))
                 // 「全部」必须排在第一个并且**默认选中**：rfd 一次只能选当前
                 // 过滤器匹配的类型，而「音频和它的文稿一起挑」正是这个功能要的
                 // 动作——先切过滤器选媒体、再切回来选文稿，那不叫一步。
-                .add_filter(
-                    "All supported",
-                    &[
-                        // media
-                        "wav", "mp3", "m4a", "flac", "ogg", "opus", "mp4", "mkv", "mov", "webm",
-                        "avi", "m4v", "aac", "wma", // transcript
-                        "txt", "md", "srt",
-                    ],
-                )
-                .add_filter(
-                    "Media",
-                    &[
-                        "wav", "mp3", "m4a", "flac", "ogg", "opus", "mp4", "mkv", "mov", "webm",
-                        "avi", "m4v", "aac", "wma",
-                    ],
-                )
-                .add_filter("Transcript", &["txt", "md", "srt"])
+                .add_filter("All supported", &all)
+                .add_filter("Media", &media)
+                .add_filter("Transcript", TRANSCRIPT_FILTER_EXTS)
                 .pick_files();
             match files {
                 Some(paths) => {
@@ -357,5 +348,42 @@ impl OneAsrApp {
             );
         }
         cx.notify();
+    }
+}
+
+/// 添加对话框「Media」过滤器的扩展名清单 = core 那张唯一的表
+/// （[`oneasr_core::media::supported_exts`]）。
+///
+/// 过滤器少一个扩展名，用户的感受是「文件明明拖得进来，对话框里却选不到」——
+/// .flv / .ts / .3gp 这几个就是这么漏的。清单从 core 借出来（rfd 要 `&[&str]`），
+/// 顺序与大小写都以 core 为准；在这里再抄一份短表就等于又开一个真相。
+fn media_filter_exts() -> Vec<&'static str> {
+    oneasr_core::media::supported_exts()
+}
+
+/// 文稿过滤器：与媒体表**不是**一类东西（见 core `transcript`），单独列。
+const TRANSCRIPT_FILTER_EXTS: &[&str] = &["txt", "md", "srt"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 「Media」过滤器就是 core 那一份表：扩展名、顺序、大小写逐条一致。
+    ///
+    /// 断骨锚点：把 `media_filter_exts()` 改回写死的 14 项短表（缺
+    /// flv/ts/mpeg/mpg/wmv/3gp），第 1 条断言立刻变红。
+    #[test]
+    fn the_media_filter_is_the_core_extension_table() {
+        assert_eq!(media_filter_exts(), oneasr_core::media::supported_exts());
+        for ext in ["flv", "ts", "3gp"] {
+            assert!(
+                media_filter_exts().contains(&ext),
+                "Media 过滤器必须能选到 .{ext}"
+            );
+        }
+        assert!(!media_filter_exts().contains(&"txt"), "文稿不是媒体");
+        for ext in TRANSCRIPT_FILTER_EXTS {
+            assert!(!media_filter_exts().contains(ext), "{ext} 不该进媒体表");
+        }
     }
 }

@@ -8,13 +8,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// 媒体扩展名与添加对话框的过滤器一致。两处必须同步：这里决定「什么建任务」，
-/// 那里决定「什么能被选到」。
-const MEDIA_EXTS: &[&str] = &[
-    "wav", "mp3", "m4a", "flac", "ogg", "opus", "aac", "wma", "mp4", "mkv", "mov", "webm", "avi",
-    "m4v",
-];
-
 /// 选完文件之后的配对结果。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pairing {
@@ -34,14 +27,13 @@ fn stem_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn ext_of(path: &Path) -> String {
-    path.extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default()
-}
-
+/// 是不是媒体，由 core 那张唯一的表回答（[`oneasr_core::media::media_kind`]）：
+/// 界面层不再留第二份扩展名清单——这里决定「什么建任务」，添加对话框的过滤器
+/// 决定「什么能被选到」，同一个问题不允许有两个答案。
+///
+/// 纯扩展名判断：本模块不碰文件系统，「这个路径存不存在」不在判断里。
 pub fn is_media(path: &Path) -> bool {
-    MEDIA_EXTS.contains(&ext_of(path).as_str())
+    oneasr_core::media::media_kind(path) != oneasr_core::media::MediaKind::Other
 }
 
 pub fn is_transcript(path: &Path) -> bool {
@@ -163,6 +155,24 @@ mod tests {
         let got = pair_picked(&[p("a.txt")]);
         assert!(got.media.is_empty());
         assert_eq!(got.unpaired_texts, vec![p("a.txt")]);
+    }
+
+    /// .flv（以及 ts / 3gp 这类曾经的短表缺口）算媒体：它和同名文稿是一对，
+    /// 不是「配不上的文稿」。
+    ///
+    /// 断骨锚点：把 `is_media` 改回写死的 14 项短表（缺 flv/ts/mpeg/mpg/wmv/3gp），
+    /// 本用例立刻变红——.flv 会掉进 `unpaired_texts`，用户被告知文稿没配上媒体。
+    #[test]
+    fn a_media_extension_outside_the_old_short_table_still_pairs() {
+        assert!(is_media(&p("talk.flv")));
+        assert!(is_media(&p("talk.ts")));
+        assert!(is_media(&p("talk.3gp")));
+        assert!(!is_media(&p("talk.txt")));
+
+        let got = pair_picked(&[p("talk.flv"), p("talk.txt")]);
+        assert_eq!(got.media, vec![p("talk.flv")]);
+        assert_eq!(got.transcripts, vec![(p("talk.txt"), p("talk.flv"))]);
+        assert!(got.unpaired_texts.is_empty(), "不该被当成配不上的文稿");
     }
 
     /// 两个同 stem 的媒体各接一份文稿——不替用户合并任务。
