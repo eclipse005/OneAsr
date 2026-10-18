@@ -31,10 +31,15 @@ export interface ModelStatus {
   asrReady: boolean
   alignerReady: boolean
   demucsReady: boolean
+  sensevoiceReady: boolean
   asrPath: string
   alignerPath: string
   demucsPath: string
+  sensevoicePath: string
   ready: boolean
+  asrLabel: string
+  alignerLabel: string
+  backend: string
 }
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
@@ -45,19 +50,67 @@ export interface TaskSnapshot {
   name: string
   status: TaskStatus
   progress: string
+  stage?: string
+  progressPct?: number
   outputPath?: string
   error?: string
   startedAt?: number
   finishedAt?: number
+  hotwordGroupId?: string | null
+}
+
+/** One finished-task row from stats.jsonl (oneasr-core compatible). */
+export interface StatsRecord {
+  v?: number
+  day: string
+  media_sec?: number
+  process_ms: number
+  lang: string
+  sep?: boolean
+  transcript?: boolean
+  ok: boolean
+  cues?: number
+}
+
+export interface DayStat {
+  day: string
+  mediaSec: number
+  tasks: number
+  errors: number
 }
 
 export interface StatsSnapshot {
-  totalRuns: number
-  successCount: number
-  errorCount: number
+  tasksOk: number
+  tasksErr: number
+  tasksTotal: number
+  mediaSec: number
+  processMs: number
+  savedSec: number | null
+  avgRealtime: number | null
+  cues: number
+  sepTasks: number
+  langs: Array<{ lang: string; count: number }>
+  perDay: DayStat[]
+  longestMediaSec: number | null
+  fastestSpeed: number | null
+  firstDay: string | null
+  recentSession: Array<{ name: string; status: TaskStatus; durationMs?: number; at: number }>
   lastOutput?: string
   lastDurationMs?: number
-  recent: Array<{ name: string; status: TaskStatus; durationMs?: number; at: number }>
+}
+
+export interface HotwordGroup {
+  id: string
+  name: string
+  words: string
+}
+
+export interface HotwordStore {
+  groups: HotwordGroup[]
+  default_group: string | null
+  default_group_enabled: boolean
+  top_k: number
+  threshold: number
 }
 
 export interface AppInfo {
@@ -65,4 +118,12 @@ export interface AppInfo {
   cliPath: string
   display: string | undefined
   version: string
+}
+
+export type ToastKind = 'info' | 'success' | 'error' | 'warn'
+
+export interface ToastPayload {
+  id: string
+  kind: ToastKind
+  message: string
 }

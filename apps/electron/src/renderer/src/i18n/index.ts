@@ -5,27 +5,29 @@ const zh = {
   add: '添加',
   startAll: '全部开始',
   clear: '清空',
+  cancel: '取消',
   settings: '设置',
   stats: '统计',
   guide: '指南',
+  hotwords: '热词',
   save: '保存',
   reset: '重置',
   unsaved: '有未保存更改',
   saved: '已保存',
-  cancel: '取消',
   gotIt: '知道了',
   openSettings: '打开设置',
   welcomeTitle: '欢迎使用 OneAsr',
   welcomeBody:
-    '把音视频拖进来，OneAsr 会转成带时间轴的字幕。首次请确认识别模型与对齐模型已就绪，可在设置里调整语言、输出格式与后端。',
+    '把音视频拖进来即可生成带时间轴的字幕。请先确认状态栏显示模型就绪，再在设置里调整语言、输出格式与计算后端。',
   emptyTitle: '拖放音视频到此处',
   emptyHint: '或点击「添加」选择文件 · 支持 wav / mp3 / mp4 / mkv …',
   dropActive: '松开以添加文件',
   modelsReady: '模型就绪',
   modelsNotReady: '模型未就绪',
-  asr: '识别模型',
-  aligner: '对齐模型',
+  asr: '识别',
+  aligner: '对齐',
   demucs: '人声分离',
+  sensevoice: '粗转',
   start: '开始',
   openFolder: '打开目录',
   remove: '移除',
@@ -33,6 +35,7 @@ const zh = {
   running: '进行中',
   done: '完成',
   error: '失败',
+  cancelled: '已取消',
   uiLanguage: '界面语言',
   recognitionLanguage: '识别语言',
   subtitleLength: '字幕长度',
@@ -66,26 +69,50 @@ const zh = {
   ctc: 'CTC',
   qwen: 'Qwen',
   browse: '浏览…',
-  statsEmpty: '还没有运行记录',
+  openModels: '打开模型目录',
+  downloadNote:
+    'Electron 版不内置 ModelScope 大模型下载（避免夜间拉数 GB 权重）。请将已下载权重放到 models/ 目录，或用「浏览」选择路径；状态点会即时刷新。',
+  ready: '就绪',
+  missing: '缺失',
+  statsEmpty: '还没有运行记录 — 完成一次转写后这里会亮起来',
   statsTitle: '运行统计',
   totalRuns: '总次数',
   success: '成功',
   failures: '失败',
+  savedTime: '节省时长',
+  avgSpeed: '平均倍速',
+  cues: '字幕条数',
+  mediaProcessed: '处理媒体',
+  heatTitle: '近 90 日活跃',
+  langTitle: '语言分布',
+  recent: '本次会话',
   lastDuration: '最近耗时',
-  recent: '最近任务',
   guideTitle: '使用指南',
-  guideBody: `1. 确认状态栏显示「模型就绪」（设置里检查 ASR / 对齐路径）。
-2. 添加或拖入音视频，点「全部开始」或单条「开始」。
-3. 在设置中选择识别语言、字幕长度、输出格式（SRT / TXT / ASS）。
-4. 完成后可「打开目录」查看字幕；默认优先写到源文件旁。
-5. CPU / GPU 后端可切换；无显卡时请用 CPU。
-6. 人声分离适合嘈杂背景，但会更慢并需要 Demucs 权重。`,
+  guideBody: `1. 确认状态栏「模型就绪」（设置里检查 ASR / 对齐路径）。
+2. 添加或拖入音视频，点「全部开始」或单条「开始」；进行中可「取消」。
+3. 设置中选择识别语言、字幕长度、输出格式（SRT / TXT / ASS）与后端。
+4. 完成后「打开目录」查看字幕；默认优先写到源文件旁。
+5. 热词：编辑组与词表（落盘 hotword.json）。完整粗转召回需 CLI 支持 --hotwords。
+6. 人声分离适合嘈杂背景，需要 Demucs 权重且更慢。`,
   sectionGeneral: '界面与语言',
   sectionOutput: '输出',
   sectionModels: '模型',
   sectionCompute: '计算与其它',
   close: '关闭',
-  pickModel: '选择模型目录'
+  pickModel: '选择模型目录',
+  hotwordTitle: '热词库',
+  hotwordHint:
+    '词组保存在 hotword.json，与 GPUI 共用。任务默认是否启用热词见下方开关。若当前 oneasr-cli 不支持 --hotwords，开跑时会忽略或报错，请改用 oneasr-cli-hotword 或清空热词。',
+  groupName: '组名',
+  words: '词表（逗号 / 换行）',
+  addGroup: '新建组',
+  deleteGroup: '删除组',
+  defaultGroup: '新任务默认用热词',
+  topK: 'Top-K',
+  threshold: '阈值',
+  dialogFailed: '打开文件对话框失败',
+  noFiles: '未选择文件',
+  backend: '后端'
 } as const
 
 type Dict = { [K in keyof typeof zh]: string }
@@ -95,27 +122,29 @@ const en: Dict = {
   add: 'Add',
   startAll: 'Start all',
   clear: 'Clear',
+  cancel: 'Cancel',
   settings: 'Settings',
   stats: 'Stats',
   guide: 'Guide',
+  hotwords: 'Hotwords',
   save: 'Save',
   reset: 'Reset',
   unsaved: 'Unsaved changes',
   saved: 'Saved',
-  cancel: 'Cancel',
   gotIt: 'Got it',
   openSettings: 'Open settings',
   welcomeTitle: 'Welcome to OneAsr',
   welcomeBody:
-    'Drop media here to generate timed subtitles. Make sure ASR and aligner models are ready, then tune language, formats, and backend in Settings.',
+    'Drop media to generate timed subtitles. Make sure the status bar shows models ready, then tune language, formats, and backend in Settings.',
   emptyTitle: 'Drop media here',
   emptyHint: 'Or click Add · wav / mp3 / mp4 / mkv …',
   dropActive: 'Release to add',
   modelsReady: 'Models ready',
   modelsNotReady: 'Models not ready',
-  asr: 'ASR model',
+  asr: 'ASR',
   aligner: 'Aligner',
-  demucs: 'Vocal sep.',
+  demucs: 'Vocals',
+  sensevoice: 'SenseVoice',
   start: 'Start',
   openFolder: 'Open folder',
   remove: 'Remove',
@@ -123,6 +152,7 @@ const en: Dict = {
   running: 'Running',
   done: 'Done',
   error: 'Error',
+  cancelled: 'Cancelled',
   uiLanguage: 'UI language',
   recognitionLanguage: 'Recognition language',
   subtitleLength: 'Subtitle length',
@@ -156,31 +186,55 @@ const en: Dict = {
   ctc: 'CTC',
   qwen: 'Qwen',
   browse: 'Browse…',
-  statsEmpty: 'No runs yet',
+  openModels: 'Open models folder',
+  downloadNote:
+    'This Electron build does not download multi-GB ModelScope weights overnight. Place weights under models/ or Browse to a folder; status dots refresh immediately.',
+  ready: 'Ready',
+  missing: 'Missing',
+  statsEmpty: 'No runs yet — finish a transcription to light this up',
   statsTitle: 'Run stats',
   totalRuns: 'Total',
   success: 'Success',
   failures: 'Failures',
+  savedTime: 'Time saved',
+  avgSpeed: 'Avg realtime',
+  cues: 'Cues',
+  mediaProcessed: 'Media processed',
+  heatTitle: 'Last 90 days',
+  langTitle: 'Languages',
+  recent: 'This session',
   lastDuration: 'Last duration',
-  recent: 'Recent',
   guideTitle: 'Guide',
-  guideBody: `1. Status bar should say Models ready (check ASR / aligner paths in Settings).
-2. Add or drop media, then Start all or Start one.
-3. Tune language, subtitle length, and formats (SRT / TXT / ASS).
+  guideBody: `1. Status bar should say Models ready (check ASR / aligner paths).
+2. Add or drop media, then Start all or Start one; Cancel while running.
+3. Tune language, subtitle length, formats (SRT / TXT / ASS) and backend.
 4. Open folder when done; default prefers saving beside the source.
-5. Switch CPU / GPU; use CPU without a GPU driver.
-6. Vocal separation helps noisy audio but needs Demucs weights and more time.`,
+5. Hotwords: edit groups in hotword.json. Full recall needs CLI --hotwords support.
+6. Vocal separation needs Demucs weights and more time.`,
   sectionGeneral: 'UI & language',
   sectionOutput: 'Output',
   sectionModels: 'Models',
   sectionCompute: 'Compute & more',
   close: 'Close',
-  pickModel: 'Choose model folder'
+  pickModel: 'Choose model folder',
+  hotwordTitle: 'Hotword library',
+  hotwordHint:
+    'Groups live in hotword.json (shared with GPUI). Toggle default for new tasks below. If oneasr-cli lacks --hotwords, runs may ignore or error — clear hotwords or use oneasr-cli-hotword.',
+  groupName: 'Group name',
+  words: 'Words (comma / newline)',
+  addGroup: 'Add group',
+  deleteGroup: 'Delete group',
+  defaultGroup: 'Use hotwords on new tasks',
+  topK: 'Top-K',
+  threshold: 'Threshold',
+  dialogFailed: 'File dialog failed',
+  noFiles: 'No files selected',
+  backend: 'Backend'
 }
 
-export function resolveUiLang(setting: string, systemLang?: string): UiLang {
+export function resolveUiLang(setting: string): UiLang {
   if (setting === 'zh' || setting === 'en') return setting
-  const sys = (systemLang || navigator.language || 'en').toLowerCase()
+  const sys = (navigator.language || 'en').toLowerCase()
   return sys.startsWith('zh') ? 'zh' : 'en'
 }
 
@@ -196,3 +250,13 @@ export const LANG_OPTIONS = [
   { id: 'ko', label: '한국어' },
   { id: 'auto', label: 'Auto' }
 ]
+
+export function formatDuration(sec: number | null | undefined): string {
+  if (sec == null || !Number.isFinite(sec)) return '—'
+  if (sec < 60) return `${sec.toFixed(1)}s`
+  const m = Math.floor(sec / 60)
+  const s = Math.round(sec % 60)
+  if (m < 60) return `${m}m ${s}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m`
+}

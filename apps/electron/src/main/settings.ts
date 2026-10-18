@@ -138,6 +138,8 @@ export function checkModels(settings: Settings, appRoot = DEFAULT_APP_ROOT) {
   const asrPath = resolveAsrDir(settings, appRoot)
   const alignerPath = settings.aligner_model_dir
   const demucsPath = settings.demucs_model_dir
+  const sensevoicePath =
+    settings.sensevoice_model_dir || path.join(appRoot, 'models', 'SenseVoiceSmall')
   const asrReady = hasModelFiles(asrPath)
   const alignerReady =
     hasModelFiles(alignerPath) || fs.existsSync(path.join(alignerPath, 'config.json'))
@@ -145,9 +147,25 @@ export function checkModels(settings: Settings, appRoot = DEFAULT_APP_ROOT) {
     fs.existsSync(path.join(demucsPath, 'htdemucs_ft_vocals.safetensors')) ||
     fs.existsSync(path.join(demucsPath, 'model.safetensors')) ||
     (fs.existsSync(demucsPath) && fs.readdirSync(demucsPath).length > 0)
+  const sensevoiceReady =
+    hasModelFiles(sensevoicePath) ||
+    (fs.existsSync(sensevoicePath) && fs.readdirSync(sensevoicePath).length > 0)
   const needAligner = settings.output_srt || settings.output_ass
   const ready = asrReady && (!needAligner || alignerReady)
-  return { asrReady, alignerReady, demucsReady, asrPath, alignerPath, demucsPath, ready }
+  return {
+    asrReady,
+    alignerReady,
+    demucsReady,
+    sensevoiceReady,
+    asrPath,
+    alignerPath,
+    demucsPath,
+    sensevoicePath,
+    ready,
+    asrLabel: path.basename(asrPath) || settings.asr_model,
+    alignerLabel: path.basename(alignerPath) || settings.aligner_model,
+    backend: settings.backend || 'auto'
+  }
 }
 
 export { ASR_CATALOG, ALIGNER_CATALOG }

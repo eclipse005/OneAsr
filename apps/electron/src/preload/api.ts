@@ -1,4 +1,22 @@
-import type { Settings, ModelStatus, TaskSnapshot, StatsSnapshot, AppInfo } from '../shared/types'
+import type {
+  Settings,
+  ModelStatus,
+  TaskSnapshot,
+  StatsSnapshot,
+  AppInfo,
+  HotwordStore
+} from '../shared/types'
+
+export interface DialogFilesResult {
+  ok: boolean
+  paths: string[]
+  error?: string
+}
+export interface DialogPathResult {
+  ok: boolean
+  path: string | null
+  error?: string
+}
 
 export interface OneAsrApi {
   getAppInfo: () => Promise<AppInfo>
@@ -6,9 +24,10 @@ export interface OneAsrApi {
   saveSettings: (settings: Settings) => Promise<Settings>
   resetSettings: () => Promise<Settings>
   checkModels: () => Promise<ModelStatus>
-  pickFiles: () => Promise<string[]>
-  pickDirectory: (defaultPath?: string) => Promise<string | null>
-  pickModelDir: (defaultPath?: string) => Promise<string | null>
+  openModelsFolder: () => Promise<void>
+  pickFiles: () => Promise<DialogFilesResult>
+  pickDirectory: (defaultPath?: string) => Promise<DialogPathResult>
+  pickModelDir: (defaultPath?: string) => Promise<DialogPathResult>
   openPath: (path: string) => Promise<void>
   openOutputFolder: (filePath: string) => Promise<void>
   listTasks: () => Promise<TaskSnapshot[]>
@@ -17,9 +36,13 @@ export interface OneAsrApi {
   clearTasks: () => Promise<TaskSnapshot[]>
   startTask: (id: string) => Promise<void>
   startAll: () => Promise<void>
+  cancelTask: (id: string) => Promise<void>
   getStats: () => Promise<StatsSnapshot>
+  getHotwords: () => Promise<HotwordStore>
+  saveHotwords: (store: HotwordStore) => Promise<HotwordStore>
   onTasksUpdated: (cb: (tasks: TaskSnapshot[]) => void) => () => void
   onTaskProgress: (cb: (payload: { id: string; line: string }) => void) => () => void
+  onStatsUpdated: (cb: (stats: StatsSnapshot) => void) => () => void
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>

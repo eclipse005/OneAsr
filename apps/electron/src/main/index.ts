@@ -8,12 +8,11 @@ import {
   saveSettings
 } from './settings'
 import { JobManager } from './jobs'
-import type { Settings } from '../shared/types'
+import { loadHotwords, saveHotwords } from './hotword'
+import type { HotwordStore, Settings } from '../shared/types'
 
-// Software rendering for headless / remote DISPLAY
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
-app.commandLine.appendSwitch('disable-software-rasterizer')
 app.commandLine.appendSwitch('no-sandbox')
 
 let mainWindow: BrowserWindow | null = null
@@ -21,12 +20,12 @@ const jobs = new JobManager()
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 780,
-    minWidth: 880,
-    minHeight: 600,
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 620,
     frame: false,
-    backgroundColor: '#0b1418',
+    backgroundColor: '#f4f6f8',
     title: 'OneAsr',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -42,12 +41,9 @@ function createWindow(): void {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  jobs.on('tasks', (tasks) => {
-    mainWindow?.webContents.send('tasks:updated', tasks)
-  })
-  jobs.on('progress', (payload) => {
-    mainWindow?.webContents.send('task:progress', payload)
-  })
+  jobs.on('tasks', (tasks) => mainWindow?.webContents.send('tasks:updated', tasks))
+  jobs.on('progress', (payload) => mainWindow?.webContents.send('task:progress', payload))
+  jobs.on('stats', (stats) => mainWindow?.webContents.send('stats:updated', stats))
 }
 
 function registerIpc(): void {
@@ -55,57 +51,58 @@ function registerIpc(): void {
     appRoot: DEFAULT_APP_ROOT,
     cliPath: join(DEFAULT_APP_ROOT, 'oneasr-cli'),
     display: process.env.DISPLAY,
-    version: '0.1.0-electron'
+    version: '0.2.0-electron'
   }))
 
   ipcMain.handle('settings:get', () => loadSettings())
   ipcMain.handle('settings:save', (_e, settings: Settings) => saveSettings(settings))
-  ipcMain.handle('settings:reset', () => {
-    const d = defaultSettings()
-    return saveSettings(d)
-  })
+  ipcMain.handle('settings:reset', () => saveSettings(defaultSettings()))
   ipcMain.handle('models:check', () => checkModels(loadSettings()))
+  ipcMain.handle('models:openFolder', async () => {
+    const dir = join(DEFAULT_APP_ROOT, 'models')
+    await shell.openPath(dir)
+  })
 
   ipcMain.handle('dialog:pickFiles', async () => {
-    const r = await dialog.showOpenDialog(mainWindow!, {
-      properties: ['openFile', 'multiSelections'],
-      filters: [
-        {
-          name: 'Media',
-          extensions: [
-            'wav',
-            'mp3',
-            'flac',
-            'm4a',
-            'aac',
-            'ogg',
-            'mp4',
-            'mkv',
-            'mov',
-            'webm',
-            'avi'
-          ]
-        },
-        { name: 'All', extensions: ['*'] }
-      ]
-    })
-    return r.canceled ? [] : r.filePaths
+    try {
+      const r = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          {
+            name: 'Media',
+            extensions: ['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg', 'mp4', 'mkv', 'mov', 'webm', 'avi']
+          },
+          { name: 'All', extensions: ['*'] }
+        ]
+      })
+      return { ok: true as const, paths: r.canceled ? [] : r.filePaths }
+    } catch (e) {
+      return { ok: false as const, paths: [] as string[], error: String(e) }
+    }
   })
 
   ipcMain.handle('dialog:pickDirectory', async (_e, defaultPath?: string) => {
-    const r = await dialog.showOpenDialog(mainWindow!, {
-      properties: ['openDirectory', 'createDirectory'],
-      defaultPath
-    })
-    return r.canceled ? null : r.filePaths[0] ?? null
+    try {
+      const r = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openDirectory', 'createDirectory'],
+        defaultPath
+      })
+      return { ok: true as const, path: r.canceled ? null : r.filePaths[0] ?? null }
+    } catch (e) {
+      return { ok: false as const, path: null, error: String(e) }
+    }
   })
 
   ipcMain.handle('dialog:pickModelDir', async (_e, defaultPath?: string) => {
-    const r = await dialog.showOpenDialog(mainWindow!, {
-      properties: ['openDirectory'],
-      defaultPath
-    })
-    return r.canceled ? null : r.filePaths[0] ?? null
+    try {
+      const r = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openDirectory'],
+        defaultPath
+      })
+      return { ok: true as const, path: r.canceled ? null : r.filePaths[0] ?? null }
+    } catch (e) {
+      return { ok: false as const, path: null, error: String(e) }
+    }
   })
 
   ipcMain.handle('shell:openPath', async (_e, p: string) => {
@@ -125,7 +122,13 @@ function registerIpc(): void {
   ipcMain.handle('tasks:startAll', () => {
     jobs.startAll()
   })
+  ipcMain.handle('tasks:cancel', (_e, id: string) => {
+    jobs.cancel(id)
+  })
   ipcMain.handle('stats:get', () => jobs.getStats())
+
+  ipcMain.handle('hotword:get', () => loadHotwords())
+  ipcMain.handle('hotword:save', (_e, store: HotwordStore) => saveHotwords(store))
 
   ipcMain.handle('window:minimize', () => mainWindow?.minimize())
   ipcMain.handle('window:maximize', () => {
@@ -139,9 +142,6 @@ function registerIpc(): void {
 app.whenReady().then(() => {
   registerIpc()
   createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
 })
 
 app.on('window-all-closed', () => {

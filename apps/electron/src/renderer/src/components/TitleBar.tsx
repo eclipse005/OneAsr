@@ -9,13 +9,13 @@ export function TitleBar({ lang }: { lang: UiLang }) {
         <span>{s.appName}</span>
       </div>
       <div className="spacer" />
-      <button className="win-btn" onClick={() => window.oneasr.windowMinimize()} title="—">
+      <button className="win-btn" type="button" onClick={() => void window.oneasr.windowMinimize()}>
         ─
       </button>
-      <button className="win-btn" onClick={() => window.oneasr.windowMaximize()} title="□">
+      <button className="win-btn" type="button" onClick={() => void window.oneasr.windowMaximize()}>
         ▢
       </button>
-      <button className="win-btn close" onClick={() => window.oneasr.windowClose()} title="×">
+      <button className="win-btn close" type="button" onClick={() => void window.oneasr.windowClose()}>
         ×
       </button>
     </div>

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
-import type { Settings } from '../../../shared/types'
+import type { ModelStatus, Settings } from '../../../shared/types'
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -11,6 +11,14 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
       aria-checked={on}
       onClick={() => onChange(!on)}
     />
+  )
+}
+
+function Pill({ ok, label, ready, missing }: { ok: boolean; label: string; ready: string; missing: string }) {
+  return (
+    <span className={`status-pill ${ok ? 'ready' : 'missing'}`}>
+      {label}: {ok ? ready : missing}
+    </span>
   )
 }
 
@@ -30,23 +38,29 @@ function alignerKind(model: string): 'ctc' | 'qwen' {
 export function SettingsDrawer({
   lang,
   draft,
+  models,
   dirty,
   onChange,
   onSave,
   onReset,
   onClose,
   onPickDir,
-  onPickModel
+  onPickModel,
+  onOpenModels,
+  onRefreshModels
 }: {
   lang: UiLang
   draft: Settings
+  models: ModelStatus | null
   dirty: boolean
   onChange: (next: Settings) => void
   onSave: () => void
   onReset: () => void
   onClose: () => void
   onPickDir: () => void
-  onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir') => void
+  onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir') => void
+  onOpenModels: () => void
+  onRefreshModels: () => void
 }) {
   const s = t(lang)
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -71,9 +85,7 @@ export function SettingsDrawer({
 
   const setAligner = (kind: 'ctc' | 'qwen') => {
     const id = kind === 'qwen' ? 'Qwen3-ForcedAligner-0.6B-hf' : 'omniASR-CTC-300M-v2-hf'
-    const dir =
-      draft.aligner_dirs[id] ||
-      draft.aligner_model_dir.replace(/[^/]+$/, id)
+    const dir = draft.aligner_dirs[id] || draft.aligner_model_dir.replace(/[^/]+$/, id)
     onChange({
       ...draft,
       aligner_model: id,
@@ -87,10 +99,10 @@ export function SettingsDrawer({
       <motion.aside
         className="drawer"
         onClick={(e) => e.stopPropagation()}
-        initial={{ x: 40, opacity: 0 }}
+        initial={{ x: 48, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
-        exit={{ x: 48, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 34 }}
+        exit={{ x: 56, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 420, damping: 36 }}
       >
         <div className="drawer-header">
           <h3>{s.settings}</h3>
@@ -104,10 +116,7 @@ export function SettingsDrawer({
             <h4>{s.sectionGeneral}</h4>
             <div className="field">
               <label>{s.uiLanguage}</label>
-              <select
-                value={draft.ui_language}
-                onChange={(e) => set('ui_language', e.target.value)}
-              >
+              <select value={draft.ui_language} onChange={(e) => set('ui_language', e.target.value)}>
                 <option value="system">{s.system}</option>
                 <option value="zh">中文</option>
                 <option value="en">English</option>
@@ -129,6 +138,7 @@ export function SettingsDrawer({
                 {(['short', 'standard', 'loose'] as const).map((p) => (
                   <button
                     key={p}
+                    type="button"
                     className={`chip ${draft.subtitle_length_preset === p ? 'active' : ''}`}
                     onClick={() => set('subtitle_length_preset', p)}
                   >
@@ -157,35 +167,16 @@ export function SettingsDrawer({
             <div className="field">
               <label>{s.outputs}</label>
               <div className="chip-row">
-                <button
-                  className={`chip ${draft.output_srt ? 'active' : ''}`}
-                  onClick={() => set('output_srt', !draft.output_srt)}
-                >
-                  SRT
-                </button>
-                <button
-                  className={`chip ${draft.output_txt ? 'active' : ''}`}
-                  onClick={() => set('output_txt', !draft.output_txt)}
-                >
-                  TXT
-                </button>
-                <button
-                  className={`chip ${draft.output_ass ? 'active' : ''}`}
-                  onClick={() => set('output_ass', !draft.output_ass)}
-                >
-                  ASS
-                </button>
+                <button type="button" className={`chip ${draft.output_srt ? 'active' : ''}`} onClick={() => set('output_srt', !draft.output_srt)}>SRT</button>
+                <button type="button" className={`chip ${draft.output_txt ? 'active' : ''}`} onClick={() => set('output_txt', !draft.output_txt)}>TXT</button>
+                <button type="button" className={`chip ${draft.output_ass ? 'active' : ''}`} onClick={() => set('output_ass', !draft.output_ass)}>ASS</button>
               </div>
             </div>
             <div className="field">
               <label>{s.chineseScript}</label>
               <div className="chip-row">
                 {(['simplified', 'traditional', 'original'] as const).map((p) => (
-                  <button
-                    key={p}
-                    className={`chip ${draft.text_script === p ? 'active' : ''}`}
-                    onClick={() => set('text_script', p)}
-                  >
+                  <button key={p} type="button" className={`chip ${draft.text_script === p ? 'active' : ''}`} onClick={() => set('text_script', p)}>
                     {s[p]}
                   </button>
                 ))}
@@ -197,123 +188,84 @@ export function SettingsDrawer({
             </div>
             <div className="field">
               <label>{s.saveNextToSource}</label>
-              <Toggle
-                on={draft.save_next_to_source}
-                onChange={(v) => set('save_next_to_source', v)}
-              />
+              <Toggle on={draft.save_next_to_source} onChange={(v) => set('save_next_to_source', v)} />
             </div>
             <div className="field stack">
               <label>{s.outputPath}</label>
               <div className="path-input">
-                <input
-                  className="text-input"
-                  value={draft.output_dir}
-                  onChange={(e) => set('output_dir', e.target.value)}
-                />
-                <button className="btn btn-ghost" onClick={onPickDir}>
-                  {s.browse}
-                </button>
+                <input className="text-input" value={draft.output_dir} onChange={(e) => set('output_dir', e.target.value)} />
+                <button type="button" className="btn btn-ghost" onClick={onPickDir}>{s.browse}</button>
               </div>
             </div>
           </div>
 
           <div className="section">
             <h4>{s.sectionModels}</h4>
+            <div className="chip-row" style={{ marginBottom: 4 }}>
+              <Pill ok={!!models?.asrReady} label={s.asr} ready={s.ready} missing={s.missing} />
+              <Pill ok={!!models?.alignerReady} label={s.aligner} ready={s.ready} missing={s.missing} />
+              <Pill ok={!!models?.demucsReady} label={s.demucs} ready={s.ready} missing={s.missing} />
+            </div>
+            <div className="note">{s.downloadNote}</div>
+            <div className="chip-row">
+              <button type="button" className="btn btn-ghost" onClick={onOpenModels}>{s.openModels}</button>
+              <button type="button" className="btn btn-ghost" onClick={onRefreshModels}>↻</button>
+            </div>
             <div className="field">
               <label>{s.asrSize}</label>
               <div className="chip-row">
-                <button
-                  className={`chip ${size === '0.6B' ? 'active' : ''}`}
-                  onClick={() => setAsr('0.6B', quant)}
-                >
-                  0.6B
-                </button>
-                <button
-                  className={`chip ${size === '1.7B' ? 'active' : ''}`}
-                  onClick={() => setAsr('1.7B', quant)}
-                >
-                  1.7B
-                </button>
+                <button type="button" className={`chip ${size === '0.6B' ? 'active' : ''}`} onClick={() => setAsr('0.6B', quant)}>0.6B</button>
+                <button type="button" className={`chip ${size === '1.7B' ? 'active' : ''}`} onClick={() => setAsr('1.7B', quant)}>1.7B</button>
               </div>
             </div>
             <div className="field">
               <label>{s.quantization}</label>
               <div className="chip-row">
-                <button
-                  className={`chip ${quant === 'fp16' ? 'active' : ''}`}
-                  onClick={() => setAsr(size, 'fp16')}
-                >
-                  {s.fp16}
-                </button>
-                <button
-                  className={`chip ${quant === 'int8' ? 'active' : ''}`}
-                  onClick={() => setAsr(size, 'int8')}
-                >
-                  {s.int8}
-                </button>
+                <button type="button" className={`chip ${quant === 'fp16' ? 'active' : ''}`} onClick={() => setAsr(size, 'fp16')}>{s.fp16}</button>
+                <button type="button" className={`chip ${quant === 'int8' ? 'active' : ''}`} onClick={() => setAsr(size, 'int8')}>{s.int8}</button>
               </div>
             </div>
             <div className="field stack">
               <label>{s.asrPath}</label>
               <div className="path-input">
-                <input
-                  className="text-input"
-                  value={draft.asr_model_dir}
-                  onChange={(e) => set('asr_model_dir', e.target.value)}
-                />
-                <button className="btn btn-ghost" onClick={() => onPickModel('asr_model_dir')}>
-                  {s.browse}
-                </button>
+                <input className="text-input" value={draft.asr_model_dir} onChange={(e) => set('asr_model_dir', e.target.value)} />
+                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('asr_model_dir')}>{s.browse}</button>
               </div>
             </div>
             <div className="field">
               <label>{s.alignerKind}</label>
               <div className="chip-row">
-                <button
-                  className={`chip ${alignerKind(draft.aligner_model) === 'ctc' ? 'active' : ''}`}
-                  onClick={() => setAligner('ctc')}
-                >
-                  {s.ctc}
-                </button>
-                <button
-                  className={`chip ${alignerKind(draft.aligner_model) === 'qwen' ? 'active' : ''}`}
-                  onClick={() => setAligner('qwen')}
-                >
-                  {s.qwen}
-                </button>
+                <button type="button" className={`chip ${alignerKind(draft.aligner_model) === 'ctc' ? 'active' : ''}`} onClick={() => setAligner('ctc')}>{s.ctc}</button>
+                <button type="button" className={`chip ${alignerKind(draft.aligner_model) === 'qwen' ? 'active' : ''}`} onClick={() => setAligner('qwen')}>{s.qwen}</button>
               </div>
             </div>
             <div className="field stack">
               <label>{s.alignerPath}</label>
               <div className="path-input">
-                <input
-                  className="text-input"
-                  value={draft.aligner_model_dir}
-                  onChange={(e) => set('aligner_model_dir', e.target.value)}
-                />
-                <button className="btn btn-ghost" onClick={() => onPickModel('aligner_model_dir')}>
-                  {s.browse}
-                </button>
+                <input className="text-input" value={draft.aligner_model_dir} onChange={(e) => set('aligner_model_dir', e.target.value)} />
+                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('aligner_model_dir')}>{s.browse}</button>
               </div>
             </div>
             <div className="field">
               <label>{s.vocalSep}</label>
-              <Toggle
-                on={draft.vocal_separation}
-                onChange={(v) => set('vocal_separation', v)}
-              />
+              <Toggle on={draft.vocal_separation} onChange={(v) => set('vocal_separation', v)} />
             </div>
             <div className="field stack">
               <label>{s.demucsPath}</label>
               <div className="path-input">
+                <input className="text-input" value={draft.demucs_model_dir} onChange={(e) => set('demucs_model_dir', e.target.value)} />
+                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('demucs_model_dir')}>{s.browse}</button>
+              </div>
+            </div>
+            <div className="field stack">
+              <label>{s.sensevoice} path</label>
+              <div className="path-input">
                 <input
                   className="text-input"
-                  value={draft.demucs_model_dir}
-                  onChange={(e) => set('demucs_model_dir', e.target.value)}
+                  value={draft.sensevoice_model_dir || ''}
+                  onChange={(e) => set('sensevoice_model_dir', e.target.value)}
                 />
-                <button className="btn btn-ghost" onClick={() => onPickModel('demucs_model_dir')}>
-                  {s.browse}
-                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('sensevoice_model_dir')}>{s.browse}</button>
               </div>
             </div>
           </div>
@@ -324,11 +276,7 @@ export function SettingsDrawer({
               <label>{s.computeBackend}</label>
               <div className="chip-row">
                 {(['auto', 'gpu', 'cpu'] as const).map((b) => (
-                  <button
-                    key={b}
-                    className={`chip ${draft.backend === b ? 'active' : ''}`}
-                    onClick={() => set('backend', b)}
-                  >
+                  <button key={b} type="button" className={`chip ${draft.backend === b ? 'active' : ''}`} onClick={() => set('backend', b)}>
                     {s[b]}
                   </button>
                 ))}
@@ -342,12 +290,8 @@ export function SettingsDrawer({
         </div>
         <div className="drawer-footer">
           <span className="hint">{dirty ? s.unsaved : ''}</span>
-          <button className="btn btn-ghost" onClick={onReset}>
-            {s.reset}
-          </button>
-          <button className="btn btn-primary" disabled={!dirty} onClick={onSave}>
-            {s.save}
-          </button>
+          <button type="button" className="btn btn-ghost" onClick={onReset}>{s.reset}</button>
+          <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>{s.save}</button>
         </div>
       </motion.aside>
     </div>

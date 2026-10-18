@@ -21,7 +21,15 @@ export function WelcomeModal({
         transition={{ duration: 0.22 }}
       >
         <div className="modal-header">
-          <div className="logo" style={{ width: 22, height: 22, borderRadius: 8, background: 'linear-gradient(135deg,#2ec4b6,#1aa6c4)' }} />
+          <div
+            className="logo"
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 8,
+              background: 'linear-gradient(135deg,#14b8a6,#0d9488)'
+            }}
+          />
           <h3>{s.welcomeTitle}</h3>
         </div>
         <div className="body">{s.welcomeBody}</div>
