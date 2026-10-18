@@ -19,11 +19,11 @@ import { loadHotwords, wordsCsv } from './hotword'
 import {
   JobQueue,
   type KillCommand,
-  type KillSignal,
   type QueueCommand,
   type RunId,
   type SpawnCommand
 } from './queue'
+import { killProcessTree } from './kill-tree'
 
 let seq = 0
 function nextId(): string {
@@ -36,45 +36,6 @@ async function probeInput(file: string): Promise<ProbeResult | undefined> {
   const r = await runCliJson<ProbeResult>(['probe', '--input', file, '--json'], 30000)
   if (!r.ok) logWarn(`probe failed for ${file}: ${r.error ?? 'unknown'}`)
   return r.ok ? r.data : undefined
-}
-
-/**
- * 杀掉一个 child 及其整棵进程树（转写会带出 ffmpeg 等后代）。
- *
- * - POSIX：spawn 时用 detached 建了独立进程组，往 -pid 发信号才能连后代一起收。
- * - Windows：Node 的 kill 只打得到直接子进程；SIGKILL 阶段用 taskkill /T /F 兜底。
- *   已知上限：CLI 先崩、ffmpeg 脱离后树根（CLI pid）已经不在了，taskkill 找不到这棵树。
- */
-function killProcessTree(child: ChildProcess, signal: KillSignal, treeFallback: boolean): void {
-  const pid = child.pid
-  if (process.platform === 'win32') {
-    try {
-      child.kill(signal)
-    } catch {
-      /* ignore */
-    }
-    if (treeFallback && pid) {
-      try {
-        // 不能走 shell；直接 spawn taskkill，windowsHide 防止闪控制台
-        spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }).unref()
-      } catch {
-        /* ignore */
-      }
-    }
-    return
-  }
-  if (pid) {
-    try {
-      process.kill(-pid, signal)
-    } catch {
-      /* 进程组可能已经没了，下面再试直接子进程 */
-    }
-  }
-  try {
-    child.kill(signal)
-  } catch {
-    /* ignore */
-  }
 }
 
 export class JobManager extends EventEmitter {
@@ -98,9 +59,11 @@ export class JobManager extends EventEmitter {
 
   /** 退出前把在跑的 CLI 收掉，别留孤儿进程。 */
   shutdown(): void {
+    // 与取消路径共用同一条树杀：Windows 上第一次调用就已经 /T /F 收了整棵树，
+    // 第二次调用只是"万一没死透"的兜底（不是唯一的树杀时机）
     this.children.forEach((child) => {
-      killProcessTree(child, 'SIGTERM', false)
-      killProcessTree(child, 'SIGKILL', true)
+      killProcessTree(child, 'SIGTERM')
+      killProcessTree(child, 'SIGKILL')
     })
     this.children.clear()
     this.queue.shutdown()
@@ -339,7 +302,7 @@ export class JobManager extends EventEmitter {
     if (!allowed) return
     const child = this.children.get(allowed.runId)
     if (!child) return
-    killProcessTree(child, allowed.signal, allowed.signal === 'SIGKILL')
+    killProcessTree(child, allowed.signal)
   }
 
   /** SIGTERM 后宽限期到点仍没 close 才 SIGKILL；定时器绑定这一次 run。 */
