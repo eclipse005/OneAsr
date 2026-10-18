@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OneAsrApi } from './api'
-import type { HotwordStore, Settings, StatsSnapshot, TaskSnapshot } from '../shared/types'
+import type {
+  DownloadState,
+  HotwordStore,
+  Settings,
+  StatsSnapshot,
+  TaskSnapshot
+} from '../shared/types'
 
 const api: OneAsrApi = {
   platform: process.platform,
@@ -9,6 +15,15 @@ const api: OneAsrApi = {
   saveSettings: (settings: Settings) => ipcRenderer.invoke('settings:save', settings),
   resetSettings: () => ipcRenderer.invoke('settings:reset'),
   checkModels: () => ipcRenderer.invoke('models:check'),
+  listModels: () => ipcRenderer.invoke('models:inventory'),
+  startDownload: (model: string) => ipcRenderer.invoke('download:start', model),
+  cancelDownload: () => ipcRenderer.invoke('download:cancel'),
+  getDownloadState: () => ipcRenderer.invoke('download:state'),
+  onDownloadUpdated: (cb) => {
+    const listener = (_: Electron.IpcRendererEvent, state: DownloadState): void => cb(state)
+    ipcRenderer.on('download:updated', listener)
+    return () => ipcRenderer.removeListener('download:updated', listener)
+  },
   openModelsFolder: () => ipcRenderer.invoke('models:openFolder'),
   pickFiles: () => ipcRenderer.invoke('dialog:pickFiles'),
   pickDirectory: (defaultPath?: string) => ipcRenderer.invoke('dialog:pickDirectory', defaultPath),

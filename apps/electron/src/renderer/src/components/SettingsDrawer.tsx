@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
-import type { HotwordStore, ModelStatus, Settings } from '../../../shared/types'
+import type {
+  DownloadState,
+  HotwordStore,
+  ModelEntry,
+  ModelStatus,
+  Settings
+} from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
 import { useEscClose } from '../esc'
 import { panelMotion } from '../motion'
@@ -87,6 +93,12 @@ function asrQuantOf(model: string): 'fp16' | 'int8' {
 function asrId(size: '0.6B' | '1.7B', quant: 'fp16' | 'int8'): string {
   return `Qwen3-ASR-${size}-${quant === 'int8' ? 'int8' : 'hf'}`
 }
+/** 字节 → GiB 文本（下载进度用，两位小数够看） */
+function gib(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB'
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
+}
+
 function alignerKind(model: string): 'ctc' | 'qwen' {
   return model.toLowerCase().includes('qwen') ? 'qwen' : 'ctc'
 }
@@ -95,6 +107,10 @@ export function SettingsDrawer({
   lang,
   draft,
   models,
+  modelEntries,
+  download,
+  onDownloadStart,
+  onDownloadCancel,
   dirty,
   hotwordDraft,
   initialTab = 'general',
@@ -112,6 +128,12 @@ export function SettingsDrawer({
   lang: UiLang
   draft: Settings
   models: ModelStatus | null
+  /** 模型清单（目录名 = oneasr-cli download 认的 id） */
+  modelEntries: ModelEntry[]
+  /** 当前下载进度（null = 没在下） */
+  download: DownloadState | null
+  onDownloadStart: (id: string) => void
+  onDownloadCancel: () => void
   dirty: boolean
   hotwordDraft: HotwordStore | null
   initialTab?: SettingsTab
@@ -129,6 +151,8 @@ export function SettingsDrawer({
   onRefreshModels: () => void
 }) {
   const s = t(lang)
+  /** 没装的模型；下载中的那条也在里面（它本来就是缺的） */
+  const missingModels = modelEntries.filter((m) => !m.installed)
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   useEffect(() => {
     setActiveTab(initialTab)
@@ -328,6 +352,56 @@ export function SettingsDrawer({
                       ↻
                     </button>
                   </div>
+                </div>
+
+                {/* 模型下载：只列缺的（都齐了就用一行带过）——固定高度的面板不能被撑爆 */}
+                <div className="dl-block">
+                  <div className="dl-head">{s.downloadSection}</div>
+                  {missingModels.length === 0 && !download ? (
+                    <p className="dl-all">{s.allModelsReady}</p>
+                  ) : (
+                    <div className="dl-list">
+                      {missingModels.map((m) => {
+                        const active = download?.model === m.id
+                        const pct = active ? Math.round(download?.pct ?? 0) : 0
+                        return (
+                          <div className="dl-row" key={m.id}>
+                            <span className="dl-name">{m.id}</span>
+                            {active && (
+                              <span className="dl-progress">
+                                <span className="dl-bar">
+                                  <i style={{ width: `${pct}%` }} />
+                                </span>
+                                <span className="dl-meta">
+                                  {download?.state === 'verifying'
+                                    ? s.verifying
+                                    : `${pct}% · ${gib(download?.doneBytes ?? 0)} / ${gib(download?.totalBytes ?? 0)}`}
+                                </span>
+                              </span>
+                            )}
+                            {active ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={onDownloadCancel}
+                              >
+                                {s.cancelDownload}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                disabled={!!download}
+                                onClick={() => onDownloadStart(m.id)}
+                              >
+                                {download ? s.downloading : s.download}
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div className="pane-divider" />
                 <div className="field">

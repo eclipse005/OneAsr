@@ -1,6 +1,8 @@
 import type {
   Settings,
   StartResult,
+  DownloadState,
+  ModelEntry,
   ModelStatus,
   TaskSnapshot,
   StatsSnapshot,
@@ -27,6 +29,11 @@ export interface OneAsrApi {
   saveSettings: (settings: Settings) => Promise<Settings>
   resetSettings: () => Promise<Settings>
   checkModels: () => Promise<ModelStatus>
+  listModels: () => Promise<ModelEntry[]>
+  startDownload: (model: string) => Promise<{ ok: boolean; code?: string }>
+  cancelDownload: () => Promise<void>
+  getDownloadState: () => Promise<DownloadState | null>
+  onDownloadUpdated: (cb: (state: DownloadState) => void) => () => void
   openModelsFolder: () => Promise<void>
   pickFiles: () => Promise<DialogFilesResult>
   pickDirectory: (defaultPath?: string) => Promise<DialogPathResult>

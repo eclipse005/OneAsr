@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import type { Settings } from '../shared/types'
+import type { ModelEntry, Settings } from '../shared/types'
 
 /**
  * 安装目录 = 含 bin/ffmpeg[.exe] 的目录（与 Rust 侧 resolve_app_root 同一约定）。
@@ -199,6 +199,41 @@ export function resolveCli(appRoot = DEFAULT_APP_ROOT): string {
     ...names.map((n) => path.join(appRoot, 'target', 'debug', n))
   ]
   return candidates.find((p) => fs.existsSync(p)) ?? path.join(appRoot, 'oneasr-cli')
+}
+
+/**
+ * 模型清单：目录名取自本文件已有的 catalog 常量（不新开真源），就绪判据与
+ * checkModels 同源。渲染层只拿它来画「已装 / 未装 + 下载按钮」。
+ */
+export function modelsInventory(appRoot = DEFAULT_APP_ROOT): ModelEntry[] {
+  const models = path.join(appRoot, 'models')
+  const entries: ModelEntry[] = []
+  const push = (id: string, kind: ModelEntry['kind'], dir: string, ready: boolean): void => {
+    entries.push({ id, kind, installed: ready, dir })
+  }
+  for (const id of ASR_CATALOG) {
+    const dir = path.join(models, id)
+    push(id, 'asr', dir, hasModelFiles(dir))
+  }
+  for (const id of ALIGNER_CATALOG) {
+    const dir = path.join(models, id)
+    push(id, 'aligner', dir, hasModelFiles(dir) || fs.existsSync(path.join(dir, 'config.json')))
+  }
+  const demucs = path.join(models, 'htdemucs_ft')
+  push(
+    'htdemucs_ft',
+    'demucs',
+    demucs,
+    fs.existsSync(demucs) && (fs.readdirSync(demucs).length > 0)
+  )
+  const sensevoice = path.join(models, 'SenseVoiceSmall')
+  push(
+    'SenseVoiceSmall',
+    'sensevoice',
+    sensevoice,
+    fs.existsSync(sensevoice) && fs.readdirSync(sensevoice).length > 0
+  )
+  return entries
 }
 
 export { ASR_CATALOG, ALIGNER_CATALOG }

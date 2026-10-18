@@ -14,6 +14,8 @@ import { toastMotion } from './motion'
 const MEDIA_RE = /\.(wav|mp3|flac|m4a|aac|ogg|mp4|mkv|mov|webm|avi)$/i
 import type {
   HotwordStore,
+  DownloadState,
+  ModelEntry,
   ModelStatus,
   Settings,
   StartResult,
@@ -49,6 +51,8 @@ export default function App() {
   const statusTimer = useRef<number | undefined>(undefined)
   /** 正在开系统文件对话框（防重入） */
   const [picking, setPicking] = useState(false)
+  const [modelEntries, setModelEntries] = useState<ModelEntry[]>([])
+  const [download, setDownload] = useState<DownloadState | null>(null)
 
   const lang = useMemo(
     () => resolveUiLang(draft?.ui_language || settings?.ui_language || 'system'),
@@ -140,6 +144,7 @@ export default function App() {
 
   const refreshModels = useCallback(async () => {
     setModels(await window.oneasr.checkModels())
+    setModelEntries(await window.oneasr.listModels())
   }, [])
 
   const refreshStats = useCallback(async () => {
@@ -162,11 +167,23 @@ export default function App() {
       void refreshStats()
     })
     const offStats = window.oneasr.onStatsUpdated((next) => setStats(next))
+    const offDownload = window.oneasr.onDownloadUpdated((state) => setDownload(state))
     return () => {
       offTasks()
       offStats()
+      offDownload()
     }
   }, [refreshModels, refreshStats])
+
+  // 下载跑完/失败时刷新模型清单与状态点，并给一次提示（CLI 的人读行不进 UI）
+  const downloadPhase = download?.state
+  useEffect(() => {
+    if (downloadPhase !== 'done' && downloadPhase !== 'error') return
+    if (downloadPhase === 'done') pushToast('success', s.downloadDone)
+    else pushToast('error', s.downloadFailed)
+    void refreshModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloadPhase])
 
   /** 启动被门禁挡下时：把原因翻译成文案弹出来；模型问题直接把设置翻到「模型」页。 */
   const reportStart = useCallback(
@@ -416,6 +433,10 @@ export default function App() {
             lang={lang}
             draft={draft}
             models={models}
+            modelEntries={modelEntries}
+            download={download}
+            onDownloadStart={(id) => void window.oneasr.startDownload(id)}
+            onDownloadCancel={() => void window.oneasr.cancelDownload()}
             dirty={dirty}
             hotwordDraft={hotwordDraft}
             initialTab={settingsTab}

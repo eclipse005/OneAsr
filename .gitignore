@@ -57,3 +57,5 @@ __pycache__/
 apps/electron/node_modules/
 apps/electron/out/
 apps/electron/dist/
+# tsc --noEmit 也会写这个（tsconfig.web.json 是 composite），别让它每次冒出来
+apps/electron/*.tsbuildinfo

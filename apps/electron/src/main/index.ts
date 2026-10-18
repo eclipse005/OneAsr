@@ -16,10 +16,12 @@ import {
   checkModels,
   defaultSettings,
   loadSettings,
+  modelsInventory,
   resolveCli,
   saveSettings
 } from './settings'
 import { JobManager } from './jobs'
+import { DownloadManager } from './downloads'
 import { addSessionContext, initLog, installProcessHandlers, logPathname } from './log'
 import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
@@ -52,6 +54,7 @@ let tray: Tray | null = null
 /** 区分「用户点退出」与「点了窗口的关闭键」：前者要真退，后者看 close_to_tray。 */
 let quitting = false
 const jobs = new JobManager()
+const downloads = new DownloadManager()
 
 /** 托盘：左键恢复窗口，菜单里「打开 / 退出」。关窗到托盘的行为在 window 的 close 里。 */
 function createTray(icon: string | undefined): void {
@@ -265,6 +268,13 @@ function registerIpc(): void {
   ipcMain.handle('settings:save', (_e, settings: Settings) => saveSettings(settings))
   ipcMain.handle('settings:reset', () => saveSettings(defaultSettings()))
   ipcMain.handle('models:check', () => checkModels(loadSettings()))
+  ipcMain.handle('models:inventory', () => modelsInventory())
+  // 下载：一次一个，进度从 CLI 的 stdout 机器行来
+  ipcMain.handle('download:start', (_e, model: string) => downloads.start(model))
+  ipcMain.handle('download:cancel', () => {
+    downloads.cancel()
+  })
+  ipcMain.handle('download:state', () => downloads.state())
   ipcMain.handle('models:openFolder', async () => {
     const dir = join(DEFAULT_APP_ROOT, 'models')
     await shell.openPath(dir)
@@ -374,6 +384,8 @@ app.whenReady().then(() => {
   createWindow()
   createTray(resolveAppIcon())
   // 托盘 tooltip 跟着当前阶段走（GPUI 的 tray.rs 同款）：长任务挂着的时候一眼能看到进展
+  // 下载进度转发给渲染层（设置 → 模型 里的下载区）
+  downloads.on('updated', (state) => mainWindow?.webContents.send('download:updated', state))
   jobs.on('tasks', (list: { status: string; stage?: string }[]) => {
     if (!tray) return
     const running = list.find((t) => t.status === 'running')
@@ -387,6 +399,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   quitting = true
   jobs.shutdown()
+  downloads.shutdown()
 })
 
 // macOS：点 Dock 图标 / 关掉唯一窗口后想再打开

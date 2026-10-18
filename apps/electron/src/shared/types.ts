@@ -51,6 +51,26 @@ export type StartBlockCode =
   | 'hotwords-empty' // 这一行绑的热词组是空的
   | 'nothing-to-start' // 没有可开始的任务
 
+/** 模型清单里的一条（目录名就是 oneasr-cli download 认的 id）。 */
+export interface ModelEntry {
+  id: string
+  kind: 'asr' | 'aligner' | 'demucs' | 'sensevoice'
+  installed: boolean
+  dir: string
+}
+
+/** 下载进度（对应 CLI stdout 的机器行）。 */
+export interface DownloadState {
+  model: string
+  state: 'downloading' | 'verifying' | 'done' | 'error'
+  doneBytes: number
+  totalBytes: number
+  pct: number
+  speed?: number
+  dir?: string
+  message?: string
+}
+
 export interface StartResult {
   ok: boolean
   code?: StartBlockCode

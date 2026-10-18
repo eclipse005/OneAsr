@@ -781,6 +781,21 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-weight: 550;
 }
 
+/* 模型下载区（只列缺的；固定高度面板里要紧凑） */
+.dl-block { display: flex; flex-direction: column; gap: 6px; }
+.dl-head {
+  font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--accent); font-weight: 800;
+}
+.dl-all { margin: 0; font-size: 0.8rem; color: var(--muted); }
+.dl-list { display: flex; flex-direction: column; gap: 4px; }
+.dl-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; min-height: 26px; }
+.dl-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.dl-progress { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dl-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.dl-bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
+.dl-meta { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+
 /* Models toolbar */
 .models-toolbar {
   display: flex;
