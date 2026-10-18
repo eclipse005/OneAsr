@@ -413,6 +413,7 @@ export default function App() {
         status={status}
         tasks={tasks}
         message={statusMsg}
+        onOpenModels={() => void openSettingsFn('models')}
         onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => notify('success', s.copied))}
       />
 

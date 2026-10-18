@@ -212,10 +212,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   display: flex; align-items: flex-start;
   /* 右内边距 3px：让 26px 的复制按钮中心正好落在上方 32px 删除按钮的中心列上 */
   padding: 7px 3px 7px 9px; margin-top: 2px; border-radius: 8px;
-  background: var(--danger-soft); cursor: pointer;
+  /* 底色更淡：主要语义交给左侧红条 + 红字，一批任务全失败时不会"半屏红"；
+     悬停再加深一档，作为"可点击复制"的反馈 */
+  background: #fff5f5; cursor: pointer;
   transition: background .12s;
 }
-.task-card .row-error:hover { background: #fee2e2; }
+.task-card .row-error:hover { background: var(--danger-soft); }
 /* 复制按钮**钉在最右侧**（margin-left:auto，不随文字长短浮动），垂直居中，
    并与上方那一列的删除按钮同轴 */
 .task-card .row-error .err-copy {
@@ -227,9 +229,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: #fff; color: var(--danger); font-size: 0.72rem; font-weight: 700;
 }
 .task-card .row-error .err-text {
-  min-width: 0; flex: 1 1 auto; color: var(--danger); font-size: 0.76rem; line-height: 1.45;
-  /* 等宽：错误里全是路径、参数、ffmpeg 的十六进制指针，等宽更好扫也更好复制去搜 */
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 0; flex: 1 1 auto; color: #b91c1c; font-size: 0.8rem; line-height: 1.5;
+  /* 用界面字体而不是等宽：等宽在中文长句上很难读（review 提的），
+     而"路径对齐"那点收益远不如可读性重要。 */
   white-space: pre-wrap; word-break: break-word;
   max-height: 5.8em; overflow: auto;
 }
@@ -272,11 +274,16 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .task-card .name-meta { font-variant-numeric: tabular-nums; }
 /* 右列：术语 + 状态 + 动作；状态药丸定宽并居中（「或者说居中」） */
 .task-card .controls { display: flex; align-items: center; gap: 8px; flex: none; }
+/* 状态药丸：**定宽槽 + 自适应药丸**。
+   槽定宽 110px 是为了"状态列不动"（列表对齐）；药丸本身按内容收紧、在槽里居中，
+   所以「失败」两个字不会孤零零地摊在一个宽胶囊里。
+   底色和边框全部去掉 —— 只有色点 + 彩字；"带边框/底色的胶囊"只属于可点的参数 chip。
+   （注意 border-color 也要覆盖：.badge.error 那条把边染成浅红，只清 background 的话
+     在白卡上仍会显出一圈浅红，看起来就像个"像按钮"的胶囊。） */
+.badge-slot { width: 110px; display: grid; place-items: center; min-height: 30px; }
 .task-card .controls .badge {
-  width: 110px; justify-content: center; min-height: 30px; overflow: hidden;
-  /* 状态**没有底色**：只有色点 + 彩字。浅绿底的状态药丸挨着「✓ 人声分离」会连成
-     一片绿（review 提的撞色），而"带底色的胶囊"本来就该只属于可点的参数 chip。 */
-  background: transparent;
+  max-width: 100%; min-height: 30px; overflow: hidden;
+  background: transparent; border-color: transparent;
 }
 .task-card .badge.running { color: var(--logo); }
 .task-card .badge.done { color: #047857; }
@@ -365,6 +372,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .statusbar .sep { width: 1px; height: 14px; background: var(--line); }
 .statusbar .grow { flex: 1 1 auto; min-width: 8px; }
+/* 「模型就绪」是个入口：点它直接去"设置 → 模型"，不是纯展示文字 */
+.statusbar .status-link {
+  border: none; background: transparent; padding: 0; font: inherit; font-weight: 700;
+  cursor: pointer;
+}
+.statusbar .status-link:hover { text-decoration: underline; }
 /* 状态栏的「最近一条提示」：可点击复制，toast 消失后还能回看 */
 .statusbar .status-chip {
   max-width: 44ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

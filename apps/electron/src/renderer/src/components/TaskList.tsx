@@ -283,20 +283,23 @@ export function TaskList({
                   </button>
                 </div>
 
-                {/* 状态就一个药丸：排队位次并进它（原来是「排队第 1 位」+「排队」两个胶囊） */}
-                {task.status === 'running' ? (
-                  <span className="badge running" title={stageText}>
-                    <span>{stageText || s.running}</span>
-                  </span>
-                ) : task.status === 'queued' && task.queueRank != null ? (
-                  <span className="badge queued" title={queueRank(lang, task.queueRank)}>
-                    <span>{queueRank(lang, task.queueRank)}</span>
-                  </span>
-                ) : (
-                  <span className={`badge ${task.status}`} title={label(task.status)}>
-                    <span>{task.status === 'queued' ? s.pending : label(task.status)}</span>
-                  </span>
-                )}
+                {/* 状态就一个药丸：排队位次并进它（原来是「排队第 1 位」+「排队」两个胶囊）。
+                    外面套一个定宽槽 —— 列不动（列表对齐），药丸自己按内容收紧、在槽里居中 */}
+                <span className="badge-slot">
+                  {task.status === 'running' ? (
+                    <span className="badge running" title={stageText}>
+                      <span>{stageText || s.running}</span>
+                    </span>
+                  ) : task.status === 'queued' && task.queueRank != null ? (
+                    <span className="badge queued" title={queueRank(lang, task.queueRank)}>
+                      <span>{queueRank(lang, task.queueRank)}</span>
+                    </span>
+                  ) : (
+                    <span className={`badge ${task.status}`} title={label(task.status)}>
+                      <span>{task.status === 'queued' ? s.pending : label(task.status)}</span>
+                    </span>
+                  )}
+                </span>
 
               {/* 动作区用图标按钮：等宽 → 各行控件严格对齐；文字说明交给 title / aria-label
                   （图标是仓库里那 5 个 SVG，GPUI 版同一份资产，mask 上色跟着主题走） */}
@@ -324,7 +327,8 @@ export function TaskList({
                 )}
                 <IconButton
                   icon="folder"
-                  label={s.openOutput}
+                  // 禁用时别还写着"打开输出"：如实说"尚未生成输出"
+                  label={doneWithOutput ? s.openOutput : s.noOutputYet}
                   tone="primary"
                   disabled={!doneWithOutput}
                   onClick={() => onOpen(task.outputPath!)}

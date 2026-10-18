@@ -1,5 +1,5 @@
 import { t, UiLang } from '../i18n'
-import { dirName } from '../lib/format'
+
 import type { StatusSnapshot, TaskSnapshot } from '../../../shared/types'
 
 export function StatusBar({
@@ -7,12 +7,15 @@ export function StatusBar({
   status,
   tasks,
   message,
-  onCopyMessage
+  onCopyMessage,
+  onOpenModels
 }: {
   lang: UiLang
   /** CLI 的 status --json 快照：就绪、门禁、后端全在里面，壳只显示 */
   status: StatusSnapshot | null
   tasks: TaskSnapshot[]
+  /** 点「模型就绪 / 未就绪」直接进设置 → 模型（用户要修模型时不必自己找） */
+  onOpenModels?: () => void
   /** 最近一条提示：toast 会消失，这里留 3~6 秒并且可点击复制（长路径/报错不至于看了就丢） */
   message?: { kind: string; text: string } | null
   onCopyMessage?: (text: string) => void
@@ -28,19 +31,24 @@ export function StatusBar({
   return (
     <div className="statusbar">
       <span className={`dot ${ready ? 'ok' : ''}`} />
-      <strong
-        style={{ color: ready ? 'var(--logo)' : 'var(--warn)', fontWeight: 700 }}
-        title={notReadyReason}
+      <button
+        type="button"
+        className="status-link"
+        style={{ color: ready ? 'var(--logo)' : 'var(--warn)' }}
+        title={notReadyReason ?? s.modelsReady}
+        onClick={onOpenModels}
       >
         {ready ? s.modelsReady : s.modelsNotReady}
-      </strong>
+      </button>
       <span className="sep" />
+      {/* 显示模型**短名**（catalog id）而不是目录名：完整路径放 title ——
+          Qwen3-ASR-0.6B-hf 这种目录名对普通用户太重，也容易把状态栏挤到折行 */}
       <span title={status?.models.asr.dir}>
-        {s.asr}: {status?.models.asr.ready ? '✓' : '✗'} {dirName(status?.models.asr.dir)}
+        {s.asr}: {status?.models.asr.ready ? '✓' : '✗'} {status?.models.asr.id ?? ''}
       </span>
       <span className="sep" />
       <span title={status?.models.aligner.dir}>
-        {s.aligner}: {status?.models.aligner.ready ? '✓' : '✗'} {dirName(status?.models.aligner.dir)}
+        {s.aligner}: {status?.models.aligner.ready ? '✓' : '✗'} {status?.models.aligner.id ?? ''}
       </span>
       <span className="sep" />
       <span title={status?.models.demucs.dir}>
