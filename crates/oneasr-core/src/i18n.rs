@@ -627,6 +627,7 @@ Usage:
   oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
   oneasr-cli render     --timeline <{stem}.timeline.json> [options]
   oneasr-cli align      --audio <media> --text <transcript> [options]
+  oneasr-cli download   --model <id> [--app-root <dir>] [--data-root <dir>]
 
 Commands:
   transcribe   Full pipeline → {data-root}/output/{stem}.srt by default  (alias: run, pipeline)
@@ -638,6 +639,9 @@ Commands:
                whole file in one pass
   render       Re-present a measured timeline. No models, no ffmpeg, no audio:
                reads {stem}.timeline.json and writes a subtitle again
+  download     Download one model (ASR / aligner / Demucs / hotword) into
+               {data-root}/models/<install-layout name>; already complete files
+               are never downloaded twice
 
 transcribe options:
   --input <path>           Media file (required)
@@ -717,6 +721,35 @@ render options:
   --ass                    Also write {stem}.ass (karaoke)
   --no-srt                 Suppress the .srt file (requires --txt or --ass)
 
+download options:
+  --model <id>             Model to download (required). Friendly ids:
+                           0.6b | 1.7b | 0.6b-int8 | 1.7b-int8
+                             ASR; 0.6b / 1.7b take that size's fp16 checkpoint, or
+                             the same size's int8 one when that is already installed
+                           ctc | qwen-align      aligner (CTC / ForcedAligner)
+                           demucs                vocal separation (HTDemucs)
+                           sensevoice            hotword rough pass (SenseVoiceSmall)
+                           Exact install-layout folder names work too, e.g.
+                           Qwen3-ASR-1.7B-int8, omniASR-CTC-300M-v2-hf, htdemucs_ft
+  --app-root <dir>         App root; a model already complete under its models/ counts
+                           as downloaded (default: this exe's install dir)
+  --data-root <dir>        Data directory; new weights land in {data-root}/models/
+                           (default: --app-root)
+
+download progress (all on one line each; wrapped here for width):
+  stderr                   one human-readable line per update (bilingual)
+  stdout                   one machine-readable line per update, keys always in this
+                           order:
+                             [download] state=<downloading|verifying|done|error>
+                             model=<id> done=<bytes> total=<bytes> pct=<0-100>
+                             [speed=<bytes/s>] [dir=\"<path>\"]
+                           pct is omitted while total is unknown (0), speed while the
+                           core reported none, dir on terminal lines only.
+                           verifying  probing what is already installed
+                           done       files passed verification; an already complete
+                                      model goes straight from verifying to done
+                           error      exits non-zero, reason on stderr (bilingual)
+
 Env:
   ONEASR_DATA_DIR=<dir>    Override the data directory (same as --data-root)
   ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
@@ -733,6 +766,7 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
   oneasr-cli asr-chunk  --wav <16k.wav> --start <秒> --end <秒> [选项]
   oneasr-cli render     --timeline <{stem}.timeline.json> [选项]
   oneasr-cli align      --audio <音视频> --text <文稿> [选项]
+  oneasr-cli download   --model <id> [--app-root <目录>] [--data-root <目录>]
 
 子命令：
   transcribe   完整流水线，默认输出到 {data-root}/output/{stem}.srt（别名：run、pipeline）
@@ -742,6 +776,8 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
                就是字幕的分行（一行 = 一条）。固定用 CTC 对齐器，它能整段一次
                对齐，长音频不必切块：
                读 {stem}.timeline.json，再写一遍字幕
+  download     下载一个模型（识别 / 对齐 / 人声分离 / 热词）到
+               {data-root}/models/<安装布局目录名>；已装好且校验通过的不重下
 
 transcribe 选项：
   --input <路径>           音视频文件（必填）
@@ -811,6 +847,33 @@ render 选项：
                            中文字形，同 transcribe
   --txt                    额外写出 {stem}.txt（一行一句）
   --no-srt                 不写 .srt 文件（需配合 --txt）
+
+download 选项：
+  --model <id>             要下载的模型（必填）。友好写法：
+                           0.6b | 1.7b | 0.6b-int8 | 1.7b-int8
+                             识别模型；0.6b / 1.7b 下该尺寸的 fp16 权重，该尺寸的
+                             int8 已经装好时也认它已装（不再下一份）
+                           ctc | qwen-align      对齐器（CTC / ForcedAligner）
+                           demucs                人声分离（HTDemucs）
+                           sensevoice            热词粗转（SenseVoiceSmall）
+                           完整目录名同样可用，如 Qwen3-ASR-1.7B-int8、
+                           omniASR-CTC-300M-v2-hf、htdemucs_ft
+  --app-root <目录>        应用目录；它 models/ 下已装好且校验通过的模型算「已下好」
+                           （默认取本程序安装目录）
+  --data-root <目录>       数据目录；新权重落在 {data-root}/models/ 下
+                           （默认取 --app-root）
+
+download 进度（每行都是一整行，这里为排版折行）：
+  stderr                   每次更新一行人读文本（双语）
+  stdout                   每次更新一行机器可读文本，键名与顺序固定：
+                             [download] state=<downloading|verifying|done|error>
+                             model=<id> done=<bytes> total=<bytes> pct=<0-100>
+                             [speed=<bytes/s>] [dir=\"<路径>\"]
+                           total 未知（0）时不带 pct，速度未知时不带 speed，
+                           dir 只在终态出现。
+                           verifying  正在检查已装文件
+                           done       校验通过；已经装好的模型会从 verifying 直接到 done
+                           error      退出码非 0，原因在 stderr（双语）
 
 环境变量：
   ONEASR_DATA_DIR=<目录>   覆盖数据目录（等价于 --data-root）
@@ -1087,6 +1150,172 @@ pub fn cli_data_root_not_dir(path: &std::path::Path) -> String {
     }
 }
 
+/// `=== OneAsr CLI · 下载模型 ===` / `=== OneAsr CLI · download ===`。
+pub fn cli_download_banner() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "=== OneAsr CLI · 下载模型 ===",
+        UiLang::En => "=== OneAsr CLI · download ===",
+    }
+}
+
+/// 摘要行里的模型 id（值是目录名，不是路径）。见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_MODEL: Str = Str::new("模型:    ", "model:   ");
+/// 摘要行里新权重的落点目录。见 [`CLI_KV_INPUT`]。
+pub const CLI_KV_TARGET: Str = Str::new("落点:    ", "target:  ");
+
+/// `未知的模型：{raw}（可选 …，或完整目录名）`
+/// / `Unknown model: {raw} (choose …, or an exact directory name)`。
+///
+/// 列出的就是 `download --model` 认的全部友好写法；其余名字一律拒绝，**不猜默认
+/// 值**——`--asr` 猜错只是跑错型号，下载猜错是下错几个 GB。
+pub fn cli_download_unknown(raw: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "未知的模型：{raw}（可选 0.6b | 0.6b-int8 | 1.7b | 1.7b-int8 | ctc | qwen-align | demucs | sensevoice，或完整目录名）"
+        ),
+        UiLang::En => format!(
+            "Unknown model: {raw} (choose 0.6b | 0.6b-int8 | 1.7b | 1.7b-int8 | ctc | qwen-align | demucs | sensevoice, or an exact directory name)"
+        ),
+    }
+}
+
+/// `检查已装模型: {model}` / `checking the installed model: {model}`。
+pub fn cli_download_verifying(model: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("检查已装模型: {model}"),
+        UiLang::En => format!("checking the installed model: {model}"),
+    }
+}
+
+/// `已存在且校验通过: {model} → {dir}（不重新下载）`
+/// / `already complete and verified: {model} → {dir} (not downloading again)`。
+pub fn cli_download_already(model: &str, dir: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "已存在且校验通过: {model} → {}（不重新下载）",
+            dir.display()
+        ),
+        UiLang::En => format!(
+            "already complete and verified: {model} → {} (not downloading again)",
+            dir.display()
+        ),
+    }
+}
+
+/// 人读的进度行：`[下载] 名称 50% 1.00 GB / 2.00 GB（8.0 MB/s）`
+/// / `[download] name 50% 1.00 GB / 2.00 GB (8.0 MB/s)`。
+///
+/// 总量或速度未知（0）时对应片段整段不出现——不编造一个 0。
+pub fn cli_download_progress(model: &str, done: u64, total: u64, speed: u64) -> String {
+    let mut body = model.to_string();
+    if let Some(pct) = percent_of(done, total) {
+        body.push_str(&format!(" {pct:.0}%"));
+    }
+    body.push_str(&format!(" {}", human_bytes(done)));
+    if total > 0 {
+        body.push_str(&format!(" / {}", human_bytes(total)));
+    }
+    if speed > 0 {
+        let (open, close) = match ui_lang() {
+            UiLang::Zh => ("（", "）"),
+            UiLang::En => (" (", ")"),
+        };
+        body.push_str(&format!("{open}{}/s{close}", human_bytes(speed)));
+    }
+    match ui_lang() {
+        UiLang::Zh => format!("[下载] {body}"),
+        UiLang::En => format!("[download] {body}"),
+    }
+}
+
+/// `下载完成: {model} → {dir}` / `download complete: {model} → {dir}`。
+pub fn cli_download_done(model: &str, dir: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("下载完成: {model} → {}", dir.display()),
+        UiLang::En => format!("download complete: {model} → {}", dir.display()),
+    }
+}
+
+/// `下载失败: {model}：{e}` / `download failed: {model}: {e}`。
+pub fn cli_download_failed(model: &str, e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("下载失败: {model}：{e}"),
+        UiLang::En => format!("download failed: {model}: {e}"),
+    }
+}
+
+/// `模型目录不可写: {dir}（{e}）`
+/// / `model directory is not writable: {dir} ({e})`。
+pub fn cli_download_dir_not_writable(dir: &std::path::Path, e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("模型目录不可写: {}（{e}）", dir.display()),
+        UiLang::En => format!("model directory is not writable: {} ({e})", dir.display()),
+    }
+}
+
+/// `下载已取消: {model}` / `download cancelled: {model}`。
+pub fn cli_download_cancelled(model: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("下载已取消: {model}"),
+        UiLang::En => format!("download cancelled: {model}"),
+    }
+}
+
+/// 机器可读的进度行（`download` 的 stdout 契约，格式见 [`cli_help`]）：
+/// `[download] state=… model=… done=… total=… [pct=…] [speed=…] [dir="…"]`。
+///
+/// **键名与顺序是契约**：两种语言逐字相同，新增字段一律往后加。
+/// - `pct` 只在总量已知（total > 0）时出现，算法与
+///   [`DownloadProgress::percent`](crate::model::DownloadProgress::percent) 同一口径；
+/// - `speed` 只在 core 的进度回调给了非零速度时出现（单位 B/s）；
+/// - `dir` 只在终态（done / error）出现，加引号是因为路径里可能有空格。
+pub fn cli_download_event(
+    state: &str,
+    model: &str,
+    done: u64,
+    total: u64,
+    speed: u64,
+    dir: Option<&std::path::Path>,
+) -> String {
+    let mut line = format!("[download] state={state} model={model} done={done} total={total}");
+    if let Some(pct) = percent_of(done, total) {
+        line.push_str(&format!(" pct={pct:.0}"));
+    }
+    if speed > 0 {
+        line.push_str(&format!(" speed={speed}"));
+    }
+    if let Some(dir) = dir {
+        line.push_str(&format!(" dir=\"{}\"", dir.display()));
+    }
+    line
+}
+
+/// 进度百分比：0-100 夹紧，总量未知（0）时不报——与
+/// [`DownloadProgress::percent`](crate::model::DownloadProgress::percent) 同一条算法
+/// （那边服务界面，这边服务命令行，规则只有这一条）。
+fn percent_of(done: u64, total: u64) -> Option<f32> {
+    (total > 0).then(|| ((done as f64 / total as f64) * 100.0).clamp(0.0, 100.0) as f32)
+}
+
+/// 人类可读的字节数：`1.00 GB` / `345.6 MB` / `12 KB` / `987 B`。
+///
+/// 单位（GB/MB/KB）是国际写法，两种语言相同；小数位与界面上的速度显示同一口径。
+fn human_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let x = n as f64;
+    if x >= GB {
+        format!("{:.2} GB", x / GB)
+    } else if x >= MB {
+        format!("{:.1} MB", x / MB)
+    } else if x >= KB {
+        format!("{:.0} KB", x / KB)
+    } else {
+        format!("{n} B")
+    }
+}
+
 /// `=== OneAsr CLI · 转写 ===` / `=== OneAsr CLI · transcribe ===`。
 pub fn cli_transcribe_banner() -> &'static str {
     match ui_lang() {
@@ -1110,7 +1339,13 @@ pub const CLI_KV_OUTPUT: Str = Str::new("输出:    ", "output:  ");
 
 /// 运行摘要的一行：`{label}{path}`（label 取 [`CLI_KV_INPUT`] 等）。
 pub fn cli_kv(label: Str, path: &std::path::Path) -> String {
-    format!("{}{}", t(label), path.display())
+    cli_kv_str(label, &path.display().to_string())
+}
+
+/// 同 [`cli_kv`]，但值是任意字符串：模型 id 这类目录名不是路径，
+/// 别为了复用它硬塞一个 `Path`。
+pub fn cli_kv_str(label: Str, value: &str) -> String {
+    format!("{}{}", t(label), value)
 }
 
 /// `lang={lang} chunk={chunk}s backend={backend} max_new_tokens={n}`（键名即 flag 名）。
@@ -1532,6 +1767,128 @@ mod tests {
         });
     }
 
+    /// `--help` 必须写清 download 的取值与机器可读契约（stderr 给人、stdout 给上层）：
+    /// 用户与上层没有别的入口知道这套写法。
+    #[test]
+    fn cli_help_documents_the_download_command_and_its_progress_contract() {
+        let zh = with_ui_lang(UiLang::Zh, cli_help);
+        let en = with_ui_lang(UiLang::En, cli_help);
+        for (lang, help) in [("zh", zh), ("en", en)] {
+            assert!(
+                help.contains("download"),
+                "{lang} help 少了 download 子命令"
+            );
+            assert!(help.contains("--model"), "{lang} help 少了 --model");
+            // 机器行是契约：状态取值、键名与顺序两种语言都写死。
+            assert!(
+                help.contains("state=<downloading|verifying|done|error>"),
+                "{lang} help 没写状态取值: {help}"
+            );
+            assert!(
+                help.contains("model=<id> done=<bytes> total=<bytes> pct=<0-100>"),
+                "{lang} help 没写机器行格式"
+            );
+            // 全部友好写法都要列出来。
+            for id in [
+                "0.6b",
+                "0.6b-int8",
+                "1.7b",
+                "1.7b-int8",
+                "ctc",
+                "qwen-align",
+                "demucs",
+                "sensevoice",
+            ] {
+                assert!(help.contains(id), "{lang} help 少了 id {id}");
+            }
+        }
+    }
+
+    /// download 的人读行跟随界面语言；进度行的括号也按语言换形（语序差异兜在
+    /// helper 里，调用方不拼句子）。
+    #[test]
+    fn cli_download_messages_follow_the_ui_language() {
+        let dir = std::path::Path::new("models").join("Qwen3-ASR-0.6B-hf");
+        with_ui_lang(UiLang::Zh, || {
+            assert_eq!(t(CLI_KV_MODEL), "模型:    ");
+            assert_eq!(t(CLI_KV_TARGET), "落点:    ");
+            assert_eq!(
+                cli_download_unknown("nope"),
+                "未知的模型：nope（可选 0.6b | 0.6b-int8 | 1.7b | 1.7b-int8 | ctc | qwen-align | demucs | sensevoice，或完整目录名）"
+            );
+            assert_eq!(
+                cli_download_progress("Qwen3-ASR-0.6B-hf", 1_073_741_824, 2_147_483_648, 8_388_608),
+                "[下载] Qwen3-ASR-0.6B-hf 50% 1.00 GB / 2.00 GB（8.0 MB/s）"
+            );
+            // 总量与速度未知时整段不出现——不编造一个 0。
+            assert_eq!(
+                cli_download_progress("htdemucs_ft", 5, 0, 0),
+                "[下载] htdemucs_ft 5 B"
+            );
+            assert_eq!(
+                cli_download_already("Qwen3-ASR-0.6B-hf", &dir),
+                format!(
+                    "已存在且校验通过: Qwen3-ASR-0.6B-hf → {}（不重新下载）",
+                    dir.display()
+                )
+            );
+        });
+        with_ui_lang(UiLang::En, || {
+            assert_eq!(t(CLI_KV_MODEL), "model:   ");
+            assert_eq!(
+                cli_download_progress("Qwen3-ASR-0.6B-hf", 1_073_741_824, 2_147_483_648, 8_388_608),
+                "[download] Qwen3-ASR-0.6B-hf 50% 1.00 GB / 2.00 GB (8.0 MB/s)"
+            );
+            assert_eq!(
+                cli_download_failed("htdemucs_ft", "os error 5"),
+                "download failed: htdemucs_ft: os error 5"
+            );
+        });
+    }
+
+    /// `download` 的机器可读行：键名与顺序是上层（Electron 壳）解析的依据，
+    /// 两种语言必须逐字相同。
+    ///
+    /// 断骨验证：把 `cli_download_event` 的字段顺序调换、或按语言给中文键名，
+    /// 本用例立刻变红。
+    #[test]
+    fn cli_download_event_stays_language_neutral() {
+        let dir = std::path::Path::new("some dir");
+        for lang in [UiLang::Zh, UiLang::En] {
+            with_ui_lang(lang, || {
+                assert_eq!(
+                    cli_download_event(
+                        "downloading",
+                        "Qwen3-ASR-0.6B-hf",
+                        1_073_741_824,
+                        2_147_483_648,
+                        8_388_608,
+                        None
+                    ),
+                    "[download] state=downloading model=Qwen3-ASR-0.6B-hf done=1073741824 total=2147483648 pct=50 speed=8388608"
+                );
+                // total 未知：pct 整段缺省（不是 pct=0）。
+                assert_eq!(
+                    cli_download_event("verifying", "htdemucs_ft", 0, 0, 0, None),
+                    "[download] state=verifying model=htdemucs_ft done=0 total=0"
+                );
+                // 终态带 dir；路径可能含空格，所以加引号。
+                assert_eq!(
+                    cli_download_event("done", "htdemucs_ft", 84_025_440, 84_025_440, 0, Some(dir)),
+                    format!(
+                        "[download] state=done model=htdemucs_ft done=84025440 total=84025440 pct=100 dir=\"{}\"",
+                        dir.display()
+                    )
+                );
+                // 失败：状态叫 error（不是 failed），速度缺省。
+                assert_eq!(
+                    cli_download_event("error", "htdemucs_ft", 100, 200, 0, None),
+                    "[download] state=error model=htdemucs_ft done=100 total=200 pct=50"
+                );
+            });
+        }
+    }
+
     #[test]
     fn cli_machine_readable_lines_stay_language_neutral() {
         // 键名就是 flag 名，两种语言必须逐字相同：贴日志的人和脚本都按它检索。
@@ -1567,6 +1924,8 @@ mod tests {
             ("CLI_KV_ASR", CLI_KV_ASR),
             ("CLI_KV_ALIGN", CLI_KV_ALIGN),
             ("CLI_KV_OUTPUT", CLI_KV_OUTPUT),
+            ("CLI_KV_MODEL", CLI_KV_MODEL),
+            ("CLI_KV_TARGET", CLI_KV_TARGET),
             ("CLI_KV_TIMELINE", CLI_KV_TIMELINE),
             ("CLI_ASR_TEXT_BEGIN", CLI_ASR_TEXT_BEGIN),
             ("CLI_ASR_TEXT_END", CLI_ASR_TEXT_END),

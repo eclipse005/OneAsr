@@ -8,7 +8,14 @@
 //! cargo run -p oneasr-core --release --bin oneasr-cli -- `
 //!   asr-chunk --wav "D:\OneAsr\runs\...\input_16k.wav" `
 //!   --start 722.75 --end 842.75 --language zh
+//!
+//! cargo run -p oneasr-core --release --bin oneasr-cli -- `
+//!   download --model 0.6b --data-root "D:\\OneAsr"
 //! ```
+//!
+//! `download` 把人类可读的进度写 stderr（双语，与其它子命令一致），把机器可读的
+//! 那一行写 **stdout**（`[download] state=… model=… done=… total=… pct=…`）——上层只解析
+//! stdout，报警文本不会混进解析流。完整格式与「先验后下」的语义见 `--help` 的 download 段落。
 //!
 //! Layout: `--app-root` is the **install** directory (`bin/ffmpeg`) and keeps its
 //! old meaning; `--data-root` (or `ONEASR_DATA_DIR`) pins the **data** directory
@@ -26,8 +33,9 @@ use oneasr_core::i18n;
 use oneasr_core::media::slice_wav;
 use oneasr_core::model::HTDEMUCS_FT;
 use oneasr_core::{
-    GroupLookup, HotwordRun, HotwordStore, ModelId, ProcessExportOptions, Settings, StageClock,
-    StageUpdate, ffmpeg_source, process_media_file_with_export, resolve_app_root,
+    DownloadHandle, DownloadOutcome, GroupLookup, HotwordRun, HotwordStore, ModelId, ModelKind,
+    ProcessExportOptions, Settings, StageClock, StageUpdate, download_model, ffmpeg_source,
+    process_media_file_with_export, resolve_app_root,
 };
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
 
@@ -66,6 +74,7 @@ fn main() -> ExitCode {
         "asr-chunk" | "chunk" => cmd_asr_chunk(rest),
         "align" => cmd_align(rest),
         "render" => cmd_render(rest),
+        "download" => cmd_download(rest),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -928,13 +937,261 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     }
 }
 
-/// `--aligner` 旗标值 → 目录 id。接受短别名 `ctc` / `qwen` 与完整目录名。
+// ─── download ─────────────────────────────────────────────────────
+
+/// `download --model` 的解析结果：**下载落点**与**已装检查的候选**。
+///
+/// 两者分开，是因为尺寸级别名（`0.6b`）指的不是一个目录，而是「0.6B 这个尺寸」：
+/// 与 `--asr 1.7b` 同一条规则，同尺寸的 int8 变体也算「这个尺寸已经装了」；但真要
+/// 下的时候只能下一个，取 fp16（[`AsrPick::primary`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DownloadPick {
+    /// 要下的那个目录级模型，也是新权重的落点目录名。
+    target: ModelId,
+    /// 「已经装好了吗」的检查顺序，按优先级排。
+    candidates: Vec<ModelId>,
+}
+
+impl DownloadPick {
+    /// 目录级写法：候选就是它自己（点名量化版不许换成同尺寸的 fp16）。
+    fn one(id: ModelId) -> Self {
+        Self {
+            target: id,
+            candidates: vec![id],
+        }
+    }
+
+    /// 尺寸级别名：落点取 fp16，候选带上同尺寸的 int8。
+    fn from_asr(pick: AsrPick) -> Self {
+        Self {
+            target: pick.primary(),
+            candidates: pick.candidates(),
+        }
+    }
+}
+
+/// `download --model` 旗标值 → [`DownloadPick`]。
+///
+/// **复用 transcribe 的解析**：[`parse_asr_arg`]（尺寸别名 + 四个 ASR 目录名）与
+/// [`parse_aligner_arg`]（`ctc` / `qwen` / `qwen-align` + 两个对齐目录名），这里只补
+/// 两个没有转写旗标的可选模型（Demucs / SenseVoice）的短别名。别名到目录名的对应
+/// 关系仍然只有 catalog 一处真源——这里不出现任何目录名字面量。
+fn parse_download_arg(raw: &str) -> Option<DownloadPick> {
+    let s = raw.trim();
+    if let Some(pick) = parse_asr_arg(s) {
+        return Some(DownloadPick::from_asr(pick));
+    }
+    if let Some(id) = parse_aligner_arg(s) {
+        return Some(DownloadPick::one(id));
+    }
+    for (id, aliases) in [
+        (ModelId::HtdemucsFt, &["demucs", "htdemucs"][..]),
+        (ModelId::SenseVoiceSmall, &["sensevoice"][..]),
+    ] {
+        if s.eq_ignore_ascii_case(id.as_str()) || aliases.iter().any(|a| s.eq_ignore_ascii_case(a))
+        {
+            return Some(DownloadPick::one(id));
+        }
+    }
+    None
+}
+
+/// `download` —— 把某个模型的权重下到数据目录的 `models/` 下。
+///
+/// 存在的理由是 GUI 之外还要一条可脚本化的下载路径（Electron 壳调它）：
+/// - **落点用安装布局名**（`{data-root}/models/{目录名}`）：与设置里的
+///   `asr_model_dir` / `aligner_model_dir` 是同一批目录，调用方拿 id 就能算出路径；
+/// - **先验后下**，与 GPUI 的 `start_model_download` 同一道门禁：已装且校验通过就
+///   一步都不下，只报「已存在」；
+/// - 进度一行给人（stderr，双语）、一行给上层（stdout，机器可读），格式写在
+///   `--help` 的 download 段落里。
+fn cmd_download(args: &[String]) -> Result<(), i32> {
+    if flag(args, "--help") || flag(args, "-h") {
+        print_help();
+        return Ok(());
+    }
+    let raw = require_arg(args, "--model")?;
+    let pick = match parse_download_arg(&raw) {
+        Some(pick) => pick,
+        None => {
+            eprintln!("{}", i18n::cli_download_unknown(&raw));
+            return Err(2);
+        }
+    };
+    let app_root = parse_app_root(args)?;
+    // 与 transcribe 一样：数据目录先钉住，模型落点从它算。下载不碰 ffmpeg，
+    // 所以不像 transcribe 那样查 bin/ffmpeg。
+    let data_root = pin_data_root(args, &app_root)?;
+
+    let target = pick.target;
+    let target_dir = oneasr_core::paths::models_root().join(target.as_str());
+
+    eprintln!("{}", i18n::cli_download_banner());
+    eprintln!("{}", i18n::cli_kv_str(i18n::CLI_KV_MODEL, target.as_str()));
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_APP, &app_root));
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_DATA, &data_root));
+    eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_TARGET, &target_dir));
+
+    // 先验后下：数据目录优先、安装目录兜底，与 `apply_app_root_paths` 的扫描同一
+    // 形状。本进程刚起来，就绪缓存是空的，不必像 GUI 那样先失效一次。
+    let roots: Vec<&Path> = if data_root == app_root {
+        vec![&data_root]
+    } else {
+        vec![&data_root, &app_root]
+    };
+    let total = catalog_bytes(target);
+    emit_download_event("verifying", target, 0, total, 0, None);
+    eprintln!("{}", i18n::cli_download_verifying(target.as_str()));
+    if let Some((id, dir)) = installed_model(&pick, &roots) {
+        let total = catalog_bytes(id);
+        eprintln!("{}", i18n::cli_download_already(id.as_str(), &dir));
+        emit_download_event("done", id, total, total, 0, Some(&dir));
+        return Ok(());
+    }
+
+    // 下载器会把「目录建不出来」包成 Failed，但那条信息里只有系统原文
+    // （拒绝访问 (os error 5) 之类），不说是哪个目录。先探一次，报错就能点名。
+    if let Err(e) = oneasr_core::probe_writable(&target_dir) {
+        eprintln!(
+            "{}",
+            i18n::cli_download_dir_not_writable(&target_dir, &e.to_string())
+        );
+        emit_download_event("error", target, 0, total, 0, Some(&target_dir));
+        return Err(1);
+    }
+
+    let handle = DownloadHandle::new(target, target_dir.clone());
+    let outcome = download_model(&handle, |p| {
+        eprintln!(
+            "{}",
+            i18n::cli_download_progress(
+                target.as_str(),
+                p.downloaded_bytes,
+                p.total_bytes,
+                p.speed_bytes_per_sec,
+            )
+        );
+        emit_download_event(
+            "downloading",
+            target,
+            p.downloaded_bytes,
+            p.total_bytes,
+            p.speed_bytes_per_sec,
+            None,
+        );
+    });
+    match outcome {
+        DownloadOutcome::Completed { model_dir } => {
+            // 终态用 catalog 的精确总量：下载器逐文件比对过尺寸与 SHA-256，而进度
+            // 回调的最后一次 tick 可能还差几百毫秒。
+            let total = catalog_bytes(target);
+            eprintln!("{}", i18n::cli_download_done(target.as_str(), &model_dir));
+            emit_download_event("done", target, total, total, 0, Some(&model_dir));
+            Ok(())
+        }
+        DownloadOutcome::Failed {
+            message,
+            downloaded_bytes,
+            total_bytes,
+        } => {
+            eprintln!("{}", i18n::cli_download_failed(target.as_str(), &message));
+            emit_download_event(
+                "error",
+                target,
+                downloaded_bytes,
+                total_bytes.max(total),
+                0,
+                Some(&target_dir),
+            );
+            Err(1)
+        }
+        // CLI 没有取消入口（命令行上没人能再按一次取消），这条分支只是把枚举走完：
+        // 真出现了也按失败报，绝不静默退出 0。
+        DownloadOutcome::Cancelled { .. } => {
+            eprintln!("{}", i18n::cli_download_cancelled(target.as_str()));
+            emit_download_event("error", target, 0, total, 0, Some(&target_dir));
+            Err(1)
+        }
+    }
+}
+
+/// catalog 里那个模型全部下载文件的总字节数（进度行的 total，与本机无关）。
+fn catalog_bytes(id: ModelId) -> u64 {
+    oneasr_core::model::model_definition(id)
+        .download_files
+        .iter()
+        .map(|f| f.expected_size)
+        .sum()
+}
+
+/// 机器可读的进度行 → **stdout**（人类可读的那些走 stderr）。
+///
+/// 上层（Electron 壳）只解析 stdout 就够了：双语横幅、报警原因都在 stderr，
+/// 不会混进解析流。
+fn emit_download_event(
+    state: &str,
+    model: ModelId,
+    done: u64,
+    total: u64,
+    speed: u64,
+    dir: Option<&Path>,
+) {
+    println!(
+        "{}",
+        i18n::cli_download_event(state, model.as_str(), done, total, speed, dir)
+    );
+}
+
+/// 「已装好且校验通过」的目录：命中就返回 `(id, 目录)`。
+///
+/// 扫描顺序是**候选在外、root 在内**，与 `apply_app_root_paths` 同一条规则：fp16
+/// 优先是全局规则，不被 root 顺序截胡——否则 `--data-root` 里只装了 int8 就会盖过
+/// `--app-root` 里的 fp16。
+fn installed_model(pick: &DownloadPick, roots: &[&Path]) -> Option<(ModelId, PathBuf)> {
+    first_installed(&pick.candidates, roots, |id, dir| {
+        check_model_dir(id, dir).is_ok()
+    })
+}
+
+/// 按「候选 → root」的顺序找第一个 `ready` 的目录。
+///
+/// 判据从参数进，是为了让这条**顺序**能被单测钉住：真判据要跑 `check_*_model_dir`，
+/// 那需要真的几 GB 权重（见 `download_gate_scans_candidates_before_roots`）。
+fn first_installed(
+    candidates: &[ModelId],
+    roots: &[&Path],
+    ready: impl Fn(ModelId, &Path) -> bool,
+) -> Option<(ModelId, PathBuf)> {
+    candidates.iter().find_map(|id| {
+        roots
+            .iter()
+            .map(|root| root.join(oneasr_core::paths::MODELS_DIR).join(id.as_str()))
+            .find(|dir| ready(*id, dir))
+            .map(|dir| (*id, dir))
+    })
+}
+
+/// 按模型种类走那一条现成的就绪判据（全仓库唯一的 `check_*_model_dir`）。
+fn check_model_dir(id: ModelId, dir: &Path) -> Result<(), String> {
+    let checked = match id.kind() {
+        ModelKind::Asr => oneasr_core::check_asr_model_dir(dir),
+        ModelKind::Align => oneasr_core::check_aligner_model_dir(dir),
+        ModelKind::Demucs => oneasr_core::check_demucs_model_dir(dir),
+        ModelKind::Hotword => oneasr_core::check_sensevoice_model_dir(dir),
+    };
+    checked.map_err(|e| e.to_string())
+}
+
+/// `--aligner` / `download --model` 旗标值 → 目录 id。接受短别名 `ctc` /
+/// `qwen` / `qwen-align` 与完整目录名。
 fn parse_aligner_arg(raw: &str) -> Option<ModelId> {
     let s = raw.trim();
     if s.eq_ignore_ascii_case("ctc") {
         return Some(ModelId::OmniAsrCtc300M);
     }
-    if s.eq_ignore_ascii_case("qwen") {
+    // `qwen-align` 是 download 那边的写法（`--aligner` 只写 `qwen` 也能用，
+    // 两个别名指同一个引擎，别让用户猜哪个旗标认哪个写法）。
+    if s.eq_ignore_ascii_case("qwen") || s.eq_ignore_ascii_case("qwen-align") {
         return Some(ModelId::QwenAlign06B);
     }
     ModelId::try_parse_aligner(s)
@@ -984,6 +1241,14 @@ fn parse_asr_arg(raw: &str) -> Option<AsrPick> {
     }
     if s.eq_ignore_ascii_case("1.7b") {
         return Some(AsrPick::Size(ModelId::Qwen3Asr17B));
+    }
+    // 量化版的短写法：粒度与完整目录名一样（只认它自己，不许换成 fp16）。
+    // `download --model 0.6b-int8` 与 `--asr 0.6b-int8` 共用这两行。
+    if s.eq_ignore_ascii_case("0.6b-int8") {
+        return Some(AsrPick::Exact(ModelId::Qwen3Asr06BInt8));
+    }
+    if s.eq_ignore_ascii_case("1.7b-int8") {
+        return Some(AsrPick::Exact(ModelId::Qwen3Asr17BInt8));
     }
     ModelId::try_parse_asr(s).map(AsrPick::Exact)
 }
@@ -1320,8 +1585,158 @@ mod tests {
             AsrPick::Exact(ModelId::Qwen3Asr17BInt8).candidates(),
             vec![ModelId::Qwen3Asr17BInt8]
         );
+        // 量化版的短写法：与目录级同一个粒度，只认它自己。
+        assert_eq!(
+            parse_asr_arg("0.6b-int8"),
+            Some(AsrPick::Exact(ModelId::Qwen3Asr06BInt8))
+        );
+        assert_eq!(
+            parse_asr_arg("1.7B-INT8"),
+            Some(AsrPick::Exact(ModelId::Qwen3Asr17BInt8))
+        );
         assert_eq!(parse_asr_arg("ctc"), None, "对齐器的别名不该被认成识别模型");
         assert_eq!(parse_asr_arg("nope"), None);
+    }
+
+    // ── download：`--model` 解析与「先验后下」的扫描顺序 ────────────────
+
+    /// catalog 里 8 个条目的**完整目录名**全都认得，且落到它自己（不换成同尺寸的
+    /// 另一份）。目录名从 `as_str()` 取，测试里不复制字面量。
+    #[test]
+    fn download_arg_resolves_every_catalog_directory_name() {
+        for id in [
+            ModelId::Qwen3Asr06B,
+            ModelId::Qwen3Asr17B,
+            ModelId::Qwen3Asr06BInt8,
+            ModelId::Qwen3Asr17BInt8,
+            ModelId::QwenAlign06B,
+            ModelId::OmniAsrCtc300M,
+            ModelId::HtdemucsFt,
+            ModelId::SenseVoiceSmall,
+        ] {
+            let pick = parse_download_arg(id.as_str())
+                .unwrap_or_else(|| panic!("目录名 {} 必须认得", id.as_str()));
+            assert_eq!(pick.target, id, "目录名 {} 必须落到它自己", id.as_str());
+            assert_eq!(pick.candidates, vec![id], "目录级写法只有一个候选");
+        }
+    }
+
+    /// 友好写法：尺寸别名带两个候选（fp16 优先），int8 短写法只认 int8，对齐器与
+    /// 两个可选模型各有一组别名；大小写与首尾空格都不敏感。
+    #[test]
+    fn download_arg_resolves_the_friendly_aliases() {
+        let size = parse_download_arg(" 0.6B ").expect("0.6b");
+        assert_eq!(size.target, ModelId::Qwen3Asr06B);
+        assert_eq!(
+            size.candidates,
+            vec![ModelId::Qwen3Asr06B, ModelId::Qwen3Asr06BInt8],
+            "尺寸级别名：同尺寸的 int8 也算这个尺寸已装"
+        );
+
+        // 与 `--asr` 共用同一套：1.7b 指尺寸，1.7b-int8 指量化权重。
+        assert_eq!(
+            parse_download_arg("1.7b").unwrap().candidates,
+            vec![ModelId::Qwen3Asr17B, ModelId::Qwen3Asr17BInt8]
+        );
+        for (raw, want) in [
+            ("0.6b-int8", ModelId::Qwen3Asr06BInt8),
+            ("1.7B-INT8", ModelId::Qwen3Asr17BInt8),
+        ] {
+            let quantized = parse_download_arg(raw).unwrap_or_else(|| panic!("{raw} 必须认得"));
+            assert_eq!(quantized.target, want, "{raw}");
+            assert_eq!(
+                quantized.candidates,
+                vec![want],
+                "点名了量化版就只认它，不许换成 fp16"
+            );
+        }
+
+        // 对齐器：`--aligner` 的 ctc / qwen 之外，download 还认 qwen-align。
+        assert_eq!(
+            parse_download_arg("ctc").unwrap().target,
+            ModelId::OmniAsrCtc300M
+        );
+        assert_eq!(
+            parse_download_arg("qwen").unwrap().target,
+            ModelId::QwenAlign06B
+        );
+        assert_eq!(
+            parse_download_arg("qwen-align").unwrap().target,
+            ModelId::QwenAlign06B
+        );
+
+        // 没有转写旗标的两个可选模型：短别名与目录名都认。
+        for alias in ["demucs", "htdemucs"] {
+            assert_eq!(
+                parse_download_arg(alias).unwrap().target,
+                ModelId::HtdemucsFt
+            );
+        }
+        assert_eq!(
+            parse_download_arg("sensevoice").unwrap().target,
+            ModelId::SenseVoiceSmall
+        );
+    }
+
+    /// 认不出来的写法返回 `None`，由调用方报错退出 2——**不许猜一个默认**：
+    /// `--asr` 猜错只是跑错型号，download 猜错是下错几个 GB。
+    ///
+    /// 断骨验证：给 `parse_download_arg` 末尾加一个兜底默认值
+    /// （`Some(DownloadPick::one(ModelId::Qwen3Asr06B))`），本用例全红。
+    #[test]
+    fn download_arg_refuses_unknown_ids() {
+        for raw in ["", "  ", "nope", "0.6", "0.6b-int4", "align", "--model"] {
+            assert!(parse_download_arg(raw).is_none(), "raw={raw:?}");
+        }
+        // `--asr` 的别名表里没有对齐器：`ctc` 只有 download / `--aligner` 认。
+        assert!(parse_asr_arg("ctc").is_none());
+    }
+
+    /// 「先验后下」的扫描顺序：**候选在外、root 在内**（fp16 优先是全局规则，不被
+    /// root 顺序截胡），与 `apply_app_root_paths` 同一条。
+    ///
+    /// 断骨验证：把 `first_installed` 的两层循环对调（root 在外），`seen` 的顺序
+    /// 断言立刻变红。
+    #[test]
+    fn download_gate_scans_candidates_before_roots() {
+        use std::cell::RefCell;
+
+        let data = env::temp_dir().join("oneasr-dl-gate-data");
+        let app = env::temp_dir().join("oneasr-dl-gate-app");
+        let roots = [data.as_path(), app.as_path()];
+        let candidates = [ModelId::Qwen3Asr17B, ModelId::Qwen3Asr17BInt8];
+
+        // 就绪的是「int8 @ data」：候选在外时，fp16 的两个根都要先问过。
+        let seen = RefCell::new(Vec::new());
+        let found = first_installed(&candidates, &roots, |id, dir| {
+            seen.borrow_mut().push((id, dir.to_path_buf()));
+            id == ModelId::Qwen3Asr17BInt8 && dir.starts_with(&data)
+        });
+        assert_eq!(
+            found,
+            Some((
+                ModelId::Qwen3Asr17BInt8,
+                data.join("models").join(ModelId::Qwen3Asr17BInt8.as_str())
+            ))
+        );
+        assert_eq!(
+            seen.into_inner(),
+            vec![
+                (
+                    ModelId::Qwen3Asr17B,
+                    data.join("models").join(ModelId::Qwen3Asr17B.as_str())
+                ),
+                (
+                    ModelId::Qwen3Asr17B,
+                    app.join("models").join(ModelId::Qwen3Asr17B.as_str())
+                ),
+                (
+                    ModelId::Qwen3Asr17BInt8,
+                    data.join("models").join(ModelId::Qwen3Asr17BInt8.as_str())
+                ),
+            ],
+            "fp16 的两个根没问完，就不该轮到 int8"
+        );
     }
 
     // ── 热词：`--hotword-group` / `--hotwords` ─────────────────────────
