@@ -1,5 +1,6 @@
 import type {
   Settings,
+  StartResult,
   ModelStatus,
   TaskSnapshot,
   StatsSnapshot,
@@ -36,8 +37,8 @@ export interface OneAsrApi {
   addTasks: (paths: string[]) => Promise<TaskSnapshot[]>
   removeTask: (id: string) => Promise<TaskSnapshot[]>
   clearTasks: () => Promise<TaskSnapshot[]>
-  startTask: (id: string) => Promise<void>
-  startAll: () => Promise<void>
+  startTask: (id: string) => Promise<StartResult>
+  startAll: () => Promise<StartResult>
   cancelTask: (id: string) => Promise<void>
   setTaskLanguage: (id: string, language: string) => Promise<TaskSnapshot[]>
   setTaskVocalSeparation: (id: string, on: boolean) => Promise<TaskSnapshot[]>

@@ -247,12 +247,9 @@ function registerIpc(): void {
   ipcMain.handle('tasks:add', (_e, paths: string[]) => jobs.add(paths))
   ipcMain.handle('tasks:remove', (_e, id: string) => jobs.remove(id))
   ipcMain.handle('tasks:clear', () => jobs.clear())
-  ipcMain.handle('tasks:start', (_e, id: string) => {
-    jobs.startOne(id)
-  })
-  ipcMain.handle('tasks:startAll', () => {
-    jobs.startAll()
-  })
+  // 门禁结果要回给渲染层（翻文案 / 翻设置页），所以这里必须把值传回去
+  ipcMain.handle('tasks:start', (_e, id: string) => jobs.startOne(id))
+  ipcMain.handle('tasks:startAll', () => jobs.startAll())
   ipcMain.handle('tasks:cancel', (_e, id: string) => {
     jobs.cancel(id)
   })

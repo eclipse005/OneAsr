@@ -44,6 +44,18 @@ export interface ModelStatus {
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
+/** 启动被挡下来的原因（渲染层翻成双语文案）。 */
+export type StartBlockCode =
+  | 'models' // ASR / 对齐权重不就绪
+  | 'sep-weights' // 开了人声分离但没有 Demucs 权重
+  | 'hotwords-empty' // 这一行绑的热词组是空的
+  | 'nothing-to-start' // 没有可开始的任务
+
+export interface StartResult {
+  ok: boolean
+  code?: StartBlockCode
+}
+
 export interface TaskSnapshot {
   id: string
   input: string

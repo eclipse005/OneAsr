@@ -2,8 +2,20 @@ import { ChildProcess, spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { EventEmitter } from 'events'
-import type { Settings, StatsSnapshot, TaskSnapshot } from '../shared/types'
-import { DEFAULT_APP_ROOT, loadSettings, resolveAsrDir, resolveCli } from './settings'
+import type {
+  Settings,
+  StartBlockCode,
+  StartResult,
+  StatsSnapshot,
+  TaskSnapshot
+} from '../shared/types'
+import {
+  DEFAULT_APP_ROOT,
+  checkModels,
+  loadSettings,
+  resolveAsrDir,
+  resolveCli
+} from './settings'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
 import { loadHotwords, wordsCsv } from './hotword'
 
@@ -214,13 +226,29 @@ export class JobManager extends EventEmitter {
     return this.list()
   }
 
+  /**
+   * 清空列表——**正在跑的那条留下**（GPUI 的行为）。
+   * 以前这里会顺手 cancel 掉运行中的任务，等于「清空」= 杀掉正在干的活。
+   */
   clear(): TaskSnapshot[] {
     this.queue = []
-    if (this.runningId) this.cancel(this.runningId)
     this.tasks = this.tasks.filter((t) => t.status === 'running')
-    if (!this.busy) this.tasks = []
     this.emitUpdate()
     return this.list()
+  }
+
+  /**
+   * 启动前的门禁：能跑就返回 undefined，否则给出原因码。
+   * 挡在「点开始」这一刻，比失败的 stderr 铺到卡片上再让人猜要好。
+   */
+  private blockReason(task: TaskSnapshot, models: ReturnType<typeof checkModels>): StartBlockCode | undefined {
+    if (!models.ready) return 'models'
+    if (task.vocalSeparation && !models.demucsReady) return 'sep-weights'
+    if (task.hotwordGroupId) {
+      const group = loadHotwords().groups.find((g) => g.id === task.hotwordGroupId)
+      if (!group || !wordsCsv(group).trim()) return 'hotwords-empty'
+    }
+    return undefined
   }
 
   cancel(id: string): void {
@@ -257,9 +285,11 @@ export class JobManager extends EventEmitter {
     }
   }
 
-  startOne(id: string): void {
+  startOne(id: string): StartResult {
     const t = this.tasks.find((x) => x.id === id)
-    if (!t || t.status === 'running') return
+    if (!t || t.status === 'running') return { ok: false, code: 'nothing-to-start' }
+    const blocked = this.blockReason(t, checkModels(loadSettings()))
+    if (blocked) return { ok: false, code: blocked }
     t.status = 'queued'
     t.progress = ''
     t.stage = undefined
@@ -272,11 +302,20 @@ export class JobManager extends EventEmitter {
     if (!this.queue.includes(id)) this.queue.push(id)
     this.emitUpdate()
     void this.pump()
+    return { ok: true }
   }
 
-  startAll(): void {
+  startAll(): StartResult {
+    const models = checkModels(loadSettings())
+    let firstBlock: StartBlockCode | undefined
+    let queued = 0
     for (const t of this.tasks) {
       if (t.status === 'running') continue
+      const blocked = this.blockReason(t, models)
+      if (blocked) {
+        firstBlock ??= blocked
+        continue
+      }
       t.status = 'queued'
       t.progress = ''
       t.stage = undefined
@@ -286,9 +325,12 @@ export class JobManager extends EventEmitter {
       t.stageTimings = undefined
       t.totalMs = undefined
       if (!this.queue.includes(t.id)) this.queue.push(t.id)
+      queued += 1
     }
+    if (queued === 0) return { ok: false, code: firstBlock ?? 'nothing-to-start' }
     this.emitUpdate()
     void this.pump()
+    return { ok: true }
   }
 
   private emitUpdate(): void {

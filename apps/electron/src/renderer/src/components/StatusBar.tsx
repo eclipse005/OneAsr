@@ -13,7 +13,8 @@ export function StatusBar({
   const s = t(lang)
   const ready = !!models?.ready
   const running = tasks.filter((x) => x.status === 'running').length
-  const queued = tasks.filter((x) => x.status === 'queued').length
+  // 「排队」只算真正进了运行队列的（有 queueRank）；刚添加还没点开始的是「待处理」，行内有徽章
+  const queued = tasks.filter((x) => x.status === 'queued' && x.queueRank != null).length
   return (
     <div className="statusbar">
       <span className={`dot ${ready ? 'ok' : ''}`} />

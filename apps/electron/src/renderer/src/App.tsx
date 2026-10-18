@@ -12,6 +12,7 @@ import type {
   HotwordStore,
   ModelStatus,
   Settings,
+  StartResult,
   StatsSnapshot,
   TaskSnapshot,
   ToastPayload
@@ -151,6 +152,25 @@ export default function App() {
     }
   }, [refreshModels, refreshStats])
 
+  /** 启动被门禁挡下时：把原因翻译成文案弹出来；模型问题直接把设置翻到「模型」页。 */
+  const reportStart = useCallback(
+    (r: StartResult) => {
+      if (r.ok) return
+      const code = r.code ?? 'nothing-to-start'
+      const msg =
+        code === 'models'
+          ? s.blockModels
+          : code === 'sep-weights'
+            ? s.blockSepWeights
+            : code === 'hotwords-empty'
+              ? s.blockHotwordsEmpty
+              : s.blockNothing
+      pushToast('warn', msg)
+      if (code === 'models') void openSettingsFn('models')
+    },
+    [s, pushToast, openSettingsFn]
+  )
+
   const saveAllSettings = async () => {
     if (!draft || !hotwordDraft) return
     const saved = await window.oneasr.saveSettings(draft)
@@ -233,14 +253,20 @@ export default function App() {
         <button
           className="btn btn-ghost"
           disabled={!tasks.length || tasks.every((x) => x.status === 'running')}
-          onClick={() => void window.oneasr.startAll()}
+          onClick={() => void window.oneasr.startAll().then(reportStart)}
         >
           {s.startAll}
         </button>
         <button
           className="btn btn-ghost btn-danger-ghost"
           disabled={!tasks.length}
-          onClick={() => void window.oneasr.clearTasks().then(setTasks)}
+          onClick={() =>
+            void window.oneasr.clearTasks().then((next) => {
+              setTasks(next)
+              // 正在跑的那条不再被一起清掉；说一声，免得以为没生效
+              if (next.some((t) => t.status === 'running')) pushToast('info', s.clearedKeptRunning)
+            })
+          }
         >
           {s.clear}
         </button>
@@ -294,7 +320,7 @@ export default function App() {
             tasks={tasks}
             hotwordGroups={hotwords?.groups ?? []}
             defaultLanguage={settings?.language ?? 'zh'}
-            onStart={(id) => void window.oneasr.startTask(id)}
+            onStart={(id) => void window.oneasr.startTask(id).then(reportStart)}
             onCancel={(id) => void window.oneasr.cancelTask(id)}
             onRemove={(id) => void window.oneasr.removeTask(id).then(setTasks)}
             onOpen={(p) => void window.oneasr.openOutputFolder(p)}
