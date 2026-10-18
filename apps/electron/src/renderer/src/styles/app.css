@@ -322,8 +322,11 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--muted); transition: background .12s, color .12s, border-color .12s;
 }
 .icon-btn:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
-.icon-btn.primary { background: var(--accent); color: #fff; }
-.icon-btn.primary:hover:not(:disabled) { background: var(--logo); color: #fff; }
+/* 行内主操作**不用实心填充**：实心青绿是"页面级 CTA"的权重（工具栏那个「＋添加」），
+   用在每一行的图标上会让列表一直在喊"点我"，而且完成行/失败行的主操作都成了同一块绿，
+   主次也就没了。改用统一幽灵样式 + 主操作给强调色图标，hover 才出淡底。 */
+.icon-btn.primary { color: var(--accent); }
+.icon-btn.primary:hover:not(:disabled) { background: var(--accent-mist); color: var(--logo); }
 .icon-btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
 /* 图标 = 资产（仓库 assets/icons，与 GPUI 版同一份）+ mask 上色：尺寸类与图形类解耦，
