@@ -97,7 +97,7 @@ export function SettingsDrawer({
   return (
     <div className="overlay" onClick={onClose}>
       <motion.div
-        className="modal-shell wide tall"
+        className="modal-shell dense tall"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -113,54 +113,58 @@ export function SettingsDrawer({
             {s.close}
           </button>
         </div>
-        <div className="modal-body">
+        <div className="modal-body dense">
           <div className="section">
             <h4>{s.sectionGeneral}</h4>
-            <div className="field">
-              <label>{s.uiLanguage}</label>
-              <select value={draft.ui_language} onChange={(e) => set('ui_language', e.target.value)}>
-                <option value="system">{s.system}</option>
-                <option value="zh">中文</option>
-                <option value="en">English</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>{s.recognitionLanguage}</label>
-              <select value={draft.language} onChange={(e) => set('language', e.target.value)}>
-                {LANG_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label>{s.subtitleLength}</label>
-              <div className="chip-row">
-                {(['short', 'standard', 'loose'] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={`chip ${draft.subtitle_length_preset === p ? 'active' : ''}`}
-                    onClick={() => set('subtitle_length_preset', p)}
-                  >
-                    {s[p]}
-                  </button>
-                ))}
+            <div className="field-row">
+              <div className="field">
+                <label>{s.uiLanguage}</label>
+                <select value={draft.ui_language} onChange={(e) => set('ui_language', e.target.value)}>
+                  <option value="system">{s.system}</option>
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>{s.recognitionLanguage}</label>
+                <select value={draft.language} onChange={(e) => set('language', e.target.value)}>
+                  {LANG_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-            <div className="field">
-              <label>{s.chunkDuration}</label>
-              <select
-                value={String(draft.chunk_target_seconds)}
-                onChange={(e) => set('chunk_target_seconds', Number(e.target.value))}
-              >
-                {[30, 60, 90, 120, 180].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
+            <div className="field-row">
+              <div className="field">
+                <label>{s.subtitleLength}</label>
+                <div className="chip-row">
+                  {(['short', 'standard', 'loose'] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={`chip ${draft.subtitle_length_preset === p ? 'active' : ''}`}
+                      onClick={() => set('subtitle_length_preset', p)}
+                    >
+                      {s[p]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="field">
+                <label>{s.chunkDuration}</label>
+                <select
+                  value={String(draft.chunk_target_seconds)}
+                  onChange={(e) => set('chunk_target_seconds', Number(e.target.value))}
+                >
+                  {[30, 60, 90, 120, 180].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -184,13 +188,15 @@ export function SettingsDrawer({
                 ))}
               </div>
             </div>
-            <div className="field">
-              <label>{s.subtitlePolish}</label>
-              <Toggle on={draft.subtitle_beautify} onChange={(v) => set('subtitle_beautify', v)} />
-            </div>
-            <div className="field">
-              <label>{s.saveNextToSource}</label>
-              <Toggle on={draft.save_next_to_source} onChange={(v) => set('save_next_to_source', v)} />
+            <div className="field-row">
+              <div className="field">
+                <label>{s.subtitlePolish}</label>
+                <Toggle on={draft.subtitle_beautify} onChange={(v) => set('subtitle_beautify', v)} />
+              </div>
+              <div className="field">
+                <label>{s.saveNextToSource}</label>
+                <Toggle on={draft.save_next_to_source} onChange={(v) => set('save_next_to_source', v)} />
+              </div>
             </div>
             <div className="field stack">
               <label>{s.outputPath}</label>
@@ -208,23 +214,24 @@ export function SettingsDrawer({
               <Pill ok={!!models?.alignerReady} label={s.aligner} ready={s.ready} missing={s.missing} />
               <Pill ok={!!models?.demucsReady} label={s.demucs} ready={s.ready} missing={s.missing} />
             </div>
-            <div className="note">{s.downloadNote}</div>
-            <div className="chip-row">
+            <div className="chip-row" style={{ marginTop: 2 }}>
               <button type="button" className="btn btn-ghost" onClick={onOpenModels}>{s.openModels}</button>
               <button type="button" className="btn btn-ghost" onClick={onRefreshModels}>↻</button>
             </div>
-            <div className="field">
-              <label>{s.asrSize}</label>
-              <div className="chip-row">
-                <button type="button" className={`chip ${size === '0.6B' ? 'active' : ''}`} onClick={() => setAsr('0.6B', quant)}>0.6B</button>
-                <button type="button" className={`chip ${size === '1.7B' ? 'active' : ''}`} onClick={() => setAsr('1.7B', quant)}>1.7B</button>
+            <div className="field-row">
+              <div className="field">
+                <label>{s.asrSize}</label>
+                <div className="chip-row">
+                  <button type="button" className={`chip ${size === '0.6B' ? 'active' : ''}`} onClick={() => setAsr('0.6B', quant)}>0.6B</button>
+                  <button type="button" className={`chip ${size === '1.7B' ? 'active' : ''}`} onClick={() => setAsr('1.7B', quant)}>1.7B</button>
+                </div>
               </div>
-            </div>
-            <div className="field">
-              <label>{s.quantization}</label>
-              <div className="chip-row">
-                <button type="button" className={`chip ${quant === 'fp16' ? 'active' : ''}`} onClick={() => setAsr(size, 'fp16')}>{s.fp16}</button>
-                <button type="button" className={`chip ${quant === 'int8' ? 'active' : ''}`} onClick={() => setAsr(size, 'int8')}>{s.int8}</button>
+              <div className="field">
+                <label>{s.quantization}</label>
+                <div className="chip-row">
+                  <button type="button" className={`chip ${quant === 'fp16' ? 'active' : ''}`} onClick={() => setAsr(size, 'fp16')}>{s.fp16}</button>
+                  <button type="button" className={`chip ${quant === 'int8' ? 'active' : ''}`} onClick={() => setAsr(size, 'int8')}>{s.int8}</button>
+                </div>
               </div>
             </div>
             <div className="field stack">
@@ -274,19 +281,21 @@ export function SettingsDrawer({
 
           <div className="section">
             <h4>{s.sectionCompute}</h4>
-            <div className="field">
-              <label>{s.computeBackend}</label>
-              <div className="chip-row">
-                {(['auto', 'gpu', 'cpu'] as const).map((b) => (
-                  <button key={b} type="button" className={`chip ${draft.backend === b ? 'active' : ''}`} onClick={() => set('backend', b)}>
-                    {s[b]}
-                  </button>
-                ))}
+            <div className="field-row">
+              <div className="field">
+                <label>{s.computeBackend}</label>
+                <div className="chip-row">
+                  {(['auto', 'gpu', 'cpu'] as const).map((b) => (
+                    <button key={b} type="button" className={`chip ${draft.backend === b ? 'active' : ''}`} onClick={() => set('backend', b)}>
+                      {s[b]}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="field">
-              <label>{s.sounds}</label>
-              <Toggle on={draft.sound} onChange={(v) => set('sound', v)} />
+              <div className="field">
+                <label>{s.sounds}</label>
+                <Toggle on={draft.sound} onChange={(v) => set('sound', v)} />
+              </div>
             </div>
           </div>
         </div>

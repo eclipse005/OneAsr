@@ -103,7 +103,7 @@ export function HotwordPanel({
   return (
     <div className="overlay" onClick={tryClose}>
       <motion.div
-        className="modal-shell wide tall"
+        className="modal-shell wide tall dense"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -123,9 +123,7 @@ export function HotwordPanel({
           </button>
         </div>
 
-        <div className="modal-body" style={{ gap: 12 }}>
-          <div className="note">{s.hotwordHint}</div>
-
+        <div className="modal-body dense" style={{ gap: 8 }}>
           <div className="hw-layout">
             <aside className="hw-sidebar">
               <div className="hw-sidebar-head">{s.groups}</div>
@@ -253,8 +251,6 @@ export function HotwordPanel({
                       <span className="hw-add-feedback">+{lastAdded}</span>
                     )}
                   </div>
-                  <p className="hw-add-hint">{s.batchHint}</p>
-
                   {/* Main stage: chip cloud */}
                   <div className={`hw-chips ${words.length === 0 ? 'empty' : ''}`}>
                     {words.length === 0 ? (
