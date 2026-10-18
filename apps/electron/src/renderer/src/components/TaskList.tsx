@@ -205,12 +205,13 @@ export function TaskList({
               <div className="card-info">
                 <div className="name">
                   {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到就先留空位 */}
-                  {task.mediaKind === 'audio' || task.mediaKind === 'video' ? (
-                    <span className={`media-icon ${task.mediaKind}`} aria-hidden />
-                  ) : (
-                    // 后端报 other（如 .txt）或还没探到：留空位不画图标
-                    <span aria-hidden />
-                  )}
+                  {/* 图标位**永远占 15px**：后端报 other（如 .txt）或还没探到时只是不画图形，
+                      但宽度必须留着 —— 空 <span> 在 flex 里会塌成 0 宽，整行文件名就左移 15px
+                      （首行从 grid 换成 flex 时踩过这个坑，实测 .txt 行 nameLeft 43 vs 58） */}
+                  <span
+                    className={`media-icon ${task.mediaKind ?? 'unknown'}`}
+                    aria-hidden
+                  />
                   {/* 完整路径放 title：文件名放不下或者需要确认位置时，悬停就能看到 */}
                   <span className="task-name" title={`${task.name}\n${task.input}`}>
                     {task.name}

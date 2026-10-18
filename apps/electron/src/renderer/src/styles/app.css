@@ -143,6 +143,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* ── 任务行内能力（对齐 GPUI：媒体图标、尺寸·时长、排队位次、每行语言/热词组/人声分离、耗时明细）── */
 .task-card .media-icon { width: 15px; height: 15px; flex: none; background: var(--muted-soft); }
+/* 未知/未探到：只占位、不画图形（底色透明，否则会是一块灰方块） */
+.task-card .media-icon.unknown { background: transparent; }
 .task-card .media-icon.audio {
   -webkit-mask: url('@assets/icons/audio.svg') center / contain no-repeat;
   mask: url('@assets/icons/audio.svg') center / contain no-repeat;
@@ -181,8 +183,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border-style: solid; border-color: var(--accent);
   background: var(--accent-soft); color: var(--logo); font-weight: 650;
 }
-.timing-chip { cursor: default; color: var(--muted); }
-.timing-chip:hover { color: var(--text); }
+/* 「耗时」是悬停明细的入口，但它看起来只是普通灰字 —— 用虚线下划线说明"这里有东西" */
+.timing-chip {
+  cursor: default; color: var(--muted);
+  text-decoration: underline dotted; text-underline-offset: 2px;
+}
+.timing-chip:hover { color: var(--text); text-decoration-color: var(--accent); }
 /* 悬停弹卡：portal 到 body + fixed 定位（卡片内的绝对定位会被 .task-list 的
    overflow:auto 裁掉），位置由 JS 给，底部放不下会翻到上方 */
 .hover-card {
