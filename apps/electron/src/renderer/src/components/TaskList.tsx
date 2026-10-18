@@ -290,10 +290,11 @@ export function TaskList({
 
               {/* 动作区用图标按钮：等宽 → 各行控件严格对齐；文字说明交给 title / aria-label
                   （图标是仓库里那 5 个 SVG，GPUI 版同一份资产，mask 上色跟着主题走） */}
+              {/* 固定三槽位，**永远都是满的**（没有"为了对齐留空位"那种掉牙感）：
+                    槽位1 生命周期控制（开始/取消/重试/重新转录）、槽位2 查看结果、
+                    槽位3 移除。完成后高光从槽位1 转到槽位2（打开输出点亮、重跑退成灰），
+                    所以"下一步该点哪个"一眼可见，而不是靠多出一个按钮来暗示。 */}
               <div className="actions">
-                {/* 固定三槽位：主操作 / 次操作 / 删除。空槽也占位——所以不管这一行是
-                    待处理还是完成，右侧图标、状态药丸、参数 chip 的 x 坐标都一样，
-                    整列像表格一样对齐（文字按钮做不到这一点：宽度随文案变） */}
                 {task.status === 'running' || (task.status === 'queued' && task.queueRank != null) ? (
                   <IconButton
                     icon="stop"
@@ -301,25 +302,23 @@ export function TaskList({
                     tone="danger"
                     onClick={() => onCancel(task.id)}
                   />
+                ) : doneWithOutput ? (
+                  <IconButton icon="retry" label={s.retranscribe} onClick={() => onStart(task.id)} />
                 ) : (
                   <IconButton
-                    icon={doneWithOutput ? 'folder' : task.status === 'error' ? 'retry' : 'play'}
-                    label={doneWithOutput ? s.openOutput : task.status === 'error' ? s.retry : s.start}
+                    icon={task.status === 'error' ? 'retry' : 'play'}
+                    label={task.status === 'error' ? s.retry : s.start}
                     tone="primary"
-                    onClick={() =>
-                      doneWithOutput ? onOpen(task.outputPath!) : onStart(task.id)
-                    }
-                  />
-                )}
-                {doneWithOutput ? (
-                  <IconButton
-                    icon="retry"
-                    label={s.retranscribe}
                     onClick={() => onStart(task.id)}
                   />
-                ) : (
-                  <span className="icon-slot" aria-hidden />
                 )}
+                <IconButton
+                  icon="folder"
+                  label={s.openOutput}
+                  tone="primary"
+                  disabled={!doneWithOutput}
+                  onClick={() => onOpen(task.outputPath!)}
+                />
                 <IconButton
                   icon="trash"
                   label={s.remove}
