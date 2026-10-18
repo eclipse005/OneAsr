@@ -72,10 +72,6 @@ export function TaskList({
           const meta = [size, duration].filter(Boolean).join('  ·  ')
           const timingMs =
             task.totalMs ?? (task.stageTimings?.reduce((a, b) => a + b.ms, 0) || undefined)
-          const pct = Math.min(
-            100,
-            task.progressPct || (task.status === 'done' ? 100 : 8)
-          )
 
           return (
             <motion.div
@@ -91,14 +87,19 @@ export function TaskList({
                 <div className="name">
                   <span className={`media-icon ${mediaKind(task.name)}`} aria-hidden />
                   {task.name}
-                  <span className={`badge ${task.status}`}>
-                    {task.status === 'queued' && task.queueRank == null ? s.pending : label(task.status)}
-                  </span>
+                  {/* 跑的时候药丸直接写阶段名（跟 GPUI 一样，不画进度条——百分比是拿阶段序号
+                      估的，本来也不代表真实进度） */}
+                  {task.status === 'running' ? (
+                    <span className="badge running">{task.stage || s.running}</span>
+                  ) : (
+                    <span className={`badge ${task.status}`}>
+                      {task.status === 'queued' && task.queueRank == null
+                        ? s.pending
+                        : label(task.status)}
+                    </span>
+                  )}
                   {task.status === 'queued' && task.queueRank != null && (
                     <span className="badge rank">{queueRank(lang, task.queueRank)}</span>
-                  )}
-                  {task.stage && task.status === 'running' && (
-                    <span className="badge running">{task.stage}</span>
                   )}
                 </div>
                 {meta && <div className="row-meta">{meta}</div>}
@@ -204,12 +205,6 @@ export function TaskList({
                   )}
                 </div>
 
-                {/* 进度条只在跑的时候画：完成/失败的行有状态药丸与耗时 chip，不需要再挂一条满格进度 */}
-                {task.status === 'running' && (
-                  <div className="progress" aria-hidden>
-                    <i style={{ width: `${pct}%` }} />
-                  </div>
-                )}
 
                 {task.error && (
                   <div className="row-error">

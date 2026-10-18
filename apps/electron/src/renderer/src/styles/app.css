@@ -200,14 +200,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .task-card .meta { color: var(--muted); font-size: 0.82rem; word-break: break-all; }
 .task-card .actions { display: flex; gap: 6px; align-items: start; flex-wrap: wrap; justify-content: flex-end; }
 
-.progress {
-  margin-top: 10px; height: 6px; border-radius: 999px; background: var(--line-soft); overflow: hidden;
-}
-.progress > i {
-  display: block; height: 100%; border-radius: inherit;
-  background: linear-gradient(90deg, #2dd4bf, var(--accent));
-  transition: width .35s ease;
-}
 
 .badge {
   display: inline-flex; align-items: center; gap: 6px;

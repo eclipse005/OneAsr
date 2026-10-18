@@ -266,6 +266,9 @@ export class JobManager extends EventEmitter {
     t.progressPct = 0
     t.error = undefined
     t.outputPath = undefined
+    // 上一轮的耗时明细要清掉，否则重跑时「耗时」chip 先显示旧数字
+    t.stageTimings = undefined
+    t.totalMs = undefined
     if (!this.queue.includes(id)) this.queue.push(id)
     this.emitUpdate()
     void this.pump()
@@ -280,6 +283,8 @@ export class JobManager extends EventEmitter {
       t.progressPct = 0
       t.error = undefined
       t.outputPath = undefined
+      t.stageTimings = undefined
+      t.totalMs = undefined
       if (!this.queue.includes(t.id)) this.queue.push(t.id)
     }
     this.emitUpdate()
