@@ -150,6 +150,24 @@ export function HotwordEditor({
             )
           })}
         </select>
+        <div className="hw-default-toggle" title={s.defaultGroup}>
+          <span className="pref-label">{s.defaultGroupShort}</span>
+          <button
+            type="button"
+            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+            role="switch"
+            aria-checked={draft.default_group_enabled}
+            aria-label={s.defaultGroup}
+            disabled={!group}
+            onClick={() =>
+              touch({
+                ...draft,
+                default_group_enabled: !draft.default_group_enabled,
+                default_group: draft.default_group || group?.id || null
+              })
+            }
+          />
+        </div>
         <input
           className="text-input hw-name"
           placeholder={s.groupNamePh}
@@ -206,24 +224,6 @@ export function HotwordEditor({
         >
           {s.deleteGroup}
         </button>
-        <div className="hw-default-toggle" title={s.defaultGroup}>
-          <span className="pref-label">{s.defaultGroup}</span>
-          <button
-            type="button"
-            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
-            role="switch"
-            aria-checked={draft.default_group_enabled}
-            aria-label={s.defaultGroup}
-            disabled={!group}
-            onClick={() =>
-              touch({
-                ...draft,
-                default_group_enabled: !draft.default_group_enabled,
-                default_group: draft.default_group || group?.id || null
-              })
-            }
-          />
-        </div>
       </div>
 
       {/* Middle: chip cloud */}

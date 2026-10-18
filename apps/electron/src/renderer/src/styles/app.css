@@ -674,14 +674,14 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .hw-group-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
   flex-shrink: 0;
 }
 .hw-group-select {
   height: 30px;
-  min-width: 140px;
-  max-width: 220px;
+  min-width: 120px;
+  max-width: 180px;
   padding: 0 8px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -695,9 +695,9 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   outline: none;
 }
 .hw-group-bar .hw-name {
-  flex: 1;
-  min-width: 120px;
-  max-width: 220px;
+  flex: 1 1 auto;
+  min-width: 96px;
+  max-width: 160px;
 }
 .hw-group-bar .chip {
   height: 30px;
@@ -705,16 +705,32 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .hw-default-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-left: auto;
+  gap: 6px;
   flex-shrink: 0;
-  min-height: 30px;
+  height: 30px;
+  padding: 0 2px 0 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
 }
 .hw-default-toggle .pref-label {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   color: var(--muted);
-  font-weight: 550;
+  font-weight: 600;
   white-space: nowrap;
+}
+.hw-default-toggle .toggle {
+  width: 36px;
+  height: 20px;
+}
+.hw-default-toggle .toggle::after {
+  width: 14px;
+  height: 14px;
+  top: 3px;
+  left: 3px;
+}
+.hw-default-toggle .toggle.on::after {
+  transform: translateX(16px);
 }
 
 .hw-bottom {
