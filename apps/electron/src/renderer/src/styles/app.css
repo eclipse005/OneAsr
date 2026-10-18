@@ -200,20 +200,26 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 /* 错误：单独占最下面一行（拉通两列），全文折行显示；点一下即复制 */
 .task-card .row-error {
   grid-column: 1 / -1;
+  /* 默认顶对齐（阶段标签要跟第一行文字走），复制按钮自己 align-self:center 居中 */
   display: flex; align-items: flex-start;
-  padding: 7px 9px; margin-top: 2px; border-radius: 8px;
+  /* 右内边距 3px：让 26px 的复制按钮中心正好落在上方 32px 删除按钮的中心列上 */
+  padding: 7px 3px 7px 9px; margin-top: 2px; border-radius: 8px;
   background: var(--danger-soft); cursor: pointer;
   transition: background .12s;
 }
 .task-card .row-error:hover { background: #fee2e2; }
-/* 复制按钮贴在错误框右侧、与首行文字对齐 */
-.task-card .row-error .err-copy { align-self: flex-start; margin-left: 8px; width: 26px; height: 26px; border-radius: 7px; }
+/* 复制按钮**钉在最右侧**（margin-left:auto，不随文字长短浮动），垂直居中，
+   并与上方那一列的删除按钮同轴 */
+.task-card .row-error .err-copy {
+  flex: none; margin-left: auto; align-self: center;
+  width: 26px; height: 26px; border-radius: 7px;
+}
 .task-card .row-error .err-stage {
   flex: none; margin-right: 8px; padding: 1px 7px; border-radius: 6px;
   background: #fff; color: var(--danger); font-size: 0.72rem; font-weight: 700;
 }
 .task-card .row-error .err-text {
-  min-width: 0; color: var(--danger); font-size: 0.76rem; line-height: 1.45;
+  min-width: 0; flex: 1 1 auto; color: var(--danger); font-size: 0.76rem; line-height: 1.45;
   /* 等宽：错误里全是路径、参数、ffmpeg 的十六进制指针，等宽更好扫也更好复制去搜 */
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap; word-break: break-word;
