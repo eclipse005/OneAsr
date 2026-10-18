@@ -117,6 +117,7 @@ export function TaskList({
             task.totalMs ?? (task.stageTimings?.reduce((a, b) => a + b.ms, 0) || undefined)
           // 阶段文案按 CLI 的稳定 key 出（label 只是兜底），药丸与耗时明细共用
           const stageText = stageLabel(lang, task.stageKey, task.stage)
+          const duplicateName = tasks.some((x) => x.id !== task.id && x.name === task.name)
           const langKey = `${task.id}:lang`
           const hwKey = `${task.id}:hw`
 
@@ -135,7 +136,8 @@ export function TaskList({
                   ) : (
                     <span aria-hidden />
                   )}
-                  <span className="task-name" title={task.name}>
+                  {/* 完整路径放 title：文件名放不下或者需要确认位置时，悬停就能看到 */}
+                  <span className="task-name" title={`${task.name}\n${task.input}`}>
                     {task.name}
                   </span>
                   {task.status === 'running' ? (
@@ -160,7 +162,9 @@ export function TaskList({
                   )}
                 </div>
                 {meta && <div className="row-meta">{meta}</div>}
-                <div className="meta">{task.input}</div>
+                {/* 路径默认不占行（文件名已经在上面，留着只是噪音）；
+                    只有**同名不同目录**时才显示——那时它是唯一能区分两者的信息 */}
+                {duplicateName && <div className="meta">{task.input}</div>}
 
                 <div className="row-chips">
                   <button
