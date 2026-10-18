@@ -11,21 +11,14 @@ import {
 } from 'electron'
 import { join } from 'path'
 import fs from 'fs'
-import {
-  DEFAULT_APP_ROOT,
-  checkModels,
-  defaultSettings,
-  loadSettings,
-  modelsInventory,
-  resolveCli,
-  saveSettings
-} from './settings'
+import { DEFAULT_APP_ROOT, defaultSettings, loadSettings, resolveCli, saveSettings } from './settings'
+import { runCliJson } from './cli'
 import { JobManager } from './jobs'
 import { DownloadManager } from './downloads'
 import { addSessionContext, initLog, installProcessHandlers, logPathname } from './log'
 import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
-import type { HotwordStore, Settings } from '../shared/types'
+import type { HotwordStore, Settings, StatusSnapshot } from '../shared/types'
 
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
@@ -195,17 +188,20 @@ function createWindow(): void {
   )
   // 这些信息平时只留在内存里；一旦有 WARN/ERROR/PANIC，会连同第一条日志一起写入
   addSessionContext('window', `chrome=${JSON.stringify(chrome)}\nicon=${icon ?? '(none)'}\ncli=${resolveCli()}`)
-  try {
-    const models = checkModels(loadSettings())
-    addSessionContext(
-      'models',
-      `asr=${models.asrLabel} ready=${models.asrReady} path=${models.asrPath}\n` +
-        `aligner=${models.alignerLabel} ready=${models.alignerReady} path=${models.alignerPath}\n` +
-        `demucs=${models.demucsReady} sensevoice=${models.sensevoiceReady} backend=${models.backend}`
-    )
-  } catch {
-    /* 探针失败不影响启动 */
-  }
+  // 模型状态也问 CLI（判据在 Rust），随手把结果塞进诊断日志的会话上下文
+  void runCliJson<StatusSnapshot>(['status', '--json'], 20000)
+    .then((r) => {
+      if (!r.ok || !r.data) return
+      const m = r.data.models
+      addSessionContext(
+        'models (oneasr-cli status)',
+        `asr=${m.asr.id} ready=${m.asr.ready} path=${m.asr.dir}\n` +
+          `aligner=${m.aligner.id} ready=${m.aligner.ready} path=${m.aligner.dir}\n` +
+          `demucs=${m.demucs.ready} sensevoice=${m.sensevoice.ready} backend=${r.data.backend}\n` +
+          `can_start=${r.data.can_start.ok ? 'ok' : (r.data.can_start.reason ?? 'no')}`
+      )
+    })
+    .catch(() => undefined)
   void app
     .getGPUInfo('basic')
     .then((info) => addSessionContext('gpu', JSON.stringify(info).slice(0, 800)))
@@ -267,8 +263,14 @@ function registerIpc(): void {
   ipcMain.handle('settings:get', () => loadSettings())
   ipcMain.handle('settings:save', (_e, settings: Settings) => saveSettings(settings))
   ipcMain.handle('settings:reset', () => saveSettings(defaultSettings()))
-  ipcMain.handle('models:check', () => checkModels(loadSettings()))
-  ipcMain.handle('models:inventory', () => modelsInventory())
+  /**
+   * 模型状态、就绪判据、开跑门禁、可选模型清单（catalog）——全部来自
+   * `oneasr-cli status --json`。壳只转发，不再自己判断目录够不够。
+   */
+  ipcMain.handle('models:status', async () => {
+    const r = await runCliJson<StatusSnapshot>(['status', '--json'], 20000)
+    return r.ok ? r.data : null
+  })
   // 下载：一次一个，进度从 CLI 的 stdout 机器行来
   ipcMain.handle('download:start', (_e, model: string) => downloads.start(model))
   ipcMain.handle('download:cancel', () => {

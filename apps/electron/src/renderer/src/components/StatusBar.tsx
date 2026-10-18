@@ -1,22 +1,26 @@
 import { t, UiLang } from '../i18n'
-import type { ModelStatus, TaskSnapshot } from '../../../shared/types'
+import { dirName } from '../lib/format'
+import type { StatusSnapshot, TaskSnapshot } from '../../../shared/types'
 
 export function StatusBar({
   lang,
-  models,
+  status,
   tasks,
   message,
   onCopyMessage
 }: {
   lang: UiLang
-  models: ModelStatus | null
+  /** CLI 的 status --json 快照：就绪、门禁、后端全在里面，壳只显示 */
+  status: StatusSnapshot | null
   tasks: TaskSnapshot[]
   /** 最近一条提示：toast 会消失，这里留 3~6 秒并且可点击复制（长路径/报错不至于看了就丢） */
   message?: { kind: string; text: string } | null
   onCopyMessage?: (text: string) => void
 }) {
   const s = t(lang)
-  const ready = !!models?.ready
+  // 就绪与否 = Rust 的 can_start（含「只导 TXT 就不要求对齐」这类细则），失败时 title 给原因
+  const ready = !!status?.can_start.ok
+  const notReadyReason = status?.can_start.reason ?? undefined
   const running = tasks.filter((x) => x.status === 'running').length
   // 「排队」只算真正进了运行队列的（有 queueRank）；刚添加还没点开始的是「待处理」，行内有徽章
   const queued = tasks.filter((x) => x.status === 'queued' && x.queueRank != null).length
@@ -24,28 +28,31 @@ export function StatusBar({
   return (
     <div className="statusbar">
       <span className={`dot ${ready ? 'ok' : ''}`} />
-      <strong style={{ color: ready ? 'var(--logo)' : 'var(--warn)', fontWeight: 700 }}>
+      <strong
+        style={{ color: ready ? 'var(--logo)' : 'var(--warn)', fontWeight: 700 }}
+        title={notReadyReason}
+      >
         {ready ? s.modelsReady : s.modelsNotReady}
       </strong>
       <span className="sep" />
-      <span title={models?.asrPath}>
-        {s.asr}: {models?.asrReady ? '✓' : '✗'} {models?.asrLabel || ''}
+      <span title={status?.models.asr.dir}>
+        {s.asr}: {status?.models.asr.ready ? '✓' : '✗'} {dirName(status?.models.asr.dir)}
       </span>
       <span className="sep" />
-      <span title={models?.alignerPath}>
-        {s.aligner}: {models?.alignerReady ? '✓' : '✗'} {models?.alignerLabel || ''}
+      <span title={status?.models.aligner.dir}>
+        {s.aligner}: {status?.models.aligner.ready ? '✓' : '✗'} {dirName(status?.models.aligner.dir)}
       </span>
       <span className="sep" />
-      <span title={models?.demucsPath}>
-        {s.demucs}: {models?.demucsReady ? '✓' : '—'}
+      <span title={status?.models.demucs.dir}>
+        {s.demucs}: {status?.models.demucs.ready ? '✓' : '—'}
       </span>
       <span className="sep" />
-      <span title={models?.sensevoicePath}>
-        {s.sensevoice}: {models?.sensevoiceReady ? '✓' : '—'}
+      <span title={status?.models.sensevoice.dir}>
+        {s.sensevoice}: {status?.models.sensevoice.ready ? '✓' : '—'}
       </span>
       <span className="sep" />
       <span>
-        {s.backend}: {models?.backend || '—'}
+        {s.backend}: {status?.backend || '—'}
       </span>
       {(running > 0 || queued > 0) && (
         <>

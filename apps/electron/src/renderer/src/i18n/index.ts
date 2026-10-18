@@ -43,10 +43,17 @@ const zh = {
   noTranscript: '无文稿',
   queued: '排队',
   pending: '待处理',
-  blockModels: '模型未就绪 —— 到「设置 → 模型」确认 ASR 与对齐权重',
-  blockSepWeights: '这一行开了人声分离，但 Demucs 权重没就绪；关掉它或先装权重',
-  blockHotwordsEmpty: '这一行绑的热词组是空的 —— 换一组或解绑',
   blockNothing: '没有可开始的任务',
+  // 阶段名：CLI 的事件只保证 key 稳定（label 跟它的进程语言走），界面文案归壳
+  stageConverting: '转码音频',
+  stageSeparating: '人声分离',
+  stagePlanning: '分段规划',
+  stageRoughTranscribing: '热词提取',
+  stageLoadingAsr: '加载识别模型',
+  stageTranscribing: '转写',
+  stageLoadingAligner: '加载对齐模型',
+  stageAligning: '打轴',
+  stageExporting: '导出字幕',
   clearedKeptRunning: '已清空；正在跑的那条继续',
   progress: '进度',
   running: '进行中',
@@ -214,10 +221,16 @@ const en: Dict = {
   noTranscript: 'No transcript',
   queued: 'Queued',
   pending: 'Pending',
-  blockModels: 'Models not ready — check ASR and aligner weights in Settings → Models',
-  blockSepWeights: 'Vocal separation is on but Demucs weights are missing — turn it off or install them',
-  blockHotwordsEmpty: 'The bound hotword group is empty — pick another or unbind',
   blockNothing: 'Nothing to start',
+  stageConverting: 'Converting audio',
+  stageSeparating: 'Separating vocals',
+  stagePlanning: 'Planning segments',
+  stageRoughTranscribing: 'Extracting hotwords',
+  stageLoadingAsr: 'Loading ASR model',
+  stageTranscribing: 'Transcribing',
+  stageLoadingAligner: 'Loading aligner model',
+  stageAligning: 'Aligning',
+  stageExporting: 'Exporting subtitles',
   clearedKeptRunning: 'Cleared — the running task keeps going',
   progress: 'Progress',
   running: 'Running',
@@ -358,6 +371,18 @@ export const LANG_OPTIONS = [
   { id: 'ko', label: '한국어' },
   { id: 'auto', label: 'Auto' }
 ]
+
+/**
+ * 阶段名：按 CLI 事件里的稳定 `key` 出文案（label 跟 CLI 进程语言走，可能是系统语言，
+ * 跟界面语言不一致）。认不出的 key 就退回 CLI 给的 label——不猜。
+ */
+export function stageLabel(lang: UiLang, key: string | undefined, fallback?: string): string {
+  const s = t(lang) as unknown as Record<string, string>
+  if (!key) return fallback ?? ''
+  const camel = key.replace(/(^|_)([a-z])/g, (_m, _p, c: string) => c.toUpperCase())
+  const value = s[`stage${camel}`]
+  return value ?? fallback ?? key
+}
 
 /** 「已忽略 N 个不支持的文件」/「N unsupported file(s) ignored」：拖放过滤的说明。 */
 export function unsupportedCount(lang: UiLang, n: number): string {

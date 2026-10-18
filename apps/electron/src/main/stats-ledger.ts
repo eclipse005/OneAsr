@@ -79,7 +79,8 @@ export function summarize(
     if (r.sep) sepTasks += 1
   }
 
-  const langs = [...langMap.entries()]
+  // Array.from 而不是展开 Map 迭代器：node 那个 tsconfig 没有 downlevelIteration
+  const langs = Array.from(langMap.entries())
     .map(([lang, count]) => ({ lang, count }))
     .sort((a, b) => b.count - a.count || a.lang.localeCompare(b.lang))
 

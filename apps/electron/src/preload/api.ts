@@ -2,8 +2,7 @@ import type {
   Settings,
   StartResult,
   DownloadState,
-  ModelEntry,
-  ModelStatus,
+  StatusSnapshot,
   TaskSnapshot,
   StatsSnapshot,
   AppInfo,
@@ -28,8 +27,8 @@ export interface OneAsrApi {
   getSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
   resetSettings: () => Promise<Settings>
-  checkModels: () => Promise<ModelStatus>
-  listModels: () => Promise<ModelEntry[]>
+  /** 模型状态/就绪/门禁/清单：CLI 的 `status --json` 原样转发 */
+  getStatus: () => Promise<StatusSnapshot | null>
   startDownload: (model: string) => Promise<{ ok: boolean; code?: string }>
   cancelDownload: () => Promise<void>
   getDownloadState: () => Promise<DownloadState | null>

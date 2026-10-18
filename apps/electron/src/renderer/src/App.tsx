@@ -15,8 +15,7 @@ const MEDIA_RE = /\.(wav|mp3|flac|m4a|aac|ogg|mp4|mkv|mov|webm|avi)$/i
 import type {
   HotwordStore,
   DownloadState,
-  ModelEntry,
-  ModelStatus,
+  StatusSnapshot,
   Settings,
   StartResult,
   StatsSnapshot,
@@ -33,7 +32,8 @@ let toastSeq = 0
 export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [draft, setDraft] = useState<Settings | null>(null)
-  const [models, setModels] = useState<ModelStatus | null>(null)
+  /** CLI 的 status --json 快照：就绪、门禁、catalog 全在里面 */
+  const [status, setStatus] = useState<StatusSnapshot | null>(null)
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
   const [hotwords, setHotwords] = useState<HotwordStore | null>(null)
@@ -51,7 +51,7 @@ export default function App() {
   const statusTimer = useRef<number | undefined>(undefined)
   /** 正在开系统文件对话框（防重入） */
   const [picking, setPicking] = useState(false)
-  const [modelEntries, setModelEntries] = useState<ModelEntry[]>([])
+
   const [download, setDownload] = useState<DownloadState | null>(null)
 
   const lang = useMemo(
@@ -59,7 +59,8 @@ export default function App() {
     [draft?.ui_language, settings?.ui_language]
   )
   const s = t(lang)
-  const modelsReady = !!models?.ready
+  // 就绪与否 = Rust 的 can_start（壳不再自己判断目录够不够）
+  const modelsReady = !!status?.can_start.ok
   const dirty = !!(
     settingsBaseline &&
     draft &&
@@ -143,8 +144,7 @@ export default function App() {
   }, [])
 
   const refreshModels = useCallback(async () => {
-    setModels(await window.oneasr.checkModels())
-    setModelEntries(await window.oneasr.listModels())
+    setStatus(await window.oneasr.getStatus())
   }, [])
 
   const refreshStats = useCallback(async () => {
@@ -185,23 +185,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadPhase])
 
-  /** 启动被门禁挡下时：把原因翻译成文案弹出来；模型问题直接把设置翻到「模型」页。 */
+  /**
+   * 启动被门禁挡下时把原因弹出来。**文案是 Rust 给的**（status --json 的
+   * can_start.reason，双语、与 GPUI 逐字一致），壳不再自己拼"模型未就绪/热词组为空"。
+   */
   const reportStart = useCallback(
     (r: StartResult) => {
       if (r.ok) return
-      const code = r.code ?? 'nothing-to-start'
-      const msg =
-        code === 'models'
-          ? s.blockModels
-          : code === 'sep-weights'
-            ? s.blockSepWeights
-            : code === 'hotwords-empty'
-              ? s.blockHotwordsEmpty
-              : s.blockNothing
-      pushToast('warn', msg)
-      if (code === 'models') void openSettingsFn('models')
+      pushToast('warn', r.reason ?? s.blockNothing)
     },
-    [s, pushToast, openSettingsFn]
+    [s, pushToast]
   )
 
   const saveAllSettings = async () => {
@@ -397,7 +390,7 @@ export default function App() {
 
       <StatusBar
         lang={lang}
-        models={models}
+        status={status}
         tasks={tasks}
         message={statusMsg}
         onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => pushToast('success', s.copied))}
@@ -432,8 +425,7 @@ export default function App() {
           <SettingsDrawer
             lang={lang}
             draft={draft}
-            models={models}
-            modelEntries={modelEntries}
+            status={status}
             download={download}
             onDownloadStart={(id) => void window.oneasr.startDownload(id)}
             onDownloadCancel={() => void window.oneasr.cancelDownload()}

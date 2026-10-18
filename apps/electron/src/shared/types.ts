@@ -27,36 +27,63 @@ export interface Settings {
   welcome_done: boolean
 }
 
-export interface ModelStatus {
-  asrReady: boolean
-  alignerReady: boolean
-  demucsReady: boolean
-  sensevoiceReady: boolean
-  asrPath: string
-  alignerPath: string
-  demucsPath: string
-  sensevoicePath: string
-  ready: boolean
-  asrLabel: string
-  alignerLabel: string
-  backend: string
-}
+
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
-/** 启动被挡下来的原因（渲染层翻成双语文案）。 */
-export type StartBlockCode =
-  | 'models' // ASR / 对齐权重不就绪
-  | 'sep-weights' // 开了人声分离但没有 Demucs 权重
-  | 'hotwords-empty' // 这一行绑的热词组是空的
-  | 'nothing-to-start' // 没有可开始的任务
+/**
+ * 启动结果：壳不再自己判断"能不能跑"，门禁问 CLI（`status --json` 的 can_start）。
+ * nothing-to-start = UI 自己的判断（这行本来就不该起）；cli = 被 Rust 挡下，
+ * reason 是它的双语文案，壳原样显示。
+ */
+export interface StartResult {
+  ok: boolean
+  code?: 'nothing-to-start' | 'cli'
+  reason?: string
+}
 
-/** 模型清单里的一条（目录名就是 oneasr-cli download 认的 id）。 */
-export interface ModelEntry {
+/** oneasr-cli status --json 的一个模型槽位。 */
+export interface ModelSlot {
+  id: string
+  dir: string
+  ready: boolean
+  error: string | null
+}
+
+/** status --json 的 catalog：8 条可选模型，供 UI 画清单（目录名来自 Rust，壳不再硬编码）。 */
+export interface CatalogEntry {
   id: string
   kind: 'asr' | 'aligner' | 'demucs' | 'sensevoice'
-  installed: boolean
   dir: string
+  ready: boolean
+}
+
+/** oneasr-cli status --json 的完整形状。 */
+export interface StatusSnapshot {
+  version: string
+  app_root: string
+  data_root: string
+  models_root: string
+  output_dir: string
+  backend: string
+  language: string
+  ui_language: string
+  models: {
+    asr: ModelSlot
+    aligner: ModelSlot
+    demucs: ModelSlot
+    sensevoice: ModelSlot
+  }
+  catalog: CatalogEntry[]
+  can_start: { ok: boolean; reason: string | null }
+}
+
+/** oneasr-cli probe --json 的形状。 */
+export interface ProbeResult {
+  input: string
+  size_bytes: number
+  duration_sec: number | null
+  kind: 'audio' | 'video'
 }
 
 /** 下载进度（对应 CLI stdout 的机器行）。 */
@@ -69,11 +96,6 @@ export interface DownloadState {
   speed?: number
   dir?: string
   message?: string
-}
-
-export interface StartResult {
-  ok: boolean
-  code?: StartBlockCode
 }
 
 export interface TaskSnapshot {
@@ -98,10 +120,14 @@ export interface TaskSnapshot {
   durationSec?: number
   /** 排队位次，1 = 下一个跑；只有排队的行有 */
   queueRank?: number
-  /** 完成后从 CLI 收尾输出解析出的阶段耗时 */
-  stageTimings?: { stage: string; ms: number }[]
+  /** 当前阶段的稳定 key（CLI 事件流给；界面文案按它出） */
+  stageKey?: string
+  /** 完成后由 CLI 的 timing 事件给出的阶段耗时（label 是 CLI 的语言，key 才是稳定的） */
+  stageTimings?: { key?: string; stage: string; ms: number }[]
   /** CLI 报的总耗时（含模型加载） */
   totalMs?: number
+  /** 媒体类型：由 `oneasr-cli probe` 判定（壳不自己按扩展名猜） */
+  mediaKind?: 'audio' | 'video'
 }
 
 /** One finished-task row from stats.jsonl (oneasr-core compatible). */

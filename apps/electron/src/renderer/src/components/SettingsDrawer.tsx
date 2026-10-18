@@ -1,16 +1,11 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
-import type {
-  DownloadState,
-  HotwordStore,
-  ModelEntry,
-  ModelStatus,
-  Settings
-} from '../../../shared/types'
+import type { DownloadState, HotwordStore, Settings, StatusSnapshot } from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
 import { useEscClose } from '../esc'
 import { panelMotion } from '../motion'
+import { gib } from '../lib/format'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
@@ -93,12 +88,6 @@ function asrQuantOf(model: string): 'fp16' | 'int8' {
 function asrId(size: '0.6B' | '1.7B', quant: 'fp16' | 'int8'): string {
   return `Qwen3-ASR-${size}-${quant === 'int8' ? 'int8' : 'hf'}`
 }
-/** 字节 → GiB 文本（下载进度用，两位小数够看） */
-function gib(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB'
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-}
-
 function alignerKind(model: string): 'ctc' | 'qwen' {
   return model.toLowerCase().includes('qwen') ? 'qwen' : 'ctc'
 }
@@ -106,8 +95,7 @@ function alignerKind(model: string): 'ctc' | 'qwen' {
 export function SettingsDrawer({
   lang,
   draft,
-  models,
-  modelEntries,
+  status,
   download,
   onDownloadStart,
   onDownloadCancel,
@@ -127,9 +115,8 @@ export function SettingsDrawer({
 }: {
   lang: UiLang
   draft: Settings
-  models: ModelStatus | null
-  /** 模型清单（目录名 = oneasr-cli download 认的 id） */
-  modelEntries: ModelEntry[]
+  /** CLI 的 status --json：就绪判据、门禁、可选模型清单都在里面 */
+  status: StatusSnapshot | null
   /** 当前下载进度（null = 没在下） */
   download: DownloadState | null
   onDownloadStart: (id: string) => void
@@ -152,7 +139,8 @@ export function SettingsDrawer({
 }) {
   const s = t(lang)
   /** 没装的模型；下载中的那条也在里面（它本来就是缺的） */
-  const missingModels = modelEntries.filter((m) => !m.installed)
+  // 缺哪些模型由 CLI 的 catalog 说（目录名也来自 Rust，壳不再硬编码）
+  const missingModels = (status?.catalog ?? []).filter((m) => !m.ready)
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   useEffect(() => {
     setActiveTab(initialTab)
@@ -340,9 +328,19 @@ export function SettingsDrawer({
               <>
                 <div className="models-toolbar">
                   <div className="models-status">
-                    <Pill ok={!!models?.asrReady} label={s.asr} ready={s.ready} missing={s.missing} />
-                    <Pill ok={!!models?.alignerReady} label={s.aligner} ready={s.ready} missing={s.missing} />
-                    <Pill ok={!!models?.demucsReady} label={s.demucs} ready={s.ready} missing={s.missing} />
+                    <Pill ok={!!status?.models.asr.ready} label={s.asr} ready={s.ready} missing={s.missing} />
+                    <Pill
+                      ok={!!status?.models.aligner.ready}
+                      label={s.aligner}
+                      ready={s.ready}
+                      missing={s.missing}
+                    />
+                    <Pill
+                      ok={!!status?.models.demucs.ready}
+                      label={s.demucs}
+                      ready={s.ready}
+                      missing={s.missing}
+                    />
                   </div>
                   <div className="models-actions">
                     <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenModels}>

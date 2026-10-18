@@ -1,22 +1,11 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { LANG_OPTIONS, formatDuration, queueRank, t, UiLang } from '../i18n'
+import { LANG_OPTIONS, formatDuration, queueRank, stageLabel, t, UiLang } from '../i18n'
 import { useEscClose } from '../esc'
 import { rowMotion } from '../motion'
+import { formatSize } from '../lib/format'
 import type { HotwordGroup, TaskSnapshot } from '../../../shared/types'
-
-/** 文件大小：GB / MB / KB 自适应。 */
-function formatSize(bytes?: number): string | undefined {
-  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return undefined
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`
-}
-
-function mediaKind(name: string): 'video' | 'audio' {
-  return /\.(mp4|mkv|mov|webm|avi|flv|ts|m4v)$/i.test(name) ? 'video' : 'audio'
-}
 
 /**
  * 行内 chip 的下拉菜单：**渲染到 body**（portal），不用行内绝对定位。
@@ -137,12 +126,19 @@ export function TaskList({
             >
               <div>
                 <div className="name">
-                  <span className={`media-icon ${mediaKind(task.name)}`} aria-hidden />
+                  {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到时先不画图标 */}
+                  {task.mediaKind && (
+                    <span className={`media-icon ${task.mediaKind}`} aria-hidden />
+                  )}
                   {task.name}
                   {/* 跑的时候药丸直接写阶段名（跟 GPUI 一样，不画进度条——百分比是拿阶段序号
                       估的，本来也不代表真实进度） */}
                   {task.status === 'running' ? (
-                    <span className="badge running">{task.stage || s.running}</span>
+                    <span className="badge running">
+                      {task.stageKey || task.stage
+                        ? stageLabel(lang, task.stageKey, task.stage)
+                        : s.running}
+                    </span>
                   ) : (
                     <span className={`badge ${task.status}`}>
                       {task.status === 'queued' && task.queueRank == null
@@ -198,9 +194,9 @@ export function TaskList({
                       {s.timing}
                       {timingMs != null ? ` ${formatDuration(timingMs / 1000)}` : ''}
                       <span className="timing-pop">
-                        {task.stageTimings.map((t2) => (
-                          <span className="timing-line" key={t2.stage}>
-                            <i>{t2.stage}</i>
+                        {task.stageTimings.map((t2, i) => (
+                          <span className="timing-line" key={`${t2.key ?? t2.stage}-${i}`}>
+                            <i>{stageLabel(lang, t2.key, t2.stage)}</i>
                             <b>{formatDuration(t2.ms / 1000)}</b>
                           </span>
                         ))}

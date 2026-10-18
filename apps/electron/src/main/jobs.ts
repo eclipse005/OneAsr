@@ -3,19 +3,16 @@ import fs from 'fs'
 import path from 'path'
 import { EventEmitter } from 'events'
 import type {
+  ProbeResult,
   Settings,
-  StartBlockCode,
   StartResult,
   StatsSnapshot,
+  StatusSnapshot,
   TaskSnapshot
 } from '../shared/types'
-import {
-  DEFAULT_APP_ROOT,
-  checkModels,
-  loadSettings,
-  resolveAsrDir,
-  resolveCli
-} from './settings'
+import { DEFAULT_APP_ROOT, loadSettings, resolveCli } from './settings'
+import { runCliJson } from './cli'
+import { parseCliEvent } from './cli-events'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
 import { logError, logWarn, writeTaskLog } from './log'
 import { loadHotwords, wordsCsv } from './hotword'
@@ -26,101 +23,11 @@ function nextId(): string {
   return `t-${Date.now()}-${seq}`
 }
 
-/**
- * CLI 的阶段表：中英两套名字都要认。
- * 之前只认 `[stage]` 和英文阶段名，而 CLI 的输出语言跟随系统（本机是中文），
- * 于是阶段药丸和百分比**一个都出不来**——这次按语言无关的方式重写。
- */
-const STAGES: Array<[string, string]> = [
-  // 顺序与 crates/oneasr-core 的 AsrStage::label 一致（9 个，其中
-  // 「人声分离」「热词提取」是条件阶段，只有开关/绑了热词组时才出现）
-  ['converting audio', '转码音频'],
-  ['separating vocals', '人声分离'],
-  ['planning segments', '分段规划'],
-  ['extracting hotwords', '热词提取'],
-  ['loading asr model', '加载识别模型'],
-  ['transcribing', '转写'],
-  ['loading aligner model', '加载对齐模型'],
-  ['aligning', '打轴'],
-  ['exporting subtitles', '导出字幕']
-]
-
-function stageIndex(name: string): number {
-  const lower = name.toLowerCase()
-  return STAGES.findIndex(([en, zh]) => lower.includes(en) || name.includes(zh))
-}
-
-/** `[阶段] 转写` / `[stage] Transcribing` → 阶段名 + 百分比。 */
-function parseStage(line: string): { stage?: string; pct?: number } {
-  const m = line.match(/\[(?:stage|阶段)\]\s*(.+)/i)
-  if (m) {
-    const stage = m[1].trim()
-    const idx = stageIndex(stage)
-    return { stage, pct: idx >= 0 ? Math.round(((idx + 1) / STAGES.length) * 100) : undefined }
-  }
-  if (/(?:OK|完成)\s+output=/i.test(line)) return { stage: 'Done', pct: 100 }
-  return {}
-}
-
-/** 收尾的耗时行：`  转写             587 ms` / `  加载识别模型          5.4 s`。 */
-function parseTiming(line: string): { stage: string; ms: number } | undefined {
-  const m = line.match(/^\s{2,}(\S.*?)\s+([\d.]+)\s*(ms|s)$/)
-  if (!m) return undefined
-  const stage = m[1].trim()
-  if (stageIndex(stage) < 0) return undefined
-  const value = Number(m[2])
-  if (!Number.isFinite(value)) return undefined
-  return { stage, ms: m[3] === 's' ? Math.round(value * 1000) : Math.round(value) }
-}
-
-/** `wall=12.8s total_ms=12828 stages=7` */
-function parseTotalMs(line: string): number | undefined {
-  const m = line.match(/total_ms=(\d+)/)
-  return m ? Number(m[1]) : undefined
-}
-
-/** 时长探测用捆绑的 ffmpeg：`{app_root}/bin/ffmpeg[.exe]`（与 Rust 侧同一约定）。 */
-function resolveFfmpeg(appRoot = DEFAULT_APP_ROOT): string | undefined {
-  const name = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
-  const p = path.join(appRoot, 'bin', name)
-  return fs.existsSync(p) ? p : undefined
-}
-
-/** 只读文件头探时长（不解码）：ffmpeg 把 `Duration: 00:00:12.34` 打在 stderr。 */
-function probeDurationSec(file: string, appRoot = DEFAULT_APP_ROOT): Promise<number | undefined> {
-  const ffmpeg = resolveFfmpeg(appRoot)
-  if (!ffmpeg) return Promise.resolve(undefined)
-  return new Promise((resolve) => {
-    let done = false
-    let timer: NodeJS.Timeout | undefined
-    const child = spawn(ffmpeg, ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'] })
-    let err = ''
-    const finish = (value?: number): void => {
-      if (done) return
-      done = true
-      if (timer) clearTimeout(timer)
-      try {
-        child.kill()
-      } catch {
-        /* ignore */
-      }
-      resolve(value)
-    }
-    const read = (): void => {
-      const m = err.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
-      if (m) finish(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]))
-    }
-    child.stderr?.on('data', (b) => {
-      err += b.toString()
-      read()
-    })
-    child.on('error', () => finish())
-    child.on('close', () => {
-      read()
-      finish()
-    })
-    timer = setTimeout(() => finish(), 15000)
-  })
+/** 时长 / 尺寸 / 媒体类型都问 CLI（判据在 core），壳不再自己 spawn ffmpeg 正则 Duration。 */
+async function probeInput(file: string): Promise<ProbeResult | undefined> {
+  const r = await runCliJson<ProbeResult>(['probe', '--input', file, '--json'], 30000)
+  if (!r.ok) logWarn(`probe failed for ${file}: ${r.error ?? 'unknown'}`)
+  return r.ok ? r.data : undefined
 }
 
 export class JobManager extends EventEmitter {
@@ -208,12 +115,6 @@ export class JobManager extends EventEmitter {
       if (!p || !fs.existsSync(p)) continue
       if (this.tasks.some((t) => t.input === p && t.status !== 'done' && t.status !== 'error' && t.status !== 'cancelled'))
         continue
-      let sizeBytes: number | undefined
-      try {
-        sizeBytes = fs.statSync(p).size
-      } catch {
-        /* ignore */
-      }
       const task: TaskSnapshot = {
         id: nextId(),
         input: p,
@@ -223,14 +124,15 @@ export class JobManager extends EventEmitter {
         progressPct: 0,
         hotwordGroupId: defaultGroup,
         language: settings.language || 'zh',
-        vocalSeparation: !!settings.vocal_separation,
-        sizeBytes
+        vocalSeparation: !!settings.vocal_separation
       }
       this.tasks.push(task)
-      // 时长后台探，探到再刷新那一行（不阻塞加入）
-      void probeDurationSec(p).then((sec) => {
-        if (sec == null) return
-        task.durationSec = sec
+      // 尺寸/时长/类型后台问 CLI，拿到再刷新那一行（不阻塞加入）
+      void probeInput(p).then((probe) => {
+        if (!probe) return
+        task.sizeBytes = probe.size_bytes
+        task.durationSec = probe.duration_sec ?? undefined
+        task.mediaKind = probe.kind
         this.emitUpdate()
       })
     }
@@ -258,17 +160,24 @@ export class JobManager extends EventEmitter {
   }
 
   /**
-   * 启动前的门禁：能跑就返回 undefined，否则给出原因码。
-   * 挡在「点开始」这一刻，比失败的 stderr 铺到卡片上再让人猜要好。
+   * 启动门禁：**问 CLI**（`status --json` + 这一行的运行开关），判据是 Rust 的
+   * `Settings::can_start()`。壳里不再自己判断「模型目录够不够」——之前那套
+   * 「目录非空即就绪」比 Rust 松，可能放行缺文件的目录。
+   * 返回值里的 reason 是 Rust 给的双语文案，壳原样显示。
    */
-  private blockReason(task: TaskSnapshot, models: ReturnType<typeof checkModels>): StartBlockCode | undefined {
-    if (!models.ready) return 'models'
-    if (task.vocalSeparation && !models.demucsReady) return 'sep-weights'
-    if (task.hotwordGroupId) {
-      const group = loadHotwords().groups.find((g) => g.id === task.hotwordGroupId)
-      if (!group || !wordsCsv(group).trim()) return 'hotwords-empty'
-    }
-    return undefined
+  private async canStart(task: TaskSnapshot): Promise<{ ok: boolean; reason?: string }> {
+    const settings = loadSettings()
+    const args = ['status', '--json', '--language', task.language || settings.language || 'zh']
+    if (task.vocalSeparation) args.push('--vocal-separation')
+    if (task.hotwordGroupId) args.push('--hotword-group', task.hotwordGroupId)
+    if (settings.output_txt) args.push('--txt')
+    if (settings.output_ass) args.push('--ass')
+    if (!settings.output_srt) args.push('--no-srt')
+    const r = await runCliJson<StatusSnapshot>(args, 20000)
+    if (!r.ok || !r.data) return { ok: false, reason: r.error ?? 'cli status failed' }
+    return r.data.can_start.ok
+      ? { ok: true }
+      : { ok: false, reason: r.data.can_start.reason ?? undefined }
   }
 
   cancel(id: string): void {
@@ -305,11 +214,11 @@ export class JobManager extends EventEmitter {
     }
   }
 
-  startOne(id: string): StartResult {
+  async startOne(id: string): Promise<StartResult> {
     const t = this.tasks.find((x) => x.id === id)
     if (!t || t.status === 'running') return { ok: false, code: 'nothing-to-start' }
-    const blocked = this.blockReason(t, checkModels(loadSettings()))
-    if (blocked) return { ok: false, code: blocked }
+    const gate = await this.canStart(t)
+    if (!gate.ok) return { ok: false, code: 'cli', reason: gate.reason }
     t.status = 'queued'
     t.progress = ''
     t.stage = undefined
@@ -325,15 +234,16 @@ export class JobManager extends EventEmitter {
     return { ok: true }
   }
 
-  startAll(): StartResult {
-    const models = checkModels(loadSettings())
-    let firstBlock: StartBlockCode | undefined
+  async startAll(): Promise<StartResult> {
+    const candidates = this.tasks.filter((t) => t.status !== 'running')
+    // 每行可能带着不同的语言/人声分离/热词组，门禁逐个问（并发，N 很小）
+    const gates = await Promise.all(candidates.map((t) => this.canStart(t)))
+    let firstReason: string | undefined
     let queued = 0
-    for (const t of this.tasks) {
-      if (t.status === 'running') continue
-      const blocked = this.blockReason(t, models)
-      if (blocked) {
-        firstBlock ??= blocked
+    for (let i = 0; i < candidates.length; i++) {
+      const t = candidates[i]
+      if (!gates[i].ok) {
+        firstReason ??= gates[i].reason
         continue
       }
       t.status = 'queued'
@@ -347,7 +257,11 @@ export class JobManager extends EventEmitter {
       if (!this.queue.includes(t.id)) this.queue.push(t.id)
       queued += 1
     }
-    if (queued === 0) return { ok: false, code: firstBlock ?? 'nothing-to-start' }
+    if (queued === 0) {
+      return firstReason != null
+        ? { ok: false, code: 'cli', reason: firstReason }
+        : { ok: false, code: 'nothing-to-start' }
+    }
     this.emitUpdate()
     void this.pump()
     return { ok: true }
@@ -377,12 +291,7 @@ export class JobManager extends EventEmitter {
       const settings = loadSettings()
       const appRoot = DEFAULT_APP_ROOT
       const cli = resolveCli(appRoot)
-      const asrDir = resolveAsrDir(settings, appRoot)
-      if (asrDir !== settings.asr_model_dir) {
-        settings.asr_model_dir = asrDir
-        settings.asr_model = path.basename(asrDir)
-      }
-
+      // 模型目录的解析归 CLI（apply_app_root_paths / settings），壳不再自己拼候选
       const outDir = settings.save_next_to_source
         ? path.dirname(task.input)
         : settings.output_dir || path.join(appRoot, 'output')
@@ -414,7 +323,7 @@ export class JobManager extends EventEmitter {
       })
       this.running = child
       let stderr = ''
-      const stageTimings: { stage: string; ms: number }[] = []
+      const stageTimings: { key?: string; stage: string; ms: number }[] = []
 
       const onLine = (buf: Buffer, stream: 'out' | 'err'): void => {
         const text = buf.toString('utf8')
@@ -422,16 +331,41 @@ export class JobManager extends EventEmitter {
         for (const line of text.split(/\r?\n/)) {
           const trimmed = line.trim()
           if (!trimmed) continue
-          task.progress = trimmed.slice(0, 220)
-          const { stage, pct } = parseStage(trimmed)
-          if (stage) task.stage = stage
-          if (pct != null) task.progressPct = pct
-          // 用未 trim 的原始行：耗时行的缩进（两空格起）正是它与普通日志的区别
-          const timing = parseTiming(line)
-          if (timing) stageTimings.push(timing)
-          const totalMs = parseTotalMs(trimmed)
-          if (totalMs != null) task.totalMs = totalMs
-          this.emit('progress', { id: task.id, line: trimmed })
+          if (stream === 'err') {
+            // 人读行进 UI 的「原始输出」（阶段类噪音不会再出现：阶段走事件流）
+            task.progress = trimmed.slice(0, 220)
+            this.emit('progress', { id: task.id, line: trimmed })
+            this.emitUpdate()
+            continue
+          }
+          const ev = parseCliEvent(trimmed)
+          if (!ev) continue
+          switch (ev.event) {
+            case 'stage':
+              // key 是稳定标识（界面文案按它出），label 只是 CLI 那边的说法，留着兜底
+              if (ev.key) task.stageKey = ev.key
+              if (ev.label) {
+                task.stage = ev.label
+                this.emit('progress', { id: task.id, line: ev.label })
+              }
+              if (typeof ev.pct === 'number') task.progressPct = ev.pct
+              break
+            case 'timing':
+              if (ev.label && typeof ev.ms === 'number') {
+                stageTimings.push({ key: ev.key, stage: ev.label, ms: ev.ms })
+              }
+              break
+            case 'total':
+              if (typeof ev.ms === 'number') task.totalMs = ev.ms
+              break
+            case 'done':
+              // CLI 说的产物路径优先；字面量路径由 CLI 决定（它就是写盘的那个）
+              if (ev.output) task.outputPath = ev.output
+              break
+            case 'error':
+              if (ev.message) task.error = ev.message.slice(-600)
+              break
+          }
           this.emitUpdate()
         }
       }
@@ -567,6 +501,7 @@ export class JobManager extends EventEmitter {
   ): string[] {
     const args = [
       'transcribe',
+      '--events=json',
       '--input',
       task.input,
       '--app-root',
@@ -582,14 +517,11 @@ export class JobManager extends EventEmitter {
     ]
     if (outputPath) args.push('--output', outputPath)
 
-    const aligner = settings.aligner_model || ''
-    args.push('--aligner', aligner.toLowerCase().includes('qwen') ? 'qwen' : 'ctc')
-
-    const asr = settings.asr_model || ''
-    if (asr.includes('1.7B') && asr.includes('int8')) args.push('--asr', 'Qwen3-ASR-1.7B-int8')
-    else if (asr.includes('1.7B')) args.push('--asr', '1.7b')
-    else if (asr.includes('int8')) args.push('--asr', 'Qwen3-ASR-0.6B-int8')
-    else args.push('--asr', '0.6b')
+    // 直接透传设置里的模型 id：CLI 的 parse_asr_arg / parse_aligner_arg 既认友好别名
+    // 也认完整目录名（目录名只有 catalog 一处真源）。以前壳里自己按字符串猜
+    // 「1.7B + int8」「qwen → qwen」——那是规则，属于后端。
+    if (settings.aligner_model) args.push('--aligner', settings.aligner_model)
+    if (settings.asr_model) args.push('--asr', settings.asr_model)
 
     if (settings.output_txt) args.push('--txt')
     if (settings.output_ass) args.push('--ass')
