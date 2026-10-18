@@ -178,6 +178,13 @@ describe('JobQueue（排队 / 取消 / 泵出的纯状态机）', () => {
     h.cancel('A')
     h.close(1)
     expect(h.spawned).toEqual(['A', 'B'])
+    // 前提：状态机确实认 B 是当前 run（旧逻辑在这里会丢）
+    expect(h.queue.view()).toEqual({
+      busy: true,
+      runId: 2,
+      taskId: 'B',
+      cancelling: false
+    })
 
     const stale: KillCommand = { type: 'kill', runId: 1, taskId: 'A', signal: 'SIGKILL' }
     // 状态机裁决：旧 runId 不匹配当前 run，返回 null（调用方不得下发给任何 child）
