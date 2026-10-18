@@ -52,3 +52,8 @@ __pycache__/
 /testdata/baselines/
 /testdata/_cache/
 /testdata/_compare*/
+
+# Electron UI
+apps/electron/node_modules/
+apps/electron/out/
+apps/electron/dist/

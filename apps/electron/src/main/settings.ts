@@ -1,0 +1,153 @@
+import fs from 'fs'
+import path from 'path'
+import type { Settings } from '../shared/types'
+
+export const DEFAULT_APP_ROOT =
+  process.env.ONEASR_APP_ROOT || '/workspace/oneasr-runtime'
+
+const ASR_CATALOG = [
+  'Qwen3-ASR-0.6B-hf',
+  'Qwen3-ASR-0.6B-int8',
+  'Qwen3-ASR-1.7B-hf',
+  'Qwen3-ASR-1.7B-int8'
+] as const
+
+const ALIGNER_CATALOG = [
+  'omniASR-CTC-300M-v2-hf',
+  'Qwen3-ForcedAligner-0.6B-hf'
+] as const
+
+export function settingsPath(appRoot = DEFAULT_APP_ROOT): string {
+  return path.join(appRoot, 'settings.json')
+}
+
+export function defaultSettings(appRoot = DEFAULT_APP_ROOT): Settings {
+  const models = path.join(appRoot, 'models')
+  const asrInt8 = path.join(models, 'Qwen3-ASR-0.6B-int8')
+  const asrHf = path.join(models, 'Qwen3-ASR-0.6B-hf')
+  const asrDir = fs.existsSync(asrInt8) ? asrInt8 : asrHf
+  const asrModel = path.basename(asrDir)
+  return {
+    asr_model: asrModel,
+    asr_model_dir: asrDir,
+    asr_dirs: {},
+    aligner_model: 'omniASR-CTC-300M-v2-hf',
+    aligner_model_dir: path.join(models, 'omniASR-CTC-300M-v2-hf'),
+    aligner_dirs: {},
+    backend: 'auto',
+    max_new_tokens: 2048,
+    language: 'zh',
+    ui_language: 'system',
+    subtitle_length_preset: 'standard',
+    chunk_target_seconds: 60,
+    output_dir: path.join(appRoot, 'output'),
+    save_next_to_source: true,
+    output_srt: true,
+    output_txt: false,
+    output_ass: false,
+    subtitle_beautify: false,
+    text_script: 'simplified',
+    vocal_separation: false,
+    demucs_model_dir: path.join(models, 'htdemucs_ft'),
+    sensevoice_model_dir: path.join(models, 'SenseVoiceSmall'),
+    sound: true,
+    close_to_tray: false,
+    welcome_done: false
+  }
+}
+
+function hasModelFiles(dir: string): boolean {
+  if (!dir || !fs.existsSync(dir)) return false
+  const files = ['model.safetensors', 'model.safetensors.index.json', 'config.json']
+  return files.some((f) => fs.existsSync(path.join(dir, f)))
+}
+
+export function resolveAsrDir(settings: Settings, appRoot = DEFAULT_APP_ROOT): string {
+  if (hasModelFiles(settings.asr_model_dir)) return settings.asr_model_dir
+  const models = path.join(appRoot, 'models')
+  const id = settings.asr_model || ''
+  const size = id.includes('1.7B') ? '1.7B' : '0.6B'
+  const candidates = [
+    path.join(models, `Qwen3-ASR-${size}-int8`),
+    path.join(models, `Qwen3-ASR-${size}-hf`),
+    ...ASR_CATALOG.map((n) => path.join(models, n))
+  ]
+  for (const c of candidates) {
+    if (hasModelFiles(c)) return c
+  }
+  return settings.asr_model_dir
+}
+
+export function normalizeSettings(raw: Partial<Settings>, appRoot = DEFAULT_APP_ROOT): Settings {
+  const base = defaultSettings(appRoot)
+  const merged: Settings = {
+    ...base,
+    ...raw,
+    asr_dirs: { ...base.asr_dirs, ...(raw.asr_dirs || {}) },
+    aligner_dirs: { ...base.aligner_dirs, ...(raw.aligner_dirs || {}) }
+  }
+  if (!merged.output_srt && !merged.output_txt && !merged.output_ass) {
+    merged.output_srt = true
+  }
+  merged.chunk_target_seconds = Math.min(180, Math.max(30, Number(merged.chunk_target_seconds) || 60))
+  if (!['short', 'standard', 'loose'].includes(merged.subtitle_length_preset)) {
+    merged.subtitle_length_preset = 'standard'
+  }
+  if (!['auto', 'gpu', 'cpu'].includes(merged.backend)) merged.backend = 'auto'
+  if (!['system', 'zh', 'en'].includes(merged.ui_language)) merged.ui_language = 'system'
+  if (!['simplified', 'traditional', 'original'].includes(merged.text_script)) {
+    merged.text_script = 'simplified'
+  }
+  const resolved = resolveAsrDir(merged, appRoot)
+  if (resolved !== merged.asr_model_dir && hasModelFiles(resolved)) {
+    merged.asr_model_dir = resolved
+    merged.asr_model = path.basename(resolved)
+  }
+  return merged
+}
+
+export function loadSettings(appRoot = DEFAULT_APP_ROOT): Settings {
+  const p = settingsPath(appRoot)
+  if (!fs.existsSync(p)) return defaultSettings(appRoot)
+  try {
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<Settings>
+    return normalizeSettings(raw, appRoot)
+  } catch {
+    return defaultSettings(appRoot)
+  }
+}
+
+export function saveSettings(settings: Settings, appRoot = DEFAULT_APP_ROOT): Settings {
+  const normalized = normalizeSettings(settings, appRoot)
+  const p = settingsPath(appRoot)
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  let existing: Record<string, unknown> = {}
+  if (fs.existsSync(p)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(p, 'utf8'))
+    } catch {
+      existing = {}
+    }
+  }
+  const out = { ...existing, ...normalized }
+  fs.writeFileSync(p, JSON.stringify(out, null, 2) + '\n', 'utf8')
+  return normalized
+}
+
+export function checkModels(settings: Settings, appRoot = DEFAULT_APP_ROOT) {
+  const asrPath = resolveAsrDir(settings, appRoot)
+  const alignerPath = settings.aligner_model_dir
+  const demucsPath = settings.demucs_model_dir
+  const asrReady = hasModelFiles(asrPath)
+  const alignerReady =
+    hasModelFiles(alignerPath) || fs.existsSync(path.join(alignerPath, 'config.json'))
+  const demucsReady =
+    fs.existsSync(path.join(demucsPath, 'htdemucs_ft_vocals.safetensors')) ||
+    fs.existsSync(path.join(demucsPath, 'model.safetensors')) ||
+    (fs.existsSync(demucsPath) && fs.readdirSync(demucsPath).length > 0)
+  const needAligner = settings.output_srt || settings.output_ass
+  const ready = asrReady && (!needAligner || alignerReady)
+  return { asrReady, alignerReady, demucsReady, asrPath, alignerPath, demucsPath, ready }
+}
+
+export { ASR_CATALOG, ALIGNER_CATALOG }
