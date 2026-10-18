@@ -206,6 +206,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   transition: background .12s;
 }
 .task-card .row-error:hover { background: #fee2e2; }
+/* 复制按钮贴在错误框右侧、与首行文字对齐 */
+.task-card .row-error .err-copy { align-self: flex-start; margin-left: 8px; width: 26px; height: 26px; border-radius: 7px; }
 .task-card .row-error .err-stage {
   flex: none; margin-right: 8px; padding: 1px 7px; border-radius: 6px;
   background: #fff; color: var(--danger); font-size: 0.72rem; font-weight: 700;
@@ -258,7 +260,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .task-card .controls { display: flex; align-items: center; gap: 8px; flex: none; }
 .task-card .controls .badge {
   width: 110px; justify-content: center; min-height: 30px; overflow: hidden;
+  /* 状态**没有底色**：只有色点 + 彩字。浅绿底的状态药丸挨着「✓ 人声分离」会连成
+     一片绿（review 提的撞色），而"带底色的胶囊"本来就该只属于可点的参数 chip。 */
+  background: transparent;
 }
+.task-card .badge.running { color: var(--logo); }
+.task-card .badge.done { color: #047857; }
+.task-card .badge.error { color: var(--danger); }
+.task-card .badge.cancelled { color: var(--warn); }
 .task-card .controls .badge > span {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -311,12 +320,20 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .icon-btn.primary:hover:not(:disabled) { background: var(--logo); color: #fff; }
 .icon-btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
-.icon-glyph { width: 15px; height: 15px; background: currentColor; }
-.icon-glyph.i-play { -webkit-mask: url('@assets/icons/play.svg') center / contain no-repeat; mask: url('@assets/icons/play.svg') center / contain no-repeat; }
-.icon-glyph.i-stop { -webkit-mask: url('@assets/icons/stop.svg') center / contain no-repeat; mask: url('@assets/icons/stop.svg') center / contain no-repeat; }
-.icon-glyph.i-folder { -webkit-mask: url('@assets/icons/folder.svg') center / contain no-repeat; mask: url('@assets/icons/folder.svg') center / contain no-repeat; }
-.icon-glyph.i-retry { -webkit-mask: url('@assets/icons/redownload.svg') center / contain no-repeat; mask: url('@assets/icons/redownload.svg') center / contain no-repeat; }
-.icon-glyph.i-trash { -webkit-mask: url('@assets/icons/trash.svg') center / contain no-repeat; mask: url('@assets/icons/trash.svg') center / contain no-repeat; }
+/* 图标 = 资产（仓库 assets/icons，与 GPUI 版同一份）+ mask 上色：尺寸类与图形类解耦，
+   同一个图形能用在 15px 的动作按钮上，也能用在工具栏文字按钮里 */
+.icon-glyph { width: 15px; height: 15px; background: currentColor; flex: none; }
+.btn-glyph { width: 14px; height: 14px; background: currentColor; flex: none; }
+.i-play { -webkit-mask: url('@assets/icons/play.svg') center / contain no-repeat; mask: url('@assets/icons/play.svg') center / contain no-repeat; }
+.i-stop { -webkit-mask: url('@assets/icons/stop.svg') center / contain no-repeat; mask: url('@assets/icons/stop.svg') center / contain no-repeat; }
+.i-folder { -webkit-mask: url('@assets/icons/folder.svg') center / contain no-repeat; mask: url('@assets/icons/folder.svg') center / contain no-repeat; }
+.i-retry { -webkit-mask: url('@assets/icons/redownload.svg') center / contain no-repeat; mask: url('@assets/icons/redownload.svg') center / contain no-repeat; }
+.i-trash { -webkit-mask: url('@assets/icons/trash.svg') center / contain no-repeat; mask: url('@assets/icons/trash.svg') center / contain no-repeat; }
+.i-plus { -webkit-mask: url('@assets/icons/plus.svg') center / contain no-repeat; mask: url('@assets/icons/plus.svg') center / contain no-repeat; }
+.i-chart { -webkit-mask: url('@assets/icons/chart.svg') center / contain no-repeat; mask: url('@assets/icons/chart.svg') center / contain no-repeat; }
+.i-help { -webkit-mask: url('@assets/icons/help.svg') center / contain no-repeat; mask: url('@assets/icons/help.svg') center / contain no-repeat; }
+.i-gear { -webkit-mask: url('@assets/icons/gear.svg') center / contain no-repeat; mask: url('@assets/icons/gear.svg') center / contain no-repeat; }
+.i-copy { -webkit-mask: url('@assets/icons/copy.svg') center / contain no-repeat; mask: url('@assets/icons/copy.svg') center / contain no-repeat; }
 .badge.running { background: var(--accent-soft); color: var(--logo); border-color: #99f6e4; }
 .badge.done { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
 .badge.error { background: var(--danger-soft); color: var(--danger); border-color: #fecaca; }

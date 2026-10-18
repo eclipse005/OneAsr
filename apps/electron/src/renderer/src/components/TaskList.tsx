@@ -341,6 +341,19 @@ export function TaskList({
                       点一下复制的是完整 stderr，拿去搜就行 */}
                   {stageText && <span className="err-stage">{stageText}</span>}
                   <span className="err-text">{task.error}</span>
+                  {/* 复制图标按钮（不是文字按钮）；整行本身也能点，所以这里停一下冒泡 */}
+                  <button
+                    type="button"
+                    className="icon-btn danger err-copy"
+                    title={s.copyError}
+                    aria-label={s.copyError}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onCopyError(task.errorDetail ?? task.error ?? '')
+                    }}
+                  >
+                    <span className="icon-glyph i-copy" aria-hidden />
+                  </button>
                 </div>
               )}
 

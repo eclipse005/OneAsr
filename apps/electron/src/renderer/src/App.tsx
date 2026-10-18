@@ -288,6 +288,7 @@ export default function App() {
       <TitleBar lang={lang} />
       <div className="toolbar">
         <button className="btn btn-primary" disabled={picking} onClick={() => void addFiles()}>
+          <span className="btn-glyph i-plus" aria-hidden />
           {s.add}
         </button>
         <button
@@ -295,6 +296,7 @@ export default function App() {
           disabled={!tasks.length || tasks.every((x) => x.status === 'running')}
           onClick={() => void window.oneasr.startAll().then(reportStart)}
         >
+          <span className="btn-glyph i-play" aria-hidden />
           {s.startAll}
         </button>
         <button
@@ -308,10 +310,12 @@ export default function App() {
             })
           }
         >
+          <span className="btn-glyph i-trash" aria-hidden />
           {s.clear}
         </button>
         <div className="grow" />
         <button className="btn btn-ghost" data-shot="guide" onClick={() => setGuideOpen(true)}>
+          <span className="btn-glyph i-help" aria-hidden />
           {s.guide}
         </button>
         <button
@@ -322,6 +326,7 @@ export default function App() {
             setStatsOpen(true)
           }}
         >
+          <span className="btn-glyph i-chart" aria-hidden />
           {s.stats}
         </button>
         <button
@@ -329,6 +334,7 @@ export default function App() {
           data-shot="settings"
           onClick={() => void openSettingsFn('general')}
         >
+          <span className="btn-glyph i-gear" aria-hidden />
           {s.settings}
         </button>
       </div>
