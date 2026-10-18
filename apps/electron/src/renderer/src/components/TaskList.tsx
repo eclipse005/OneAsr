@@ -239,7 +239,7 @@ export function TaskList({
                 <div className="row-chips">
                   <button
                     type="button"
-                    className={`row-chip ${menu?.key === langKey ? 'open' : ''}`}
+                    className={`row-chip lang-chip ${menu?.key === langKey ? 'open' : ''}`}
                     disabled={locked}
                     title={s.recognitionLanguage}
                     onClick={(e) => toggleMenu(langKey, e.currentTarget)}
@@ -250,11 +250,12 @@ export function TaskList({
 
                   <button
                     type="button"
-                    className={`row-chip ${menu?.key === hwKey ? 'open' : ''} ${
+                    className={`row-chip hw-chip ${menu?.key === hwKey ? 'open' : ''} ${
                       boundGroup ? '' : 'muted'
                     }`}
                     disabled={locked}
-                    title={s.hotwords}
+                    // 定宽会把长词库名截断，所以 title 给完整名字
+                    title={boundGroup ? boundGroup.name : s.hotwordNone}
                     onClick={(e) => toggleMenu(hwKey, e.currentTarget)}
                   >
                     <span className="ellipsis">{boundGroup ? boundGroup.name : s.hotwordNone}</span>
@@ -269,7 +270,12 @@ export function TaskList({
                     title={s.vocalSep}
                     onClick={() => onSetVocalSeparation(task.id, !task.vocalSeparation)}
                   >
-                    {task.vocalSeparation ? `✓ ${s.vocalSep}` : s.vocalSep}
+                    {/* ✓ 占一个固定宽度：开关前后 chip 等宽，整簇控件不会被推着晃
+                        （英文 "Vocal separation" 这种长标签也不会被固定宽度截断） */}
+                    <span className="sep-check" aria-hidden>
+                      {task.vocalSeparation ? '✓' : ''}
+                    </span>
+                    {s.vocalSep}
                   </button>
                 </div>
 

@@ -165,6 +165,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .row-chip.muted { color: var(--muted); }
 .row-chip:hover:not(:disabled), .row-chip.open { border-color: var(--accent); background: var(--accent-mist); color: var(--logo); }
 .row-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 参数 chip **定宽**：语言名长短（English / 中文）、词库名长短、开关的 ✓ 都不再推着
+   整簇控件左右晃。定宽的 chip 用 space-between —— 文字靠左、caret 靠右，像选择框。 */
+.row-chip.lang-chip { width: 72px; justify-content: space-between; }
+.row-chip.hw-chip { width: 80px; justify-content: space-between; }
+.row-chip.sep-chip { gap: 4px; }
+.row-chip .sep-check { width: 13px; flex: none; text-align: center; }
 .row-chip .caret { color: var(--muted); font-size: 0.6rem; line-height: 1; }
 .row-chip .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 人声分离是个开关：关着要看得出来"没开"（灰虚线），开着要一眼看到（主题色 + ✓） */
