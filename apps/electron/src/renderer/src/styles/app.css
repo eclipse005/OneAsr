@@ -165,10 +165,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .row-chip.muted { color: var(--muted); }
 .row-chip:hover:not(:disabled), .row-chip.open { border-color: var(--accent); background: var(--accent-mist); color: var(--logo); }
 .row-chip:disabled { opacity: 0.5; cursor: not-allowed; }
-/* 参数 chip **定宽**：语言名长短（English / 中文）、词库名长短、开关的 ✓ 都不再推着
-   整簇控件左右晃。定宽的 chip 用 space-between —— 文字靠左、caret 靠右，像选择框。 */
-.row-chip.lang-chip { width: 72px; justify-content: space-between; }
-.row-chip.hw-chip { width: 80px; justify-content: space-between; }
+/* 参数 chip **定宽 + 内容居中**：定宽是为了不让语言名/词库名/开关的 ✓ 推着整簇控件
+   左右晃；居中是因为靠左会在右边留一大块空（而且 caret 顶到最右也不好看）。
+   宽度按"完整装下默认文案"取：语言装得下 English、词库装得下「热词：无」。
+   更长的词库名会被截断（title 里有全名）——定宽与"永不截断"本来就只能二选一。 */
+/* 两个**下拉**用同一个宽度（94px，装得下 English 与「热词：无」）：这样 caret 也
+   竖直对齐，看起来像一张表格；开关 chip 不定宽（英文 Vocal separation 会被截断）。 */
+.row-chip.lang-chip { width: 94px; justify-content: center; }
+.row-chip.hw-chip { width: 94px; justify-content: center; }
 .row-chip.sep-chip { gap: 4px; }
 .row-chip .sep-check { width: 13px; flex: none; text-align: center; }
 .row-chip .caret { color: var(--muted); font-size: 0.6rem; line-height: 1; }
