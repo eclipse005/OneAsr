@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { t, UiLang } from '../i18n'
 import type { HotwordGroup, HotwordStore } from '../../../shared/types'
 
@@ -44,10 +44,21 @@ export function HotwordEditor({
   const [addRaw, setAddRaw] = useState('')
   const [saving, setSaving] = useState(false)
   const [lastAdded, setLastAdded] = useState<number | null>(null)
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false)
+  const groupMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
+
+  useEffect(() => {
+    if (!groupMenuOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (!groupMenuRef.current?.contains(e.target as Node)) setGroupMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [groupMenuOpen])
 
   // Reset when store prop identity changes (after external save / reopen)
   useEffect(() => {
@@ -131,42 +142,72 @@ export function HotwordEditor({
     <div className={`hw-embed vertical ${compact ? 'compact' : ''}`}>
       {/* Top: compact group management */}
       <div className="hw-group-bar">
-        <select
-          className="hw-group-select"
-          value={group?.id || ''}
-          onChange={(e) => setSel(e.target.value)}
-          aria-label={s.groups}
-        >
-          {draft.groups.map((g) => {
-            const n = parseWords(g.words).length
-            const isDef = draft.default_group === g.id
-            const label = g.name.trim() || s.emptyGroup
-            return (
-              <option key={g.id} value={g.id}>
-                {label}
-                {isDef ? ` · ${s.isDefault}` : ''}
-                {` (${n})`}
-              </option>
-            )
-          })}
-        </select>
-        <div className="hw-default-toggle" title={s.defaultGroup}>
-          <span className="pref-label">{s.defaultGroupShort}</span>
+        <div className={`hw-group-menu${groupMenuOpen ? ' open' : ''}`} ref={groupMenuRef}>
           <button
             type="button"
-            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
-            role="switch"
-            aria-checked={draft.default_group_enabled}
-            aria-label={s.defaultGroup}
-            disabled={!group}
-            onClick={() =>
-              touch({
-                ...draft,
-                default_group_enabled: !draft.default_group_enabled,
-                default_group: draft.default_group || group?.id || null
-              })
-            }
-          />
+            className="hw-group-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={groupMenuOpen}
+            aria-label={s.groups}
+            onClick={() => setGroupMenuOpen((o) => !o)}
+          >
+            <span className="hw-group-trigger-label">
+              {group?.name.trim() || s.emptyGroup}
+              {group && draft.default_group === group.id ? ` · ${s.isDefault}` : ''}
+              {` (${words.length})`}
+            </span>
+            <span className="hw-group-caret" aria-hidden>
+              ▾
+            </span>
+          </button>
+          {groupMenuOpen && (
+            <ul className="hw-group-listbox" role="listbox">
+              {draft.groups.map((g) => {
+                const n = parseWords(g.words).length
+                const isDef = draft.default_group === g.id
+                const label = g.name.trim() || s.emptyGroup
+                const active = g.id === group?.id
+                return (
+                  <li
+                    key={g.id}
+                    className={`hw-group-option${active ? ' active' : ''}${isDef ? ' is-default' : ''}`}
+                    role="option"
+                    aria-selected={active}
+                  >
+                    <button
+                      type="button"
+                      className="hw-group-option-main"
+                      onClick={() => {
+                        setSel(g.id)
+                        setGroupMenuOpen(false)
+                      }}
+                    >
+                      <span className="hw-group-option-name">{label}</span>
+                      <span className="hw-group-option-meta">{n}</span>
+                    </button>
+                    {isDef ? (
+                      <span className="hw-group-default-badge">{s.isDefault}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="hw-group-set-default"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          touch({
+                            ...draft,
+                            default_group: g.id,
+                            default_group_enabled: true
+                          })
+                        }}
+                      >
+                        {s.setDefault}
+                      </button>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </div>
         <input
           className="text-input hw-name"
@@ -192,21 +233,6 @@ export function HotwordEditor({
           }}
         >
           + {s.addGroup}
-        </button>
-        <button
-          type="button"
-          className={`chip ${group && draft.default_group === group.id ? 'active' : ''}`}
-          disabled={!group}
-          onClick={() =>
-            group &&
-            touch({
-              ...draft,
-              default_group: group.id,
-              default_group_enabled: true
-            })
-          }
-        >
-          {s.setDefault}
         </button>
         <button
           type="button"
@@ -280,6 +306,24 @@ export function HotwordEditor({
       </div>
 
       <div className="hw-embed-foot">
+        <div className="hw-default-toggle" title={s.defaultGroup}>
+          <span className="pref-label">{s.defaultGroupShort}</span>
+          <button
+            type="button"
+            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+            role="switch"
+            aria-checked={draft.default_group_enabled}
+            aria-label={s.defaultGroup}
+            disabled={!group}
+            onClick={() =>
+              touch({
+                ...draft,
+                default_group_enabled: !draft.default_group_enabled,
+                default_group: draft.default_group || group?.id || null
+              })
+            }
+          />
+        </div>
         <span className="hint">{dirty ? s.unsaved : ''}</span>
         <button type="button" className="btn btn-ghost btn-sm" disabled={!dirty} onClick={discard}>
           {s.discard}

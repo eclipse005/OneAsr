@@ -678,21 +678,126 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   flex-wrap: nowrap;
   flex-shrink: 0;
 }
-.hw-group-select {
+.hw-group-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.hw-group-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 30px;
-  min-width: 120px;
-  max-width: 180px;
-  padding: 0 8px;
+  min-width: 140px;
+  max-width: 200px;
+  padding: 0 8px 0 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: #fff;
   font-size: 0.84rem;
   color: var(--text);
+  font-weight: 550;
 }
-.hw-group-select:focus {
+.hw-group-trigger:hover,
+.hw-group-menu.open .hw-group-trigger {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-  outline: none;
+}
+.hw-group-trigger-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.hw-group-caret {
+  color: var(--muted);
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+.hw-group-listbox {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 260px;
+  max-width: 360px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  max-height: 240px;
+  overflow: auto;
+}
+.hw-group-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 8px;
+  padding: 2px;
+}
+.hw-group-option:hover {
+  background: var(--row-hover);
+}
+.hw-group-option.active {
+  background: var(--accent-soft);
+}
+.hw-group-option-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 550;
+  background: transparent;
+}
+.hw-group-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hw-group-option-meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.hw-group-default-badge {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--logo);
+  background: var(--accent-soft);
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-right: 4px;
+}
+.hw-group-set-default {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 8px;
+  margin-right: 2px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.hw-group-set-default:hover {
+  border-color: var(--accent);
+  color: var(--logo);
+  background: var(--accent-mist);
 }
 .hw-group-bar .hw-name {
   flex: 1 1 auto;
@@ -708,13 +813,12 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   gap: 6px;
   flex-shrink: 0;
   height: 30px;
-  padding: 0 2px 0 4px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #fff;
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 .hw-default-toggle .pref-label {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   color: var(--muted);
   font-weight: 600;
   white-space: nowrap;
@@ -731,6 +835,9 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 .hw-default-toggle .toggle.on::after {
   transform: translateX(16px);
+}
+.hw-embed-foot .hw-default-toggle {
+  margin-right: 4px;
 }
 
 .hw-bottom {

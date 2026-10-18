@@ -67,7 +67,14 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
         await win.webContents.executeJavaScript(
           `document.querySelector('[data-shot="settings-tab-hotwords"]')?.click()`
         )
+        await sleep(300)
+        await win.webContents.executeJavaScript(
+          `document.querySelector('.hw-group-trigger')?.click()`
+        )
         await capture(`${lang}-02d-settings-hotwords`)
+        await win.webContents.executeJavaScript(
+          `document.querySelector('.hw-group-trigger')?.click()`
+        )
         await win.webContents.executeJavaScript(
           `document.querySelector('[data-shot="settings-tab-compute"]')?.click()`
         )
