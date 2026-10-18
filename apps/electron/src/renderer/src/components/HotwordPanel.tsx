@@ -206,6 +206,24 @@ export function HotwordEditor({
         >
           {s.deleteGroup}
         </button>
+        <div className="hw-default-toggle" title={s.defaultGroup}>
+          <span className="pref-label">{s.defaultGroup}</span>
+          <button
+            type="button"
+            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+            role="switch"
+            aria-checked={draft.default_group_enabled}
+            aria-label={s.defaultGroup}
+            disabled={!group}
+            onClick={() =>
+              touch({
+                ...draft,
+                default_group_enabled: !draft.default_group_enabled,
+                default_group: draft.default_group || group?.id || null
+              })
+            }
+          />
+        </div>
       </div>
 
       {/* Middle: chip cloud */}
@@ -236,7 +254,7 @@ export function HotwordEditor({
         )}
       </div>
 
-      {/* Bottom: add + params */}
+      {/* Bottom: add only */}
       <div className="hw-bottom">
         <div className="hw-add">
           <input
@@ -258,23 +276,6 @@ export function HotwordEditor({
           {lastAdded != null && lastAdded > 0 && (
             <span className="hw-add-feedback">+{lastAdded}</span>
           )}
-        </div>
-        <div className="pref-row hw-param-toggle">
-          <span className="pref-label">{s.defaultGroup}</span>
-          <button
-            type="button"
-            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
-            role="switch"
-            aria-checked={draft.default_group_enabled}
-            disabled={!group}
-            onClick={() =>
-              touch({
-                ...draft,
-                default_group_enabled: !draft.default_group_enabled,
-                default_group: draft.default_group || group?.id || null
-              })
-            }
-          />
         </div>
       </div>
 
