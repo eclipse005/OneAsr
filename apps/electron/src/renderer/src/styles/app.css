@@ -190,15 +190,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .chip-menu-item:hover { background: var(--row-hover); }
 .chip-menu-item.active { background: var(--accent-soft); color: var(--logo); font-weight: 650; }
 .row-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 5px; }
-/* 默认一行结论（省略号），展开后给全文并限高——报错不该把卡片撑成一堵墙 */
-.row-error .err-text {
-  flex: 1; min-width: 0; color: var(--danger); font-size: 0.78rem;
+/* 失败摘要就占**一行**（元数据那一格），全文在 title 与「复制错误」里：
+   失败行因此和别的行一样高，不会把卡片撑开。 */
+.task-card .name-error {
+  flex: 1 1 auto; min-width: 0; color: var(--danger); font-size: 0.78rem; font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.row-error .err-text.open {
-  white-space: pre-wrap; word-break: break-all;
-  max-height: 30vh; overflow: auto;
-}
+/* 有错误时：文件名**不参与收缩**（只在自己超长时才截到 45%），剩下的空间全给错误行 */
+.task-card .name-main:has(.name-error) .task-name { flex: 0 0 auto; max-width: 45%; }
 .btn-mini {
   flex: none; height: 22px; padding: 0 8px; border-radius: 6px;
   border: 1px solid var(--line); background: #fff; font-size: 0.72rem; color: var(--muted);
@@ -248,13 +247,18 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .task-card .meta { color: var(--muted); font-size: 0.82rem; word-break: break-all; }
 .task-card .actions {
-  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+  /* 顶对齐：状态药丸也在首行，两者同一条基线（以前按钮在整卡居中，和药丸错开半行） */
+  display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; justify-content: flex-end;
 }
+/* 行内按钮压到 30px 高（基类 .btn 是固定 34px，padding 改不动它），
+   状态药丸也定到 30px —— 两者顶边与文字基线在首行精确重合 */
+.task-card .actions .btn { height: 30px; padding: 0 12px; font-size: 0.82rem; }
+.task-card .name .badge { min-height: 30px; }
 
 
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 2px 9px; border-radius: 999px; font-size: 0.74rem; font-weight: 650;
+  padding: 4px 10px; border-radius: 999px; font-size: 0.74rem; font-weight: 650;
   background: var(--row-hover); color: var(--muted); border: 1px solid var(--line-soft);
 }
 .badge.running { background: var(--accent-soft); color: var(--logo); border-color: #99f6e4; }
