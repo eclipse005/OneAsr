@@ -22,6 +22,13 @@ const api: OneAsrApi = {
   startTask: (id: string) => ipcRenderer.invoke('tasks:start', id),
   startAll: () => ipcRenderer.invoke('tasks:startAll'),
   cancelTask: (id: string) => ipcRenderer.invoke('tasks:cancel', id),
+  setTaskLanguage: (id: string, language: string) =>
+    ipcRenderer.invoke('tasks:setLanguage', id, language),
+  setTaskVocalSeparation: (id: string, on: boolean) =>
+    ipcRenderer.invoke('tasks:setVocalSeparation', id, on),
+  setTaskHotwordGroup: (id: string, groupId: string | null) =>
+    ipcRenderer.invoke('tasks:setHotwordGroup', id, groupId),
+  copyText: (text: string) => ipcRenderer.invoke('shell:copyText', text),
   getStats: () => ipcRenderer.invoke('stats:get'),
   getHotwords: () => ipcRenderer.invoke('hotword:get'),
   saveHotwords: (store: HotwordStore) => ipcRenderer.invoke('hotword:save', store),

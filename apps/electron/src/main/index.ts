@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import fs from 'fs'
 import {
@@ -235,6 +235,10 @@ function registerIpc(): void {
   ipcMain.handle('shell:openPath', async (_e, p: string) => {
     if (p) await shell.openPath(p)
   })
+  // 复制走主进程的 clipboard：渲染层 file:// 下 navigator.clipboard 不保证可用
+  ipcMain.handle('shell:copyText', (_e, text: string) => {
+    clipboard.writeText(String(text ?? ''))
+  })
   ipcMain.handle('shell:openOutputFolder', async (_e, filePath: string) => {
     if (filePath) shell.showItemInFolder(filePath)
   })
@@ -252,6 +256,16 @@ function registerIpc(): void {
   ipcMain.handle('tasks:cancel', (_e, id: string) => {
     jobs.cancel(id)
   })
+  // 行内改（运行中会被 JobManager.patch 挡掉）
+  ipcMain.handle('tasks:setLanguage', (_e, id: string, language: string) =>
+    jobs.setLanguage(id, language)
+  )
+  ipcMain.handle('tasks:setVocalSeparation', (_e, id: string, on: boolean) =>
+    jobs.setVocalSeparation(id, on)
+  )
+  ipcMain.handle('tasks:setHotwordGroup', (_e, id: string, groupId: string | null) =>
+    jobs.setHotwordGroup(id, groupId)
+  )
   ipcMain.handle('stats:get', () => jobs.getStats())
 
   ipcMain.handle('hotword:get', () => loadHotwords())

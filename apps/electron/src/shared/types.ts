@@ -57,6 +57,19 @@ export interface TaskSnapshot {
   startedAt?: number
   finishedAt?: number
   hotwordGroupId?: string | null
+  /** 每行的识别语言（加入时快照设置，可逐行改；运行中锁定） */
+  language?: string
+  /** 每行人声分离（加入时快照设置，可逐行改；运行中锁定） */
+  vocalSeparation?: boolean
+  /** 加入时的文件大小；时长后台探，探到前是 undefined */
+  sizeBytes?: number
+  durationSec?: number
+  /** 排队位次，1 = 下一个跑；只有排队的行有 */
+  queueRank?: number
+  /** 完成后从 CLI 收尾输出解析出的阶段耗时 */
+  stageTimings?: { stage: string; ms: number }[]
+  /** CLI 报的总耗时（含模型加载） */
+  totalMs?: number
 }
 
 /** One finished-task row from stats.jsonl (oneasr-core compatible). */

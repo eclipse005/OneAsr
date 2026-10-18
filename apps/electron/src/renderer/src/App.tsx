@@ -292,10 +292,24 @@ export default function App() {
           <TaskList
             lang={lang}
             tasks={tasks}
+            hotwordGroups={hotwords?.groups ?? []}
+            defaultLanguage={settings?.language ?? 'zh'}
             onStart={(id) => void window.oneasr.startTask(id)}
             onCancel={(id) => void window.oneasr.cancelTask(id)}
             onRemove={(id) => void window.oneasr.removeTask(id).then(setTasks)}
             onOpen={(p) => void window.oneasr.openOutputFolder(p)}
+            onSetLanguage={(id, language) =>
+              void window.oneasr.setTaskLanguage(id, language).then(setTasks)
+            }
+            onSetVocalSeparation={(id, on) =>
+              void window.oneasr.setTaskVocalSeparation(id, on).then(setTasks)
+            }
+            onSetHotwordGroup={(id, groupId) =>
+              void window.oneasr.setTaskHotwordGroup(id, groupId).then(setTasks)
+            }
+            onCopyError={(text) =>
+              void window.oneasr.copyText(text).then(() => pushToast('success', s.copied))
+            }
           />
         )}
       </div>

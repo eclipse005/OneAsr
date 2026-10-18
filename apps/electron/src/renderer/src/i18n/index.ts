@@ -30,8 +30,17 @@ const zh = {
   sensevoice: '粗转',
   start: '开始',
   openFolder: '打开目录',
+  openOutput: '打开输出',
   remove: '移除',
+  retry: '重试',
+  copyError: '复制错误',
+  copied: '已复制',
+  timing: '耗时',
+  probing: '探测中…',
+  hotwordNone: '热词：无',
+  noTranscript: '无文稿',
   queued: '排队',
+  pending: '待处理',
   running: '进行中',
   done: '完成',
   error: '失败',
@@ -171,8 +180,17 @@ const en: Dict = {
   sensevoice: 'SenseVoice',
   start: 'Start',
   openFolder: 'Open folder',
+  openOutput: 'Open output',
   remove: 'Remove',
+  retry: 'Retry',
+  copyError: 'Copy error',
+  copied: 'Copied',
+  timing: 'Timing',
+  probing: 'probing…',
+  hotwordNone: 'Hotwords: none',
+  noTranscript: 'No transcript',
   queued: 'Queued',
+  pending: 'Pending',
   running: 'Running',
   done: 'Done',
   error: 'Error',
@@ -298,6 +316,11 @@ export const LANG_OPTIONS = [
   { id: 'ko', label: '한국어' },
   { id: 'auto', label: 'Auto' }
 ]
+
+/** 「排队第 N 位」/「Queued · #N」：队列位次（Dict 只放字符串，带参数的走 helper）。 */
+export function queueRank(lang: UiLang, n: number): string {
+  return lang === 'zh' ? `排队第 ${n} 位` : `Queued · #${n}`
+}
 
 /** 「还有 N 条」/「N more」：折叠列表的计数后缀。Dict 只放字符串，带参数的走 helper。 */
 export function moreItems(lang: UiLang, n: number): string {

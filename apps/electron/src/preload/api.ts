@@ -39,6 +39,10 @@ export interface OneAsrApi {
   startTask: (id: string) => Promise<void>
   startAll: () => Promise<void>
   cancelTask: (id: string) => Promise<void>
+  setTaskLanguage: (id: string, language: string) => Promise<TaskSnapshot[]>
+  setTaskVocalSeparation: (id: string, on: boolean) => Promise<TaskSnapshot[]>
+  setTaskHotwordGroup: (id: string, groupId: string | null) => Promise<TaskSnapshot[]>
+  copyText: (text: string) => Promise<void>
   getStats: () => Promise<StatsSnapshot>
   getHotwords: () => Promise<HotwordStore>
   saveHotwords: (store: HotwordStore) => Promise<HotwordStore>

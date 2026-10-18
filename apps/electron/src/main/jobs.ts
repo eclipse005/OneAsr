@@ -13,25 +13,101 @@ function nextId(): string {
   return `t-${Date.now()}-${seq}`
 }
 
+/**
+ * CLI 的阶段表：中英两套名字都要认。
+ * 之前只认 `[stage]` 和英文阶段名，而 CLI 的输出语言跟随系统（本机是中文），
+ * 于是阶段药丸和百分比**一个都出不来**——这次按语言无关的方式重写。
+ */
+const STAGES: Array<[string, string]> = [
+  // 顺序与 crates/oneasr-core 的 AsrStage::label 一致（9 个，其中
+  // 「人声分离」「热词提取」是条件阶段，只有开关/绑了热词组时才出现）
+  ['converting audio', '转码音频'],
+  ['separating vocals', '人声分离'],
+  ['planning segments', '分段规划'],
+  ['extracting hotwords', '热词提取'],
+  ['loading asr model', '加载识别模型'],
+  ['transcribing', '转写'],
+  ['loading aligner model', '加载对齐模型'],
+  ['aligning', '打轴'],
+  ['exporting subtitles', '导出字幕']
+]
+
+function stageIndex(name: string): number {
+  const lower = name.toLowerCase()
+  return STAGES.findIndex(([en, zh]) => lower.includes(en) || name.includes(zh))
+}
+
+/** `[阶段] 转写` / `[stage] Transcribing` → 阶段名 + 百分比。 */
 function parseStage(line: string): { stage?: string; pct?: number } {
-  const m = line.match(/\[stage\]\s*(.+)/i)
+  const m = line.match(/\[(?:stage|阶段)\]\s*(.+)/i)
   if (m) {
     const stage = m[1].trim()
-    const order = [
-      'Converting audio',
-      'Planning segments',
-      'Loading ASR model',
-      'Transcribing',
-      'Loading aligner model',
-      'Aligning',
-      'Exporting subtitles'
-    ]
-    const idx = order.findIndex((s) => stage.toLowerCase().includes(s.toLowerCase().split(' ')[0]!))
-    const pct = idx >= 0 ? Math.round(((idx + 1) / order.length) * 100) : undefined
-    return { stage, pct }
+    const idx = stageIndex(stage)
+    return { stage, pct: idx >= 0 ? Math.round(((idx + 1) / STAGES.length) * 100) : undefined }
   }
-  if (/OK output=/i.test(line)) return { stage: 'Done', pct: 100 }
+  if (/(?:OK|完成)\s+output=/i.test(line)) return { stage: 'Done', pct: 100 }
   return {}
+}
+
+/** 收尾的耗时行：`  转写             587 ms` / `  加载识别模型          5.4 s`。 */
+function parseTiming(line: string): { stage: string; ms: number } | undefined {
+  const m = line.match(/^\s{2,}(\S.*?)\s+([\d.]+)\s*(ms|s)$/)
+  if (!m) return undefined
+  const stage = m[1].trim()
+  if (stageIndex(stage) < 0) return undefined
+  const value = Number(m[2])
+  if (!Number.isFinite(value)) return undefined
+  return { stage, ms: m[3] === 's' ? Math.round(value * 1000) : Math.round(value) }
+}
+
+/** `wall=12.8s total_ms=12828 stages=7` */
+function parseTotalMs(line: string): number | undefined {
+  const m = line.match(/total_ms=(\d+)/)
+  return m ? Number(m[1]) : undefined
+}
+
+/** 时长探测用捆绑的 ffmpeg：`{app_root}/bin/ffmpeg[.exe]`（与 Rust 侧同一约定）。 */
+function resolveFfmpeg(appRoot = DEFAULT_APP_ROOT): string | undefined {
+  const name = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
+  const p = path.join(appRoot, 'bin', name)
+  return fs.existsSync(p) ? p : undefined
+}
+
+/** 只读文件头探时长（不解码）：ffmpeg 把 `Duration: 00:00:12.34` 打在 stderr。 */
+function probeDurationSec(file: string, appRoot = DEFAULT_APP_ROOT): Promise<number | undefined> {
+  const ffmpeg = resolveFfmpeg(appRoot)
+  if (!ffmpeg) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    let done = false
+    let timer: NodeJS.Timeout | undefined
+    const child = spawn(ffmpeg, ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'] })
+    let err = ''
+    const finish = (value?: number): void => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      try {
+        child.kill()
+      } catch {
+        /* ignore */
+      }
+      resolve(value)
+    }
+    const read = (): void => {
+      const m = err.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
+      if (m) finish(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]))
+    }
+    child.stderr?.on('data', (b) => {
+      err += b.toString()
+      read()
+    })
+    child.on('error', () => finish())
+    child.on('close', () => {
+      read()
+      finish()
+    })
+    timer = setTimeout(() => finish(), 15000)
+  })
 }
 
 export class JobManager extends EventEmitter {
@@ -45,7 +121,41 @@ export class JobManager extends EventEmitter {
   private lastDurationMs?: number
 
   list(): TaskSnapshot[] {
-    return this.tasks.map((t) => ({ ...t }))
+    return this.tasks.map((t) => {
+      const qi = this.queue.indexOf(t.id)
+      return { ...t, queueRank: t.status === 'queued' && qi >= 0 ? qi + 1 : undefined }
+    })
+  }
+
+  /** 行内改一项（运行中锁定，与 GPUI 的 locks_row_actions 一致）。 */
+  private patch(id: string, fn: (t: TaskSnapshot) => void): TaskSnapshot[] {
+    const t = this.tasks.find((x) => x.id === id)
+    if (t && t.status !== 'running') {
+      fn(t)
+      this.emitUpdate()
+    }
+    return this.list()
+  }
+
+  /** 行内改识别语言。 */
+  setLanguage(id: string, language: string): TaskSnapshot[] {
+    return this.patch(id, (t) => {
+      t.language = language
+    })
+  }
+
+  /** 行内切人声分离。 */
+  setVocalSeparation(id: string, on: boolean): TaskSnapshot[] {
+    return this.patch(id, (t) => {
+      t.vocalSeparation = on
+    })
+  }
+
+  /** 行内绑热词组（null = 不绑）。 */
+  setHotwordGroup(id: string, groupId: string | null): TaskSnapshot[] {
+    return this.patch(id, (t) => {
+      t.hotwordGroupId = groupId
+    })
   }
 
   getStats(): StatsSnapshot {
@@ -56,6 +166,7 @@ export class JobManager extends EventEmitter {
   }
 
   add(paths: string[]): TaskSnapshot[] {
+    const settings = loadSettings()
     const hw = loadHotwords()
     const defaultGroup =
       hw.default_group_enabled && hw.default_group
@@ -65,14 +176,30 @@ export class JobManager extends EventEmitter {
       if (!p || !fs.existsSync(p)) continue
       if (this.tasks.some((t) => t.input === p && t.status !== 'done' && t.status !== 'error' && t.status !== 'cancelled'))
         continue
-      this.tasks.push({
+      let sizeBytes: number | undefined
+      try {
+        sizeBytes = fs.statSync(p).size
+      } catch {
+        /* ignore */
+      }
+      const task: TaskSnapshot = {
         id: nextId(),
         input: p,
         name: path.basename(p),
         status: 'queued',
         progress: '',
         progressPct: 0,
-        hotwordGroupId: defaultGroup
+        hotwordGroupId: defaultGroup,
+        language: settings.language || 'zh',
+        vocalSeparation: !!settings.vocal_separation,
+        sizeBytes
+      }
+      this.tasks.push(task)
+      // 时长后台探，探到再刷新那一行（不阻塞加入）
+      void probeDurationSec(p).then((sec) => {
+        if (sec == null) return
+        task.durationSec = sec
+        this.emitUpdate()
       })
     }
     this.emitUpdate()
@@ -219,6 +346,7 @@ export class JobManager extends EventEmitter {
       })
       this.running = child
       let stderr = ''
+      const stageTimings: { stage: string; ms: number }[] = []
 
       const onLine = (buf: Buffer, stream: 'out' | 'err'): void => {
         const text = buf.toString('utf8')
@@ -230,6 +358,11 @@ export class JobManager extends EventEmitter {
           const { stage, pct } = parseStage(trimmed)
           if (stage) task.stage = stage
           if (pct != null) task.progressPct = pct
+          // 用未 trim 的原始行：耗时行的缩进（两空格起）正是它与普通日志的区别
+          const timing = parseTiming(line)
+          if (timing) stageTimings.push(timing)
+          const totalMs = parseTotalMs(trimmed)
+          if (totalMs != null) task.totalMs = totalMs
           this.emit('progress', { id: task.id, line: trimmed })
           this.emitUpdate()
         }
@@ -279,6 +412,8 @@ export class JobManager extends EventEmitter {
           }
         }
 
+        if (stageTimings.length) task.stageTimings = stageTimings
+
         const ok = code === 0 && !!produced
         if (ok) {
           task.status = 'done'
@@ -294,14 +429,16 @@ export class JobManager extends EventEmitter {
           task.progressPct = 100
         }
 
-        // media duration unknown cheaply — leave undefined; process_ms recorded
+        // media_sec 用加入时探到的时长：统计页的「处理媒体 / 节省时长 / 平均倍速」全靠它，
+        // 之前这里一直没写，Electron 跑出来的任务在统计里等于没有媒体时长。
         try {
           appendRecord({
             v: 1,
             day: localDay(),
             process_ms: durationMs,
-            lang: settings.language || 'zh',
-            sep: !!settings.vocal_separation,
+            media_sec: task.durationSec,
+            lang: task.language || settings.language || 'zh',
+            sep: !!(task.vocalSeparation ?? settings.vocal_separation),
             transcript: false,
             ok,
             cues
@@ -349,7 +486,7 @@ export class JobManager extends EventEmitter {
       '--data-root',
       appRoot,
       '--language',
-      settings.language || 'zh',
+      task.language || settings.language || 'zh',
       '--backend',
       settings.backend || 'auto',
       '--chunk-seconds',
@@ -373,7 +510,7 @@ export class JobManager extends EventEmitter {
     if (settings.text_script === 'simplified' || settings.text_script === 'traditional') {
       args.push('--script', settings.text_script)
     }
-    if (settings.vocal_separation) {
+    if (task.vocalSeparation ?? settings.vocal_separation) {
       args.push('--vocal-separation')
       if (settings.demucs_model_dir) args.push('--demucs-model-dir', settings.demucs_model_dir)
     }
