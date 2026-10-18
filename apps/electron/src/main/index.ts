@@ -59,6 +59,12 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
         `window.__oneasrShotApi.open(${JSON.stringify(panel)})`
       )
       await capture(`${lang}-${file}`)
+      if (panel === 'settings') {
+        await win.webContents.executeJavaScript(
+          `document.querySelector('[data-shot="settings-tab-models"]')?.click()`
+        )
+        await capture(`${lang}-02b-settings-models`)
+      }
       await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
       await sleep(250)
     }

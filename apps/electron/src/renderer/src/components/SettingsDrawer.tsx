@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
 import type { ModelStatus, Settings } from '../../../shared/types'
+
+type SettingsTab = 'general' | 'output' | 'models' | 'compute'
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -19,6 +22,56 @@ function Pill({ ok, label, ready, missing }: { ok: boolean; label: string; ready
     <span className={`status-pill ${ok ? 'ready' : 'missing'}`}>
       {label}: {ok ? ready : missing}
     </span>
+  )
+}
+
+function Seg({
+  options,
+  value,
+  onChange
+}: {
+  options: { id: string; label: string }[]
+  value: string
+  onChange: (id: string) => void
+}) {
+  return (
+    <div className="seg" role="group">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          className={`seg-item ${value === o.id ? 'active' : ''}`}
+          aria-pressed={value === o.id}
+          onClick={() => onChange(o.id)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CheckChip({
+  checked,
+  label,
+  onChange
+}: {
+  checked: boolean
+  label: string
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`check-chip ${checked ? 'active' : ''}`}
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="check-mark" aria-hidden>
+        {checked ? '✓' : ''}
+      </span>
+      {label}
+    </button>
   )
 }
 
@@ -63,6 +116,7 @@ export function SettingsDrawer({
   onRefreshModels: () => void
 }) {
   const s = t(lang)
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general')
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     onChange({ ...draft, [key]: value })
 
@@ -94,10 +148,17 @@ export function SettingsDrawer({
     })
   }
 
+  const tabs: { id: SettingsTab; label: string }[] = [
+    { id: 'general', label: s.sectionGeneral },
+    { id: 'output', label: s.sectionOutput },
+    { id: 'models', label: s.sectionModels },
+    { id: 'compute', label: s.sectionCompute }
+  ]
+
   return (
     <div className="overlay" onClick={onClose}>
       <motion.div
-        className="modal-shell dense tall"
+        className="modal-shell settings-shell"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -113,196 +174,275 @@ export function SettingsDrawer({
             {s.close}
           </button>
         </div>
-        <div className="modal-body dense">
-          <div className="section">
-            <h4>{s.sectionGeneral}</h4>
-            <div className="field-row">
-              <div className="field">
-                <label>{s.uiLanguage}</label>
-                <select value={draft.ui_language} onChange={(e) => set('ui_language', e.target.value)}>
-                  <option value="system">{s.system}</option>
-                  <option value="zh">中文</option>
-                  <option value="en">English</option>
-                </select>
-              </div>
-              <div className="field">
-                <label>{s.recognitionLanguage}</label>
-                <select value={draft.language} onChange={(e) => set('language', e.target.value)}>
-                  {LANG_OPTIONS.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="field-row">
-              <div className="field">
-                <label>{s.subtitleLength}</label>
-                <div className="chip-row">
-                  {(['short', 'standard', 'loose'] as const).map((p) => (
+
+        <div className="settings-body">
+          <nav className="settings-nav" aria-label={s.settings}>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                data-shot={`settings-tab-${tab.id}`}
+                className={`settings-nav-item ${activeTab === tab.id ? 'active' : ''}`}
+                aria-current={activeTab === tab.id ? 'page' : undefined}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="settings-pane" data-shot={`settings-pane-${activeTab}`}>
+            {activeTab === 'general' && (
+              <>
+                <div className="field">
+                  <label>{s.uiLanguage}</label>
+                  <select value={draft.ui_language} onChange={(e) => set('ui_language', e.target.value)}>
+                    <option value="system">{s.system}</option>
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>{s.recognitionLanguage}</label>
+                  <select value={draft.language} onChange={(e) => set('language', e.target.value)}>
+                    {LANG_OPTIONS.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>{s.subtitleLength}</label>
+                  <Seg
+                    value={draft.subtitle_length_preset}
+                    onChange={(id) => set('subtitle_length_preset', id as Settings['subtitle_length_preset'])}
+                    options={[
+                      { id: 'short', label: s.short },
+                      { id: 'standard', label: s.standard },
+                      { id: 'loose', label: s.loose }
+                    ]}
+                  />
+                </div>
+                <div className="field">
+                  <label>{s.chunkDuration}</label>
+                  <select
+                    value={String(draft.chunk_target_seconds)}
+                    onChange={(e) => set('chunk_target_seconds', Number(e.target.value))}
+                  >
+                    {[30, 60, 90, 120, 180].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+
+            {activeTab === 'output' && (
+              <>
+                <div className="field">
+                  <label>{s.outputs}</label>
+                  <div className="check-chip-row">
+                    <CheckChip checked={draft.output_srt} label="SRT" onChange={(v) => set('output_srt', v)} />
+                    <CheckChip checked={draft.output_txt} label="TXT" onChange={(v) => set('output_txt', v)} />
+                    <CheckChip checked={draft.output_ass} label="ASS" onChange={(v) => set('output_ass', v)} />
+                  </div>
+                </div>
+                <div className="field">
+                  <label>{s.chineseScript}</label>
+                  <Seg
+                    value={draft.text_script}
+                    onChange={(id) => set('text_script', id as Settings['text_script'])}
+                    options={[
+                      { id: 'simplified', label: s.simplified },
+                      { id: 'traditional', label: s.traditional },
+                      { id: 'original', label: s.original }
+                    ]}
+                  />
+                </div>
+                <div className="pref-row">
+                  <span className="pref-label">{s.subtitlePolish}</span>
+                  <Toggle on={draft.subtitle_beautify} onChange={(v) => set('subtitle_beautify', v)} />
+                </div>
+                <div className="pref-row">
+                  <span className="pref-label">{s.saveNextToSource}</span>
+                  <Toggle on={draft.save_next_to_source} onChange={(v) => set('save_next_to_source', v)} />
+                </div>
+                <div className="field">
+                  <label>{s.outputPath}</label>
+                  <div className="path-input compact">
+                    <input
+                      className="text-input mono"
+                      value={draft.output_dir}
+                      onChange={(e) => set('output_dir', e.target.value)}
+                    />
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={onPickDir}>
+                      {s.browse}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {activeTab === 'models' && (
+              <>
+                <div className="models-toolbar">
+                  <div className="models-status">
+                    <Pill ok={!!models?.asrReady} label={s.asr} ready={s.ready} missing={s.missing} />
+                    <Pill ok={!!models?.alignerReady} label={s.aligner} ready={s.ready} missing={s.missing} />
+                    <Pill ok={!!models?.demucsReady} label={s.demucs} ready={s.ready} missing={s.missing} />
+                  </div>
+                  <div className="models-actions">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenModels}>
+                      {s.openModels}
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-icon" onClick={onRefreshModels} aria-label="Refresh">
+                      ↻
+                    </button>
+                  </div>
+                </div>
+                <div className="pane-divider" />
+                <div className="field">
+                  <label>{s.asrSize}</label>
+                  <Seg
+                    value={size}
+                    onChange={(id) => setAsr(id as '0.6B' | '1.7B', quant)}
+                    options={[
+                      { id: '0.6B', label: '0.6B' },
+                      { id: '1.7B', label: '1.7B' }
+                    ]}
+                  />
+                </div>
+                <div className="field">
+                  <label>{s.quantization}</label>
+                  <Seg
+                    value={quant}
+                    onChange={(id) => setAsr(size, id as 'fp16' | 'int8')}
+                    options={[
+                      { id: 'fp16', label: s.fp16 },
+                      { id: 'int8', label: s.int8 }
+                    ]}
+                  />
+                </div>
+                <div className="field">
+                  <label>{s.asrPath}</label>
+                  <div className="path-input compact">
+                    <input
+                      className="text-input mono"
+                      value={draft.asr_model_dir}
+                      onChange={(e) => set('asr_model_dir', e.target.value)}
+                    />
                     <button
-                      key={p}
                       type="button"
-                      className={`chip ${draft.subtitle_length_preset === p ? 'active' : ''}`}
-                      onClick={() => set('subtitle_length_preset', p)}
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onPickModel('asr_model_dir')}
                     >
-                      {s[p]}
+                      {s.browse}
                     </button>
-                  ))}
+                  </div>
                 </div>
-              </div>
-              <div className="field">
-                <label>{s.chunkDuration}</label>
-                <select
-                  value={String(draft.chunk_target_seconds)}
-                  onChange={(e) => set('chunk_target_seconds', Number(e.target.value))}
-                >
-                  {[30, 60, 90, 120, 180].map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="section">
-            <h4>{s.sectionOutput}</h4>
-            <div className="field">
-              <label>{s.outputs}</label>
-              <div className="chip-row">
-                <button type="button" className={`chip ${draft.output_srt ? 'active' : ''}`} onClick={() => set('output_srt', !draft.output_srt)}>SRT</button>
-                <button type="button" className={`chip ${draft.output_txt ? 'active' : ''}`} onClick={() => set('output_txt', !draft.output_txt)}>TXT</button>
-                <button type="button" className={`chip ${draft.output_ass ? 'active' : ''}`} onClick={() => set('output_ass', !draft.output_ass)}>ASS</button>
-              </div>
-            </div>
-            <div className="field">
-              <label>{s.chineseScript}</label>
-              <div className="chip-row">
-                {(['simplified', 'traditional', 'original'] as const).map((p) => (
-                  <button key={p} type="button" className={`chip ${draft.text_script === p ? 'active' : ''}`} onClick={() => set('text_script', p)}>
-                    {s[p]}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="field-row">
-              <div className="field">
-                <label>{s.subtitlePolish}</label>
-                <Toggle on={draft.subtitle_beautify} onChange={(v) => set('subtitle_beautify', v)} />
-              </div>
-              <div className="field">
-                <label>{s.saveNextToSource}</label>
-                <Toggle on={draft.save_next_to_source} onChange={(v) => set('save_next_to_source', v)} />
-              </div>
-            </div>
-            <div className="field stack">
-              <label>{s.outputPath}</label>
-              <div className="path-input">
-                <input className="text-input" value={draft.output_dir} onChange={(e) => set('output_dir', e.target.value)} />
-                <button type="button" className="btn btn-ghost" onClick={onPickDir}>{s.browse}</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="section">
-            <h4>{s.sectionModels}</h4>
-            <div className="chip-row" style={{ marginBottom: 4 }}>
-              <Pill ok={!!models?.asrReady} label={s.asr} ready={s.ready} missing={s.missing} />
-              <Pill ok={!!models?.alignerReady} label={s.aligner} ready={s.ready} missing={s.missing} />
-              <Pill ok={!!models?.demucsReady} label={s.demucs} ready={s.ready} missing={s.missing} />
-            </div>
-            <div className="chip-row" style={{ marginTop: 2 }}>
-              <button type="button" className="btn btn-ghost" onClick={onOpenModels}>{s.openModels}</button>
-              <button type="button" className="btn btn-ghost" onClick={onRefreshModels}>↻</button>
-            </div>
-            <div className="field-row">
-              <div className="field">
-                <label>{s.asrSize}</label>
-                <div className="chip-row">
-                  <button type="button" className={`chip ${size === '0.6B' ? 'active' : ''}`} onClick={() => setAsr('0.6B', quant)}>0.6B</button>
-                  <button type="button" className={`chip ${size === '1.7B' ? 'active' : ''}`} onClick={() => setAsr('1.7B', quant)}>1.7B</button>
+                <div className="field">
+                  <label>{s.alignerKind}</label>
+                  <Seg
+                    value={alignerKind(draft.aligner_model)}
+                    onChange={(id) => setAligner(id as 'ctc' | 'qwen')}
+                    options={[
+                      { id: 'ctc', label: s.ctc },
+                      { id: 'qwen', label: s.qwen }
+                    ]}
+                  />
                 </div>
-              </div>
-              <div className="field">
-                <label>{s.quantization}</label>
-                <div className="chip-row">
-                  <button type="button" className={`chip ${quant === 'fp16' ? 'active' : ''}`} onClick={() => setAsr(size, 'fp16')}>{s.fp16}</button>
-                  <button type="button" className={`chip ${quant === 'int8' ? 'active' : ''}`} onClick={() => setAsr(size, 'int8')}>{s.int8}</button>
-                </div>
-              </div>
-            </div>
-            <div className="field stack">
-              <label>{s.asrPath}</label>
-              <div className="path-input">
-                <input className="text-input" value={draft.asr_model_dir} onChange={(e) => set('asr_model_dir', e.target.value)} />
-                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('asr_model_dir')}>{s.browse}</button>
-              </div>
-            </div>
-            <div className="field">
-              <label>{s.alignerKind}</label>
-              <div className="chip-row">
-                <button type="button" className={`chip ${alignerKind(draft.aligner_model) === 'ctc' ? 'active' : ''}`} onClick={() => setAligner('ctc')}>{s.ctc}</button>
-                <button type="button" className={`chip ${alignerKind(draft.aligner_model) === 'qwen' ? 'active' : ''}`} onClick={() => setAligner('qwen')}>{s.qwen}</button>
-              </div>
-            </div>
-            <div className="field stack">
-              <label>{s.alignerPath}</label>
-              <div className="path-input">
-                <input className="text-input" value={draft.aligner_model_dir} onChange={(e) => set('aligner_model_dir', e.target.value)} />
-                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('aligner_model_dir')}>{s.browse}</button>
-              </div>
-            </div>
-            <div className="field">
-              <label>{s.vocalSep}</label>
-              <Toggle on={draft.vocal_separation} onChange={(v) => set('vocal_separation', v)} />
-            </div>
-            <div className="field stack">
-              <label>{s.demucsPath}</label>
-              <div className="path-input">
-                <input className="text-input" value={draft.demucs_model_dir} onChange={(e) => set('demucs_model_dir', e.target.value)} />
-                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('demucs_model_dir')}>{s.browse}</button>
-              </div>
-            </div>
-            <div className="field stack">
-              <label>{s.sensevoicePath}</label>
-              <div className="path-input">
-                <input
-                  className="text-input"
-                  value={draft.sensevoice_model_dir || ''}
-                  onChange={(e) => set('sensevoice_model_dir', e.target.value)}
-                />
-                <button type="button" className="btn btn-ghost" onClick={() => onPickModel('sensevoice_model_dir')}>{s.browse}</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="section">
-            <h4>{s.sectionCompute}</h4>
-            <div className="field-row">
-              <div className="field">
-                <label>{s.computeBackend}</label>
-                <div className="chip-row">
-                  {(['auto', 'gpu', 'cpu'] as const).map((b) => (
-                    <button key={b} type="button" className={`chip ${draft.backend === b ? 'active' : ''}`} onClick={() => set('backend', b)}>
-                      {s[b]}
+                <div className="field">
+                  <label>{s.alignerPath}</label>
+                  <div className="path-input compact">
+                    <input
+                      className="text-input mono"
+                      value={draft.aligner_model_dir}
+                      onChange={(e) => set('aligner_model_dir', e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onPickModel('aligner_model_dir')}
+                    >
+                      {s.browse}
                     </button>
-                  ))}
+                  </div>
                 </div>
-              </div>
-              <div className="field">
-                <label>{s.sounds}</label>
-                <Toggle on={draft.sound} onChange={(v) => set('sound', v)} />
-              </div>
-            </div>
+                <div className="pref-row">
+                  <span className="pref-label">{s.vocalSep}</span>
+                  <Toggle on={draft.vocal_separation} onChange={(v) => set('vocal_separation', v)} />
+                </div>
+                <div className="field">
+                  <label>{s.demucsPath}</label>
+                  <div className="path-input compact">
+                    <input
+                      className="text-input mono"
+                      value={draft.demucs_model_dir}
+                      onChange={(e) => set('demucs_model_dir', e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onPickModel('demucs_model_dir')}
+                    >
+                      {s.browse}
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label>{s.sensevoicePath}</label>
+                  <div className="path-input compact">
+                    <input
+                      className="text-input mono"
+                      value={draft.sensevoice_model_dir || ''}
+                      onChange={(e) => set('sensevoice_model_dir', e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onPickModel('sensevoice_model_dir')}
+                    >
+                      {s.browse}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {activeTab === 'compute' && (
+              <>
+                <div className="field">
+                  <label>{s.computeBackend}</label>
+                  <Seg
+                    value={draft.backend}
+                    onChange={(id) => set('backend', id as Settings['backend'])}
+                    options={[
+                      { id: 'auto', label: s.auto },
+                      { id: 'gpu', label: s.gpu },
+                      { id: 'cpu', label: s.cpu }
+                    ]}
+                  />
+                </div>
+                <div className="pref-row">
+                  <span className="pref-label">{s.sounds}</span>
+                  <Toggle on={draft.sound} onChange={(v) => set('sound', v)} />
+                </div>
+              </>
+            )}
           </div>
         </div>
+
         <div className="modal-footer">
           <span className="hint">{dirty ? s.unsaved : ''}</span>
-          <button type="button" className="btn btn-ghost" onClick={onReset}>{s.reset}</button>
-          <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>{s.save}</button>
+          <button type="button" className="btn btn-ghost" onClick={onReset}>
+            {s.reset}
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
+            {s.save}
+          </button>
         </div>
       </motion.div>
     </div>
