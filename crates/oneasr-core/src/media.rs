@@ -296,14 +296,55 @@ pub fn is_video_ext(ext: &str) -> bool {
     VIDEO_EXTS.iter().any(|known| *known == ext)
 }
 
-/// 媒体类型：只有落在 [`VIDEO_EXTS`] 里的算视频，其余一律按音频处理。
+/// 音频扩展名 —— 与仓库实际支持的输入一致（CLI `transcribe` / `align` 收的
+/// 音视频、GUI 添加对话框的「Media」过滤器、文稿配对里的媒体清单，过去三处各写
+/// 一份，现在都从这一张表回答）。
 ///
-/// 值域就这两个。判不出来时按音频报而不是报错——时长 / 尺寸探测对容器不敏感，
-/// 少一个图标远好过让整行加不进列表。
+/// 表里没有的（含没有扩展名的文件）是 [`MediaKind::Other`]，**不再默认按音频报**：
+/// `probe` 把 `.txt` 说成音频，壳就会给它挂上音频图标——那是壳在替后端猜。
+/// ffmpeg 能解的容器远不止这些；这张表回答的是「OneAsr 认得的输入」，不是
+/// 「ffmpeg 认得的输入」。
+pub const AUDIO_EXTS: &[&str] = &["wav", "mp3", "flac", "m4a", "aac", "ogg", "opus", "wma"];
+
+/// 扩展名（大小写不限、可带前导点）是不是音频。
+pub fn is_audio_ext(ext: &str) -> bool {
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    AUDIO_EXTS.iter().any(|known| *known == ext)
+}
+
+/// 全仓库唯一的「哪些扩展名算音视频」清单：[`AUDIO_EXTS`] 在前、[`VIDEO_EXTS`]
+/// 在后，各自保持声明顺序（顺序稳定，壳拿它拼文件过滤器）。
+///
+/// 返回值全小写、不带点；同一个扩展名若同时写进两张表，只留第一次出现的那个。
+/// `status --json` 的 `media_exts` 就是它——壳不必再维护第二份正则。
+pub fn supported_exts() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::with_capacity(AUDIO_EXTS.len() + VIDEO_EXTS.len());
+    for ext in AUDIO_EXTS.iter().chain(VIDEO_EXTS.iter()).copied() {
+        // 规范写法是契约（单测逐条钉住）：表里只许出现小写、不带点的拼法。
+        let normalized = ext.trim_start_matches('.').to_ascii_lowercase();
+        debug_assert!(
+            ext == normalized.as_str(),
+            "扩展名表里只许写小写、不带点的规范写法: {ext}"
+        );
+        if !out.contains(&ext) {
+            out.push(ext);
+        }
+    }
+    out
+}
+
+/// 媒体类型：落在 [`AUDIO_EXTS`] 的算音频、落在 [`VIDEO_EXTS`] 的算视频，
+/// 其余（含没有扩展名）是 [`MediaKind::Other`]。
+///
+/// **不再拿音频当兜底**：判不出来时按音频报，`probe` 就会把 `.txt` 说成音频，
+/// 壳于是在列表里给它挂音频图标——那是壳/后端替对方猜。判不出来就说判不出来，
+/// 由调用方决定是拒绝还是照传（转写本身不看扩展名，时长探测对容器不敏感）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaKind {
     Audio,
     Video,
+    /// 扩展名不在 [`AUDIO_EXTS`] / [`VIDEO_EXTS`] 里（含没有扩展名）。
+    Other,
 }
 
 impl MediaKind {
@@ -312,6 +353,7 @@ impl MediaKind {
         match self {
             Self::Audio => "audio",
             Self::Video => "video",
+            Self::Other => "other",
         }
     }
 
@@ -323,15 +365,23 @@ impl MediaKind {
             (Self::Audio, UiLang::En) => "audio",
             (Self::Video, UiLang::Zh) => "视频",
             (Self::Video, UiLang::En) => "video",
+            (Self::Other, UiLang::Zh) => "其他",
+            (Self::Other, UiLang::En) => "other",
         }
     }
 }
 
-/// 按扩展名判定媒体类型（见 [`MediaKind`]）。
+/// 按扩展名判定媒体类型（见 [`MediaKind`]）：两张表都不在 → `Other`。
 pub fn media_kind(path: &Path) -> MediaKind {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(ext) if is_video_ext(ext) => MediaKind::Video,
-        _ => MediaKind::Audio,
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return MediaKind::Other;
+    };
+    if is_video_ext(ext) {
+        MediaKind::Video
+    } else if is_audio_ext(ext) {
+        MediaKind::Audio
+    } else {
+        MediaKind::Other
     }
 }
 
@@ -626,6 +676,59 @@ pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 扩展名 → 类型：音频 / 视频各认各的，判不出来是 `Other`，不是音频。
+    ///
+    /// 断骨锚点：把 `media_kind` 的 `Other` 分支改回 `MediaKind::Audio`
+    /// （老行为：非视频一律按音频），`.txt` 与没有扩展名那两条立刻变红。
+    #[test]
+    fn media_kind_maps_audio_video_and_unknown_to_other() {
+        assert_eq!(media_kind(Path::new("a.wav")), MediaKind::Audio);
+        assert_eq!(media_kind(Path::new("a.MP3")), MediaKind::Audio);
+        assert_eq!(media_kind(Path::new("a.mp4")), MediaKind::Video);
+        assert_eq!(media_kind(Path::new("CLIP.MKV")), MediaKind::Video);
+        assert_eq!(media_kind(Path::new("notes.txt")), MediaKind::Other);
+        assert_eq!(media_kind(Path::new("plain")), MediaKind::Other);
+        assert_eq!(media_kind(Path::new("archive.tar.gz")), MediaKind::Other);
+        // 机器可读值就是壳读的那个字符串。
+        assert_eq!(MediaKind::Other.as_str(), "other");
+        assert_eq!(MediaKind::Audio.as_str(), "audio");
+        assert_eq!(MediaKind::Video.as_str(), "video");
+    }
+
+    /// 两张表拼出来的清单：全小写、不带点、无重复，且覆盖 wav 与 mp4。
+    ///
+    /// 断骨锚点：把 `supported_exts` 的去重删掉、或往任一张表里塞一个大写 / 带点
+    /// 的写法，下面任一条断言变红。
+    #[test]
+    fn supported_exts_is_normalized_deduplicated_and_covers_the_product_set() {
+        let exts = supported_exts();
+        assert!(exts.contains(&"wav"), "音频代表项必须在: {exts:?}");
+        assert!(exts.contains(&"mp4"), "视频代表项必须在: {exts:?}");
+        assert!(!exts.contains(&"txt"), "非媒体扩展名不许混进来: {exts:?}");
+        for ext in &exts {
+            assert_eq!(*ext, ext.to_ascii_lowercase(), "必须全小写: {ext}");
+            assert!(!ext.starts_with('.'), "必须不带点: {ext}");
+            assert!(!ext.trim().is_empty(), "空扩展名没有意义");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for ext in &exts {
+            assert!(seen.insert(*ext), "重复的扩展名: {ext}");
+        }
+        // 顺序稳定且可预期：音频表在前、视频表在后，各自保持声明顺序。
+        let expected: Vec<&str> = AUDIO_EXTS
+            .iter()
+            .chain(VIDEO_EXTS.iter())
+            .copied()
+            .collect();
+        let mut unique = Vec::new();
+        for ext in expected {
+            if !unique.contains(&ext) {
+                unique.push(ext);
+            }
+        }
+        assert_eq!(exts, unique, "顺序必须稳定（音频在前、视频在后）");
+    }
 
     #[test]
     fn app_root_walks_up_to_the_dir_holding_bin_ffmpeg() {

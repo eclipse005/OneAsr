@@ -694,6 +694,9 @@ struct StatusReport {
     language: String,
     /// 已解析成 `zh` / `en`（不会是 `system`）——上层不必再探一次系统语言。
     ui_language: &'static str,
+    /// 全仓库唯一的音视频扩展名清单（core `media::supported_exts()`）：全小写、
+    /// 不带点，音频在前、视频在后。壳拿它拼文件过滤器，不再自己维护正则。
+    media_exts: Vec<&'static str>,
     asr: ModelSlot,
     aligner: ModelSlot,
     demucs: ModelSlot,
@@ -730,6 +733,7 @@ impl StatusReport {
             "backend": self.backend,
             "language": self.language,
             "ui_language": self.ui_language,
+            "media_exts": self.media_exts,
             "models": {
                 "asr": slot(&self.asr),
                 "aligner": slot(&self.aligner),
@@ -782,6 +786,8 @@ fn status_report(
         backend: settings.backend.clone(),
         language: settings.language.clone(),
         ui_language: settings.resolved_ui_language().setting_value(),
+        // 表在 core：status 只转发，壳与 probe 读的是同一份（全仓库唯一判据）。
+        media_exts: oneasr_core::media::supported_exts(),
         asr: slot(settings.selected_asr_id(), &settings.asr_model_dir),
         aligner: slot(settings.selected_aligner_id(), &settings.aligner_model_dir),
         demucs: slot(ModelId::HtdemucsFt, &settings.resolved_demucs_model_dir()),
@@ -836,6 +842,10 @@ fn print_status_human(report: &StatusReport) {
         "{}",
         i18n::cli_kv_str(i18n::CLI_KV_UI_LANGUAGE, report.ui_language)
     );
+    println!(
+        "{}",
+        i18n::cli_kv_str(i18n::CLI_KV_MEDIA_EXTS, &report.media_exts.join(", "))
+    );
     println!("{}", i18n::cli_status_models_header());
     for (role, slot) in [
         ("asr", &report.asr),
@@ -871,7 +881,8 @@ fn print_status_human(report: &StatusReport) {
 /// 上层壳以前自己 spawn ffmpeg 正则 `Duration`，现在只解析这里的 JSON：
 /// - 时长走 [`oneasr_core::media::probe_duration_sec`]（WAV 读头，其余走 ffmpeg）；
 ///   探不到就是 `null`，**不是 0**——「探不到」与「真的是 0 秒」必须能分开；
-/// - 类型由扩展名在 core 判定（audio / video 两个值），壳不再自己看后缀；
+/// - 类型由扩展名在 core 判定（audio / video / other 三个值）：两张表都不在就是
+///   `other`（`.txt` 不再是「音频」），壳不再自己看后缀；
 /// - 读不到文件元数据（不存在 / 无权限）是非 0 退出 + 双语原因。
 fn cmd_probe(args: &[String]) -> Result<(), i32> {
     if flag(args, "--help") || flag(args, "-h") {
@@ -2679,6 +2690,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `status --json` 的 `media_exts` 就是 core 那一份表（全小写、不带点、无重复）：
+    /// 壳拿它拼文件过滤器，不再自己维护第二份正则。
+    ///
+    /// 断骨锚点：把 `StatusReport::to_json` 里的 `"media_exts"` 字段删掉，
+    /// 本用例立刻变红（`value["media_exts"]` 是 null，不是数组）。
+    #[test]
+    fn status_json_exposes_core_media_exts() {
+        let (root, asr, aligner, demucs, sensevoice) = fake_model_dirs("media-exts");
+        let settings = settings_with_all_models(&asr, &aligner, &demucs, &sensevoice);
+        let report = status_report(&settings, &root, &root, &root.join("models"));
+
+        let value = report.to_json();
+        let exts: Vec<&str> = value["media_exts"]
+            .as_array()
+            .expect("media_exts 必须是数组")
+            .iter()
+            .map(|v| v.as_str().expect("扩展名必须是字符串"))
+            .collect();
+        assert_eq!(exts, oneasr_core::media::supported_exts());
+        assert!(exts.contains(&"wav"), "{exts:?}");
+        assert!(exts.contains(&"mp4"), "{exts:?}");
+        for ext in &exts {
+            assert_eq!(*ext, ext.to_ascii_lowercase(), "必须全小写: {ext}");
+            assert!(!ext.starts_with('.'), "必须不带点: {ext}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 缺模型：`ready=false` + 非空 `error`，`can_start.ok=false` + 双语原因。
     #[test]
     fn status_reports_missing_models_with_a_reason_and_can_start_false() {
@@ -2980,10 +3019,11 @@ mod tests {
         assert_eq!(events_json_arg(&args(&["--events"])).unwrap_err(), 2);
     }
 
-    /// `probe`：普通文件给 size/kind，不存在走错误分支；判不出的扩展名按音频。
+    /// `probe`：普通文件给 size/kind，不存在走错误分支；判不出的扩展名给 `other`。
     ///
     /// 断骨锚点：把 `probe_info` 里 `fs::metadata` 的 `?` 改成 `unwrap_or_default()`
-    /// （读不到就给 0），第一条断言立刻变红。
+    /// （读不到就给 0），第一条断言立刻变红；把 `media_kind` 的 `Other` 分支
+    /// 改回 `Audio`，`.txt` 与没扩展名那两条也是红的。
     #[test]
     fn probe_reports_size_and_kind_and_errors_on_a_missing_file() {
         let root = env::temp_dir().join(format!("oneasr-cli-probe-{}", std::process::id()));
@@ -3004,18 +3044,23 @@ mod tests {
         assert_eq!(info.to_json()["size_bytes"], 1234);
         assert_eq!(info.to_json()["kind"], "audio");
 
-        // 视频容器大小写不敏感；判不出来的扩展名按音频而不是报错。
+        // 视频容器大小写不敏感；两张表都不在的扩展名是 other，不再是「音频」。
         let video = root.join("CLIP.MP4");
         std::fs::write(&video, vec![0u8; 8]).unwrap();
         assert_eq!(
             probe_info(&video).unwrap().kind,
             oneasr_core::MediaKind::Video
         );
+        let txt = root.join("notes.txt");
+        std::fs::write(&txt, b"not media").unwrap();
+        let info = probe_info(&txt).expect("普通文件要给 size/kind");
+        assert_eq!(info.kind, oneasr_core::MediaKind::Other);
+        assert_eq!(info.to_json()["kind"], "other");
         let no_ext = root.join("plain");
         std::fs::write(&no_ext, b"x").unwrap();
         assert_eq!(
             probe_info(&no_ext).unwrap().kind,
-            oneasr_core::MediaKind::Audio
+            oneasr_core::MediaKind::Other
         );
         let _ = std::fs::remove_dir_all(&root);
     }

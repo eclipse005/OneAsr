@@ -44,8 +44,8 @@ pub use lang::{
     SOURCE_LANGUAGES, SourceLanguage, normalize_source_language, source_language_by_id,
 };
 pub use media::{
-    FfmpegSource, MediaKind, VIDEO_EXTS, ffmpeg_source, is_video_ext, media_kind,
-    probe_duration_async, probe_duration_sec, resolve_app_root,
+    AUDIO_EXTS, FfmpegSource, MediaKind, VIDEO_EXTS, ffmpeg_source, is_audio_ext, is_video_ext,
+    media_kind, probe_duration_async, probe_duration_sec, resolve_app_root, supported_exts,
 };
 pub use model::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, HTDEMUCS_FT, ModelId,

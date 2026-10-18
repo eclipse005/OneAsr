@@ -646,8 +646,9 @@ Commands:
                are never downloaded twice
   status       Machine-readable state of this install: roots, the selected
                models, readiness (the same check_*_model_dir the pipeline uses),
-               all 8 catalog entries, and whether a run can start
-  probe        Size + duration + audio/video kind of one media file
+               all 8 catalog entries, the media extensions OneAsr accepts, and
+               whether a run can start
+  probe        Size + duration + kind (audio/video/other) of one media file
 
 status options:
   --app-root <dir>         App root (install dir; default: this exe's install dir)
@@ -656,6 +657,8 @@ status options:
                            to stderr. Shape (key order is not part of the contract):
                              version, app_root, data_root, models_root, output_dir,
                              backend, language, ui_language,
+                             media_exts: [\"wav\", \"mp3\", ...]  (lowercase, no
+                                      dot; the same table probe's kind comes from),
                              models: {asr, aligner, demucs, sensevoice}
                                      each {id, dir, ready, error},
                              catalog: [{id, kind, dir, ready}]  (all 8 entries;
@@ -664,6 +667,9 @@ status options:
                            ready is the one rule the pipeline uses; dir is resolved
                            exactly like transcribe resolves it; language / ui_language
                            are the resolved values (never \"system\").
+                           media_exts is core's ONE list of audio/video extensions
+                           (audio first, then video; deduplicated): build file
+                           filters from it instead of keeping a second list.
                            Exits 0 even when can_start.ok is false: the verdict is
                            the field, not the exit code
   --language <code>        This row recognizes as <code>
@@ -684,9 +690,12 @@ probe options:
                              {\"input\":\"...\",\"size_bytes\":412460,
                               \"duration_sec\":9.35,\"kind\":\"audio\"}
                            duration_sec is null when probing fails (no ffmpeg,
-                           unreadable container); kind is audio | video from the
-                           extension table in core. A file whose metadata cannot be
-                           read exits non-zero with a bilingual reason on stderr.
+                           unreadable container); kind is audio | video | other from
+                           the extension tables in core -- other means the extension
+                           is in neither table (a .txt is never reported as audio),
+                           and the accepted set is status's media_exts. A file
+                           whose metadata cannot be read exits non-zero with a
+                           bilingual reason on stderr.
                            Without --json: three human-readable lines
 
 transcribe options:
@@ -851,8 +860,9 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
   download     下载一个模型（识别 / 对齐 / 人声分离 / 热词）到
                {data-root}/models/<安装布局目录名>；已装好且校验通过的不重下
   status       这份安装 + 这份设置的机器可读快照：根目录、选中的模型、就绪
-               （与管线同一套 check_*_model_dir）、8 条可选模型、能不能开跑
-  probe        一个媒体文件的尺寸 + 时长 + 音频/视频类型
+               （与管线同一套 check_*_model_dir）、8 条可选模型、支持的音视频
+               扩展名、能不能开跑
+  probe        一个媒体文件的尺寸 + 时长 + 类型（音频/视频/其他）
 
 status 选项：
   --app-root <目录>        应用目录（与其它子命令同一个意思；默认取本程序安装目录）
@@ -861,6 +871,8 @@ status 选项：
                            （键名是契约，顺序不保证）：
                              version、app_root、data_root、models_root、output_dir、
                              backend、language、ui_language、
+                             media_exts: [\"wav\", \"mp3\", ...]（全小写、不带点；
+                                      与 probe 的 kind 是同一张表），
                              models: {asr, aligner, demucs, sensevoice}
                                      各是 {id, dir, ready, error}，
                              catalog: [{id, kind, dir, ready}]（8 条全列；
@@ -869,7 +881,9 @@ status 选项：
                            ready 用管线那唯一一条判据；dir 与 transcribe 解析出来的
                            完全一致；language / ui_language 都是解析后的值（不会是
                            system）。can_start.ok = false 时退出码仍是 0 —— 结论在
-                           字段里，不在退出码里
+                           字段里，不在退出码里。media_exts 是 core 里唯一一份
+                           音视频扩展名表（音频在前、视频在后，已去重）：壳拿它
+                           拼文件过滤器，别再养第二份
   --language <代码>        这一行按 <代码> 识别
   --vocal-separation       这一行做人声分离（于是要求 Demucs 就位）
   --hotword-group <id|组名>
@@ -886,9 +900,10 @@ probe 选项：
                              {\"input\":\"...\",\"size_bytes\":412460,
                               \"duration_sec\":9.35,\"kind\":\"audio\"}
                            duration_sec 探不到时是 null（缺 ffmpeg、容器读不了）；
-                           kind 只有 audio | video 两个值，表在 core。读不到文件
-                           元数据时非 0 退出，原因双语写 stderr。
-                           不带 --json：人读三行
+                           kind 是 audio | video | other，表在 core：两张表都不在
+                           就是 other（.txt 不会再被说成音频），认得的集合就是
+                           status 的 media_exts。读不到文件元数据时非 0 退出，
+                           原因双语写 stderr。不带 --json：人读三行
 
 transcribe 选项：
   --input <路径>           音视频文件（必填）
@@ -1470,6 +1485,8 @@ pub const CLI_KV_BACKEND: Str = Str::new("后端:    ", "backend: ");
 pub const CLI_KV_LANGUAGE: Str = Str::new("语言:    ", "language:");
 /// 见 [`CLI_KV_INPUT`]：界面语言（已解析成 zh / en，不会是 system）。
 pub const CLI_KV_UI_LANGUAGE: Str = Str::new("界面语言:", "ui:      ");
+/// 见 [`CLI_KV_INPUT`]：支持的音视频扩展名（`status --json` 的 `media_exts`）。
+pub const CLI_KV_MEDIA_EXTS: Str = Str::new("媒体扩展:", "media:   ");
 /// 见 [`CLI_KV_INPUT`]：开跑门禁的结论。
 pub const CLI_KV_CAN_START: Str = Str::new("开跑:    ", "can_start:");
 
@@ -2193,6 +2210,10 @@ mod tests {
             assert_eq!(cli_probe_duration(None), "未知");
             assert_eq!(cli_probe_duration(Some(9.35)), "9.35 s");
             assert_eq!(
+                cli_kv_str(CLI_KV_MEDIA_EXTS, "wav, mp4"),
+                "媒体扩展:wav, mp4"
+            );
+            assert_eq!(
                 cli_probe_failed(path, "os error 2"),
                 "读不到文件信息: C:/tmp/x（os error 2）"
             );
@@ -2209,6 +2230,10 @@ mod tests {
             let row = cli_model_row("asr", "m", path, true, None);
             assert!(row.contains("ready") && row.contains("C:/tmp/x"), "{row}");
             assert_eq!(cli_probe_duration(None), "unknown");
+            assert_eq!(
+                cli_kv_str(CLI_KV_MEDIA_EXTS, "wav, mp4"),
+                "media:   wav, mp4"
+            );
             assert_eq!(
                 cli_events_unknown("xml"),
                 "--events only supports json, got: xml"
@@ -2233,6 +2258,7 @@ mod tests {
             ("CLI_KV_BACKEND", CLI_KV_BACKEND),
             ("CLI_KV_LANGUAGE", CLI_KV_LANGUAGE),
             ("CLI_KV_UI_LANGUAGE", CLI_KV_UI_LANGUAGE),
+            ("CLI_KV_MEDIA_EXTS", CLI_KV_MEDIA_EXTS),
             ("CLI_KV_CAN_START", CLI_KV_CAN_START),
             ("CLI_KV_SIZE", CLI_KV_SIZE),
             ("CLI_KV_DURATION", CLI_KV_DURATION),
