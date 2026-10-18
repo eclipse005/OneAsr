@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { join } from 'path'
+import fs from 'fs'
 import {
   DEFAULT_APP_ROOT,
   checkModels,
@@ -17,6 +18,56 @@ app.commandLine.appendSwitch('no-sandbox')
 
 let mainWindow: BrowserWindow | null = null
 const jobs = new JobManager()
+
+
+async function runAutoShots(win: BrowserWindow): Promise<void> {
+  const outDir = process.env.ONEASR_SHOT_DIR || join(process.cwd(), 'shots')
+  fs.mkdirSync(outDir, { recursive: true })
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const waitApi = async () => {
+    for (let i = 0; i < 50; i++) {
+      const ok = await win.webContents.executeJavaScript(
+        '!!window.__oneasrShotApi'
+      )
+      if (ok) return
+      await sleep(200)
+    }
+    throw new Error('shot api not ready')
+  }
+  const capture = async (name: string) => {
+    await sleep(450)
+    const img = await win.webContents.capturePage()
+    const file = join(outDir, `${name}.png`)
+    fs.writeFileSync(file, img.toPNG())
+    console.log('SHOT', file)
+  }
+  await waitApi()
+  await win.webContents.executeJavaScript('window.__oneasrShotApi.dismissWelcome()')
+  for (const lang of ['zh', 'en'] as const) {
+    await win.webContents.executeJavaScript(
+      `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
+    )
+    await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
+    await capture(`${lang}-01-main-empty`)
+    for (const [panel, file] of [
+      ['settings', '02-settings'],
+      ['hotwords', '03-hotwords'],
+      ['stats', '04-stats'],
+      ['guide', '05-guide']
+    ] as const) {
+      await win.webContents.executeJavaScript(
+        `window.__oneasrShotApi.open(${JSON.stringify(panel)})`
+      )
+      await capture(`${lang}-${file}`)
+      await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
+      await sleep(250)
+    }
+  }
+  console.log('SHOTS_DONE', outDir)
+  if (process.env.ONEASR_AUTO_SHOT_EXIT === '1') {
+    app.quit()
+  }
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -39,6 +90,15 @@ function createWindow(): void {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+
+  if (process.env.ONEASR_AUTO_SHOT === '1') {
+    mainWindow.webContents.once('did-finish-load', () => {
+      void runAutoShots(mainWindow!).catch((e) => {
+        console.error('AUTO_SHOT_FAIL', e)
+        if (process.env.ONEASR_AUTO_SHOT_EXIT === '1') app.quit()
+      })
+    })
   }
 
   jobs.on('tasks', (tasks) => mainWindow?.webContents.send('tasks:updated', tasks))

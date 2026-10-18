@@ -70,3 +70,13 @@ DISPLAY=:4 node scripts/launch-smoke.mjs
 apps/electron/src/main|preload|renderer|shared
 apps/electron/scripts/smoke-*.mjs
 ```
+
+
+## Screenshots
+
+```bash
+npm run build && npm run shots
+# writes zh/en sets under apps/electron/shots/
+```
+
+UI language: Settings → UI language (`system` | `zh` | `en`). Draft changes switch copy immediately; **Save** writes `ui_language` into `settings.json`.

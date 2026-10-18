@@ -127,6 +127,10 @@ const zh = {
   topK: 'Top-K',
   threshold: '阈值',
   emptyGroup: '未命名',
+  confirmDiscard: '有未保存更改，确定关闭？',
+  confirmDeleteGroup: '删除这个词组？',
+  removeWord: '移除',
+  sensevoicePath: '粗转模型路径',
   dialogFailed: '打开文件对话框失败',
   noFiles: '未选择文件',
   backend: '后端'
@@ -261,6 +265,10 @@ const en: Dict = {
   topK: 'Top-K',
   threshold: 'Threshold',
   emptyGroup: 'Untitled',
+  confirmDiscard: 'Discard unsaved changes?',
+  confirmDeleteGroup: 'Delete this group?',
+  removeWord: 'Remove',
+  sensevoicePath: 'SenseVoice path',
   dialogFailed: 'File dialog failed',
   noFiles: 'No files selected',
   backend: 'Backend'

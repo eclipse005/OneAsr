@@ -18,7 +18,7 @@ export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => voi
         <div className="modal-header">
           <h3>{s.guideTitle}</h3>
           <div style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
+          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>
             {s.close}
           </button>
         </div>

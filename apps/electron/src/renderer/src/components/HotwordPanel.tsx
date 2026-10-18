@@ -93,7 +93,7 @@ export function HotwordPanel({
   const tryClose = () => {
     if (
       dirty &&
-      !confirm(lang === 'zh' ? '有未保存更改，确定关闭？' : 'Discard unsaved changes?')
+      !confirm(s.confirmDiscard)
     ) {
       return
     }
@@ -118,7 +118,7 @@ export function HotwordPanel({
             {draft.groups.length} {s.groups}
           </span>
           <div style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={tryClose}>
+          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={tryClose}>
             {s.close}
           </button>
         </div>
@@ -209,7 +209,7 @@ export function HotwordPanel({
                       disabled={draft.groups.length <= 1}
                       onClick={() => {
                         if (
-                          !confirm(lang === 'zh' ? '删除这个词组？' : 'Delete this group?')
+                          !confirm(s.confirmDeleteGroup)
                         )
                           return
                         const next = draft.groups.filter((g) => g.id !== group.id)
@@ -274,7 +274,7 @@ export function HotwordPanel({
                             {w}
                             <button
                               type="button"
-                              aria-label="remove"
+                              aria-label={s.removeWord}
                               onClick={() => removeWord(w)}
                             >
                               ×

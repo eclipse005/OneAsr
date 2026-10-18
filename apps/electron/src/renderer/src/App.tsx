@@ -46,6 +46,36 @@ export default function App() {
   const s = t(lang)
   const dirty = !!(settings && draft && !deepEq(settings, draft))
 
+  useEffect(() => {
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
+  }, [lang])
+
+  useEffect(() => {
+    const api = {
+      setUiLang: (code: string) => {
+        setDraft((d) => (d ? { ...d, ui_language: code } : d))
+      },
+      open: async (name: 'settings' | 'hotwords' | 'stats' | 'guide' | 'none') => {
+        setWelcomeOpen(false)
+        if (name === 'hotwords') {
+          setHotwords(await window.oneasr.getHotwords())
+        }
+        if (name === 'stats') {
+          setStats(await window.oneasr.getStats())
+        }
+        setSettingsOpen(name === 'settings')
+        setHotwordOpen(name === 'hotwords')
+        setStatsOpen(name === 'stats')
+        setGuideOpen(name === 'guide')
+      },
+      dismissWelcome: () => setWelcomeOpen(false)
+    }
+    ;(window as unknown as { __oneasrShotApi?: typeof api }).__oneasrShotApi = api
+    return () => {
+      delete (window as unknown as { __oneasrShotApi?: typeof api }).__oneasrShotApi
+    }
+  }, [])
+
   const pushToast = useCallback((kind: ToastPayload['kind'], message: string) => {
     const id = `toast-${++toastSeq}`
     setToasts((prev) => [...prev, { id, kind, message }])
@@ -170,11 +200,12 @@ export default function App() {
           {s.clear}
         </button>
         <div className="grow" />
-        <button className="btn btn-ghost" onClick={() => setGuideOpen(true)}>
+        <button className="btn btn-ghost" data-shot="guide" onClick={() => setGuideOpen(true)}>
           {s.guide}
         </button>
         <button
           className="btn btn-ghost"
+          data-shot="hotwords"
           onClick={() => {
             void (async () => {
               setHotwords(await window.oneasr.getHotwords())
@@ -186,6 +217,7 @@ export default function App() {
         </button>
         <button
           className="btn btn-ghost"
+          data-shot="stats"
           onClick={() => {
             void refreshStats()
             setStatsOpen(true)
@@ -193,7 +225,7 @@ export default function App() {
         >
           {s.stats}
         </button>
-        <button className="btn btn-ghost" onClick={() => setSettingsOpen(true)}>
+        <button className="btn btn-ghost" data-shot="settings" onClick={() => setSettingsOpen(true)}>
           {s.settings}
         </button>
       </div>

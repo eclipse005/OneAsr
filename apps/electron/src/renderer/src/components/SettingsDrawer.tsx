@@ -109,7 +109,7 @@ export function SettingsDrawer({
         <div className="modal-header">
           <h3>{s.settings}</h3>
           <div style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
+          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>
             {s.close}
           </button>
         </div>
@@ -260,7 +260,7 @@ export function SettingsDrawer({
               </div>
             </div>
             <div className="field stack">
-              <label>{s.sensevoice} path</label>
+              <label>{s.sensevoicePath}</label>
               <div className="path-input">
                 <input
                   className="text-input"

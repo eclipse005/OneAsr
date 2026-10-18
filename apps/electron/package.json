@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "smoke:settings": "node scripts/smoke-settings.mjs",
     "smoke:transcribe": "node scripts/smoke-transcribe.mjs",
-    "smoke:launch": "node scripts/launch-smoke.mjs"
+    "smoke:launch": "node scripts/launch-smoke.mjs",
+    "shots": "node scripts/take-shots.mjs"
   },
   "dependencies": {
     "framer-motion": "^11.18.2",
