@@ -154,7 +154,6 @@ export function HotwordEditor({
             <span className="hw-group-trigger-label">
               {group?.name.trim() || s.emptyGroup}
               {group && draft.default_group === group.id ? ` · ${s.isDefault}` : ''}
-              {` (${words.length})`}
             </span>
             <span className="hw-group-caret" aria-hidden>
               ▾
@@ -163,7 +162,6 @@ export function HotwordEditor({
           {groupMenuOpen && (
             <ul className="hw-group-listbox" role="listbox">
               {draft.groups.map((g) => {
-                const n = parseWords(g.words).length
                 const isDef = draft.default_group === g.id
                 const label = g.name.trim() || s.emptyGroup
                 const active = g.id === group?.id
@@ -183,7 +181,6 @@ export function HotwordEditor({
                       }}
                     >
                       <span className="hw-group-option-name">{label}</span>
-                      <span className="hw-group-option-meta">{n}</span>
                     </button>
                     {isDef ? (
                       <span className="hw-group-default-badge">{s.isDefault}</span>
