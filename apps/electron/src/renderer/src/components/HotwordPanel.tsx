@@ -259,47 +259,22 @@ export function HotwordEditor({
             <span className="hw-add-feedback">+{lastAdded}</span>
           )}
         </div>
-        <div className="hw-params">
-          <div className="pref-row hw-param-toggle">
-            <span className="pref-label">{s.defaultGroup}</span>
-            <button
-              type="button"
-              className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
-              role="switch"
-              aria-checked={draft.default_group_enabled}
-              disabled={!group}
-              onClick={() =>
-                touch({
-                  ...draft,
-                  default_group_enabled: !draft.default_group_enabled,
-                  default_group: draft.default_group || group?.id || null
-                })
-              }
-            />
-          </div>
-          <div className="field">
-            <label>{s.topK}</label>
-            <input
-              className="text-input"
-              type="number"
-              min={1}
-              max={200}
-              value={draft.top_k}
-              onChange={(e) => touch({ ...draft, top_k: Number(e.target.value) || 40 })}
-            />
-          </div>
-          <div className="field">
-            <label>{s.threshold}</label>
-            <input
-              className="text-input"
-              type="number"
-              min={0}
-              max={1}
-              step={0.05}
-              value={draft.threshold}
-              onChange={(e) => touch({ ...draft, threshold: Number(e.target.value) || 0.7 })}
-            />
-          </div>
+        <div className="pref-row hw-param-toggle">
+          <span className="pref-label">{s.defaultGroup}</span>
+          <button
+            type="button"
+            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+            role="switch"
+            aria-checked={draft.default_group_enabled}
+            disabled={!group}
+            onClick={() =>
+              touch({
+                ...draft,
+                default_group_enabled: !draft.default_group_enabled,
+                default_group: draft.default_group || group?.id || null
+              })
+            }
+          />
         </div>
       </div>
 
