@@ -6,7 +6,7 @@ import type { HotwordGroup, HotwordStore } from '../../../shared/types'
 function parseWords(raw: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const part of raw.split(/[,，\n\r]+/)) {
+  for (const part of raw.split(/[,，\n\r\t]+/)) {
     const w = part.trim()
     if (!w) continue
     const key = w.toLowerCase()
@@ -38,8 +38,10 @@ export function HotwordPanel({
     () => store.default_group || store.groups[0]?.id || 'default'
   )
   const [dirty, setDirty] = useState(false)
-  const [quick, setQuick] = useState('')
+  /** Top add field: one term or a pasted batch (commas / newlines). */
+  const [addRaw, setAddRaw] = useState('')
   const [saving, setSaving] = useState(false)
+  const [lastAdded, setLastAdded] = useState<number | null>(null)
 
   const group = draft.groups.find((g) => g.id === sel) || draft.groups[0]
   const words = useMemo(() => parseWords(group?.words || ''), [group?.words])
@@ -60,13 +62,24 @@ export function HotwordPanel({
     updateGroup(id, { words: joinWords(list) })
   }
 
-  const addQuick = () => {
+  /** Merge addRaw into current group — works for single word or batch paste. */
+  const applyAdd = () => {
     if (!group) return
-    const w = quick.trim()
-    if (!w) return
-    const next = parseWords([...words, w].join('\n'))
-    setWords(group.id, next)
-    setQuick('')
+    const incoming = parseWords(addRaw)
+    if (!incoming.length) return
+    const before = new Set(words.map((w) => w.toLowerCase()))
+    const merged = [...words]
+    let added = 0
+    for (const w of incoming) {
+      if (before.has(w.toLowerCase())) continue
+      before.add(w.toLowerCase())
+      merged.push(w)
+      added += 1
+    }
+    setWords(group.id, merged)
+    setAddRaw('')
+    setLastAdded(added)
+    window.setTimeout(() => setLastAdded(null), 2200)
   }
 
   const removeWord = (w: string) => {
@@ -78,7 +91,10 @@ export function HotwordPanel({
   }
 
   const tryClose = () => {
-    if (dirty && !confirm(lang === 'zh' ? '有未保存更改，确定关闭？' : 'Discard unsaved changes?')) {
+    if (
+      dirty &&
+      !confirm(lang === 'zh' ? '有未保存更改，确定关闭？' : 'Discard unsaved changes?')
+    ) {
       return
     }
     onClose()
@@ -163,17 +179,14 @@ export function HotwordPanel({
             <div className="hw-editor">
               {group ? (
                 <>
-                  <div className="field stack">
-                    <label>{s.groupName}</label>
+                  <div className="hw-topbar">
                     <input
-                      className="text-input"
+                      className="text-input hw-name"
                       placeholder={s.groupNamePh}
                       value={group.name}
                       onChange={(e) => updateGroup(group.id, { name: e.target.value })}
+                      aria-label={s.groupName}
                     />
-                  </div>
-
-                  <div className="hw-toolbar">
                     <span className="hw-count">
                       {words.length} {s.wordCount}
                     </span>
@@ -190,16 +203,13 @@ export function HotwordPanel({
                     >
                       {s.setDefault}
                     </button>
-                    <div style={{ flex: 1 }} />
                     <button
                       type="button"
                       className="btn btn-ghost btn-danger-ghost"
                       disabled={draft.groups.length <= 1}
                       onClick={() => {
                         if (
-                          !confirm(
-                            lang === 'zh' ? '删除这个词组？' : 'Delete this group?'
-                          )
+                          !confirm(lang === 'zh' ? '删除这个词组？' : 'Delete this group?')
                         )
                           return
                         const next = draft.groups.filter((g) => g.id !== group.id)
@@ -207,11 +217,7 @@ export function HotwordPanel({
                           draft.default_group === group.id
                             ? next[0]?.id || null
                             : draft.default_group
-                        touch({
-                          ...draft,
-                          groups: next,
-                          default_group: nextDef
-                        })
+                        touch({ ...draft, groups: next, default_group: nextDef })
                         setSel(next[0]?.id || 'default')
                       }}
                     >
@@ -219,116 +225,109 @@ export function HotwordPanel({
                     </button>
                   </div>
 
-                  <div className="hw-quick">
+                  {/* Compact add: single word OR paste batch into the same small field */}
+                  <div className="hw-add">
                     <input
                       className="text-input"
                       placeholder={s.addWordPh}
-                      value={quick}
-                      onChange={(e) => setQuick(e.target.value)}
+                      value={addRaw}
+                      onChange={(e) => setAddRaw(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                        if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault()
-                          addQuick()
+                          applyAdd()
+                        }
+                      }}
+                      onPaste={(e) => {
+                        // Allow paste; after paste user hits Enter / Add — field stays one line tall
+                        const text = e.clipboardData.getData('text')
+                        if (text && /[,，\n\r]/.test(text)) {
+                          // keep default paste; hint via lastAdded after apply
                         }
                       }}
                     />
-                    <button type="button" className="btn btn-primary" onClick={addQuick}>
+                    <button type="button" className="btn btn-primary" onClick={applyAdd}>
                       {s.addWord}
                     </button>
+                    {lastAdded != null && lastAdded > 0 && (
+                      <span className="hw-add-feedback">+{lastAdded}</span>
+                    )}
+                  </div>
+                  <p className="hw-add-hint">{s.batchHint}</p>
+
+                  {/* Main stage: chip cloud */}
+                  <div className={`hw-chips ${words.length === 0 ? 'empty' : ''}`}>
+                    {words.length === 0 ? (
+                      <span>{s.emptyChips}</span>
+                    ) : (
+                      <AnimatePresence initial={false}>
+                        {words.map((w) => (
+                          <motion.span
+                            key={w}
+                            className="hw-chip"
+                            layout
+                            initial={{ opacity: 0, scale: 0.88 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.88 }}
+                            transition={{ duration: 0.15 }}
+                          >
+                            {w}
+                            <button
+                              type="button"
+                              aria-label="remove"
+                              onClick={() => removeWord(w)}
+                            >
+                              ×
+                            </button>
+                          </motion.span>
+                        ))}
+                      </AnimatePresence>
+                    )}
                   </div>
 
-                  <div className="hw-chips">
-                    <AnimatePresence initial={false}>
-                      {words.map((w) => (
-                        <motion.span
-                          key={w}
-                          className="hw-chip"
-                          layout
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.9 }}
-                        >
-                          {w}
-                          <button type="button" aria-label="remove" onClick={() => removeWord(w)}>
-                            ×
-                          </button>
-                        </motion.span>
-                      ))}
-                    </AnimatePresence>
-                  </div>
-
-                  <div className="field stack" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <label>
-                      {s.words}
-                      <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--muted)' }}>
-                        {s.wordsHint}
-                      </span>
-                    </label>
-                    <textarea
-                      className="text-input"
-                      placeholder={s.wordsPh}
-                      value={group.words}
-                      onChange={(e) => updateGroup(group.id, { words: e.target.value })}
-                    />
-                  </div>
-
-                  <div>
-                    <div
-                      style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 800,
-                        letterSpacing: '0.06em',
-                        textTransform: 'uppercase',
-                        color: 'var(--accent)',
-                        marginBottom: 8
-                      }}
-                    >
-                      {s.params}
+                  <div className="hw-params">
+                    <div className="field stack">
+                      <label>{s.defaultGroup}</label>
+                      <button
+                        type="button"
+                        className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={draft.default_group_enabled}
+                        onClick={() =>
+                          touch({
+                            ...draft,
+                            default_group_enabled: !draft.default_group_enabled,
+                            default_group: draft.default_group || group.id
+                          })
+                        }
+                      />
                     </div>
-                    <div className="hw-params">
-                      <div className="field stack">
-                        <label>{s.defaultGroup}</label>
-                        <button
-                          type="button"
-                          className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
-                          role="switch"
-                          aria-checked={draft.default_group_enabled}
-                          onClick={() =>
-                            touch({
-                              ...draft,
-                              default_group_enabled: !draft.default_group_enabled,
-                              default_group: draft.default_group || group.id
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="field stack">
-                        <label>{s.topK}</label>
-                        <input
-                          className="text-input"
-                          type="number"
-                          min={1}
-                          max={200}
-                          value={draft.top_k}
-                          onChange={(e) =>
-                            touch({ ...draft, top_k: Number(e.target.value) || 40 })
-                          }
-                        />
-                      </div>
-                      <div className="field stack">
-                        <label>{s.threshold}</label>
-                        <input
-                          className="text-input"
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          value={draft.threshold}
-                          onChange={(e) =>
-                            touch({ ...draft, threshold: Number(e.target.value) || 0.7 })
-                          }
-                        />
-                      </div>
+                    <div className="field stack">
+                      <label>{s.topK}</label>
+                      <input
+                        className="text-input"
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={draft.top_k}
+                        onChange={(e) =>
+                          touch({ ...draft, top_k: Number(e.target.value) || 40 })
+                        }
+                      />
+                    </div>
+                    <div className="field stack">
+                      <label>{s.threshold}</label>
+                      <input
+                        className="text-input"
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={draft.threshold}
+                        onChange={(e) =>
+                          touch({ ...draft, threshold: Number(e.target.value) || 0.7 })
+                        }
+                      />
                     </div>
                   </div>
                 </>
@@ -349,7 +348,7 @@ export function HotwordPanel({
               setDraft(structuredClone(store))
               setSel(store.default_group || store.groups[0]?.id || 'default')
               setDirty(false)
-              setQuick('')
+              setAddRaw('')
             }}
           >
             {s.discard}
@@ -360,7 +359,6 @@ export function HotwordPanel({
             disabled={!dirty || saving}
             onClick={() => {
               setSaving(true)
-              // normalize words before save
               const normalized: HotwordStore = {
                 ...draft,
                 groups: draft.groups.map((g) => ({
