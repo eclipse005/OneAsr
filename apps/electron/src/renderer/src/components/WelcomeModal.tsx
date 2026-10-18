@@ -12,7 +12,7 @@ export function WelcomeModal({
 }) {
   const s = t(lang)
   return (
-    <div className="overlay center">
+    <div className="overlay">
       <motion.div
         className="modal"
         initial={{ opacity: 0, y: 16, scale: 0.98 }}

@@ -38,23 +38,25 @@ export function StatsPanel({
     .join(' ')
 
   return (
-    <div className="overlay center" onClick={onClose}>
+    <div className="overlay" onClick={onClose}>
       <motion.div
-        className="panel"
+        className="modal-shell wide"
+        role="dialog"
+        aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, y: 16, scale: 0.98 }}
+        initial={{ opacity: 0, y: 18, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 10, scale: 0.98 }}
-        transition={{ duration: 0.22 }}
+        exit={{ opacity: 0, y: 10, scale: 0.97 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
       >
         <div className="modal-header">
           <h3>{s.statsTitle}</h3>
           <div style={{ flex: 1 }} />
-          <button className="btn btn-ghost" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
             {s.close}
           </button>
         </div>
-        <div className="body" style={{ whiteSpace: 'normal' }}>
+        <div className="modal-body" style={{ whiteSpace: 'normal' }}>
           {empty ? (
             <p>{s.statsEmpty}</p>
           ) : (

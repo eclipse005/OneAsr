@@ -33,6 +33,8 @@ pkill -f '/workspace/oneasr-runtime/oneasr$' || true
 
 ## Surfaces
 
+Settings / Hotwords / Stats / Guide / Welcome 均为**居中弹窗**（非右侧抽屉），spring 缩放淡入。
+
 | Surface | Notes |
 |---|---|
 | Welcome modal | Got it / Open settings → persists `welcome_done` |
