@@ -846,6 +846,9 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   gap: 8px;
   flex-shrink: 0;
 }
+.hw-bottom .hw-default-toggle {
+  align-self: flex-start;
+}
 .hw-embed .hw-params {
   display: grid;
   grid-template-columns: 1.4fr 1fr 1fr;

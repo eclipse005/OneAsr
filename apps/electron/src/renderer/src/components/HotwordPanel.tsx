@@ -21,35 +21,26 @@ function joinWords(words: string[]): string {
   return words.join('\n')
 }
 
-/** Core hotword editor — embeddable inside SettingsDrawer. */
+/** Controlled hotword editor — draft owned by SettingsDrawer / App. */
 export function HotwordEditor({
   lang,
-  store,
-  onSave,
-  onDirtyChange,
+  value,
+  onChange,
   compact = false
 }: {
   lang: UiLang
-  store: HotwordStore
-  onSave: (s: HotwordStore) => Promise<void>
-  onDirtyChange?: (dirty: boolean) => void
+  value: HotwordStore
+  onChange: (next: HotwordStore) => void
   compact?: boolean
 }) {
   const s = t(lang)
-  const [draft, setDraft] = useState<HotwordStore>(() => structuredClone(store))
   const [sel, setSel] = useState(
-    () => store.default_group || store.groups[0]?.id || 'default'
+    () => value.default_group || value.groups[0]?.id || 'default'
   )
-  const [dirty, setDirty] = useState(false)
   const [addRaw, setAddRaw] = useState('')
-  const [saving, setSaving] = useState(false)
   const [lastAdded, setLastAdded] = useState<number | null>(null)
   const [groupMenuOpen, setGroupMenuOpen] = useState(false)
   const groupMenuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    onDirtyChange?.(dirty)
-  }, [dirty, onDirtyChange])
 
   useEffect(() => {
     if (!groupMenuOpen) return
@@ -60,26 +51,21 @@ export function HotwordEditor({
     return () => document.removeEventListener('mousedown', onDoc)
   }, [groupMenuOpen])
 
-  // Reset when store prop identity changes (after external save / reopen)
   useEffect(() => {
-    setDraft(structuredClone(store))
-    setSel(store.default_group || store.groups[0]?.id || 'default')
-    setDirty(false)
-    setAddRaw('')
-  }, [store])
+    if (!value.groups.some((g) => g.id === sel)) {
+      setSel(value.default_group || value.groups[0]?.id || 'default')
+    }
+  }, [value, sel])
 
-  const group = draft.groups.find((g) => g.id === sel) || draft.groups[0]
+  const group = value.groups.find((g) => g.id === sel) || value.groups[0]
   const words = useMemo(() => parseWords(group?.words || ''), [group?.words])
 
-  const touch = (next: HotwordStore) => {
-    setDraft(next)
-    setDirty(true)
-  }
+  const touch = (next: HotwordStore) => onChange(next)
 
   const updateGroup = (id: string, patch: Partial<HotwordGroup>) => {
     touch({
-      ...draft,
-      groups: draft.groups.map((g) => (g.id === id ? { ...g, ...patch } : g))
+      ...value,
+      groups: value.groups.map((g) => (g.id === id ? { ...g, ...patch } : g))
     })
   }
 
@@ -114,33 +100,8 @@ export function HotwordEditor({
     )
   }
 
-  const discard = () => {
-    setDraft(structuredClone(store))
-    setSel(store.default_group || store.groups[0]?.id || 'default')
-    setDirty(false)
-    setAddRaw('')
-  }
-
-  const save = () => {
-    setSaving(true)
-    const normalized: HotwordStore = {
-      ...draft,
-      groups: draft.groups.map((g) => ({
-        ...g,
-        words: joinWords(parseWords(g.words))
-      }))
-    }
-    void onSave(normalized)
-      .then(() => {
-        setDraft(structuredClone(normalized))
-        setDirty(false)
-      })
-      .finally(() => setSaving(false))
-  }
-
   return (
     <div className={`hw-embed vertical ${compact ? 'compact' : ''}`}>
-      {/* Top: compact group management */}
       <div className="hw-group-bar">
         <div className={`hw-group-menu${groupMenuOpen ? ' open' : ''}`} ref={groupMenuRef}>
           <button
@@ -153,7 +114,7 @@ export function HotwordEditor({
           >
             <span className="hw-group-trigger-label">
               {group?.name.trim() || s.emptyGroup}
-              {group && draft.default_group === group.id ? ` · ${s.isDefault}` : ''}
+              {group && value.default_group === group.id ? ` · ${s.isDefault}` : ''}
             </span>
             <span className="hw-group-caret" aria-hidden>
               ▾
@@ -161,8 +122,8 @@ export function HotwordEditor({
           </button>
           {groupMenuOpen && (
             <ul className="hw-group-listbox" role="listbox">
-              {draft.groups.map((g) => {
-                const isDef = draft.default_group === g.id
+              {value.groups.map((g) => {
+                const isDef = value.default_group === g.id
                 const label = g.name.trim() || s.emptyGroup
                 const active = g.id === group?.id
                 return (
@@ -191,7 +152,7 @@ export function HotwordEditor({
                         onClick={(e) => {
                           e.stopPropagation()
                           touch({
-                            ...draft,
+                            ...value,
                             default_group: g.id,
                             default_group_enabled: true
                           })
@@ -223,8 +184,8 @@ export function HotwordEditor({
           onClick={() => {
             const id = `g${Date.now()}`
             touch({
-              ...draft,
-              groups: [...draft.groups, { id, name: '', words: '' }]
+              ...value,
+              groups: [...value.groups, { id, name: '', words: '' }]
             })
             setSel(id)
           }}
@@ -234,14 +195,14 @@ export function HotwordEditor({
         <button
           type="button"
           className="btn btn-ghost btn-danger-ghost btn-sm"
-          disabled={!group || draft.groups.length <= 1}
+          disabled={!group || value.groups.length <= 1}
           onClick={() => {
             if (!group) return
             if (!confirm(s.confirmDeleteGroup)) return
-            const next = draft.groups.filter((g) => g.id !== group.id)
+            const next = value.groups.filter((g) => g.id !== group.id)
             const nextDef =
-              draft.default_group === group.id ? next[0]?.id || null : draft.default_group
-            touch({ ...draft, groups: next, default_group: nextDef })
+              value.default_group === group.id ? next[0]?.id || null : value.default_group
+            touch({ ...value, groups: next, default_group: nextDef })
             setSel(next[0]?.id || 'default')
           }}
         >
@@ -249,7 +210,6 @@ export function HotwordEditor({
         </button>
       </div>
 
-      {/* Middle: chip cloud */}
       <div className={`hw-chips ${words.length === 0 ? 'empty' : ''}`}>
         {!group ? (
           <span>{s.emptyGroup}</span>
@@ -277,7 +237,6 @@ export function HotwordEditor({
         )}
       </div>
 
-      {/* Bottom: add only */}
       <div className="hw-bottom">
         <div className="hw-add">
           <input
@@ -300,46 +259,30 @@ export function HotwordEditor({
             <span className="hw-add-feedback">+{lastAdded}</span>
           )}
         </div>
-      </div>
-
-      <div className="hw-embed-foot">
         <div className="hw-default-toggle" title={s.defaultGroup}>
           <span className="pref-label">{s.defaultGroupShort}</span>
           <button
             type="button"
-            className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+            className={`toggle ${value.default_group_enabled ? 'on' : ''}`}
             role="switch"
-            aria-checked={draft.default_group_enabled}
+            aria-checked={value.default_group_enabled}
             aria-label={s.defaultGroup}
             disabled={!group}
             onClick={() =>
               touch({
-                ...draft,
-                default_group_enabled: !draft.default_group_enabled,
-                default_group: draft.default_group || group?.id || null
+                ...value,
+                default_group_enabled: !value.default_group_enabled,
+                default_group: value.default_group || group?.id || null
               })
             }
           />
         </div>
-        <span className="hint">{dirty ? s.unsaved : ''}</span>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={!dirty} onClick={discard}>
-          {s.discard}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          disabled={!dirty || saving}
-          onClick={save}
-        >
-          {s.save}
-        </button>
       </div>
     </div>
   )
-
 }
 
-/** @deprecated Standalone modal — prefer SettingsDrawer hotwords tab. Kept for rare callers. */
+/** @deprecated Standalone modal — prefer SettingsDrawer hotwords tab. */
 export function HotwordPanel({
   lang,
   store,
@@ -352,13 +295,10 @@ export function HotwordPanel({
   onClose: () => void
 }) {
   const s = t(lang)
-  const [dirty, setDirty] = useState(false)
-  const tryClose = () => {
-    if (dirty && !confirm(s.confirmDiscard)) return
-    onClose()
-  }
+  const [local, setLocal] = useState(() => structuredClone(store))
+  const dirty = JSON.stringify(local) !== JSON.stringify(store)
   return (
-    <div className="overlay" onClick={tryClose}>
+    <div className="overlay" onClick={onClose}>
       <motion.div
         className="modal-shell hw-shell"
         role="dialog"
@@ -372,12 +312,23 @@ export function HotwordPanel({
         <div className="modal-header">
           <h3>{s.hotwordTitle}</h3>
           <div style={{ flex: 1 }} />
-          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={tryClose}>
+          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>
             {s.close}
           </button>
         </div>
         <div className="modal-body" style={{ gap: 0, overflow: 'hidden', padding: 10 }}>
-          <HotwordEditor lang={lang} store={store} onSave={onSave} onDirtyChange={setDirty} />
+          <HotwordEditor lang={lang} value={local} onChange={setLocal} />
+        </div>
+        <div className="modal-footer">
+          <span className="hint">{dirty ? s.unsaved : ''}</span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!dirty}
+            onClick={() => void onSave(local).then(onClose)}
+          >
+            {s.save}
+          </button>
         </div>
       </motion.div>
     </div>

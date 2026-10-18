@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
 import type { HotwordStore, ModelStatus, Settings } from '../../../shared/types'
@@ -94,25 +94,26 @@ export function SettingsDrawer({
   draft,
   models,
   dirty,
-  hotwords,
+  hotwordDraft,
   initialTab = 'general',
   onChange,
+  onHotwordsChange,
   onSave,
   onReset,
   onClose,
   onPickDir,
   onPickModel,
   onOpenModels,
-  onRefreshModels,
-  onSaveHotwords
+  onRefreshModels
 }: {
   lang: UiLang
   draft: Settings
   models: ModelStatus | null
   dirty: boolean
-  hotwords: HotwordStore | null
+  hotwordDraft: HotwordStore | null
   initialTab?: SettingsTab
   onChange: (next: Settings) => void
+  onHotwordsChange: (next: HotwordStore) => void
   onSave: () => void
   onReset: () => void
   onClose: () => void
@@ -120,12 +121,9 @@ export function SettingsDrawer({
   onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir') => void
   onOpenModels: () => void
   onRefreshModels: () => void
-  onSaveHotwords: (store: HotwordStore) => Promise<void>
 }) {
   const s = t(lang)
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
-  const [hwDirty, setHwDirty] = useState(false)
-  const onHwDirty = useCallback((d: boolean) => setHwDirty(d), [])
   useEffect(() => {
     setActiveTab(initialTab)
   }, [initialTab])
@@ -133,7 +131,6 @@ export function SettingsDrawer({
     onChange({ ...draft, [key]: value })
 
   const tryClose = () => {
-    if ((dirty || hwDirty) && !confirm(s.confirmDiscard)) return
     onClose()
   }
 
@@ -432,13 +429,12 @@ export function SettingsDrawer({
 
             {activeTab === 'hotwords' && (
               <>
-                {hotwords ? (
+                {hotwordDraft ? (
                   <HotwordEditor
                     lang={lang}
-                    store={hotwords}
+                    value={hotwordDraft}
+                    onChange={onHotwordsChange}
                     compact
-                    onDirtyChange={onHwDirty}
-                    onSave={onSaveHotwords}
                   />
                 ) : (
                   <p className="hint" style={{ color: 'var(--muted)' }}>…</p>
@@ -469,17 +465,15 @@ export function SettingsDrawer({
           </div>
         </div>
 
-        {activeTab !== 'hotwords' && (
-          <div className="modal-footer">
-            <span className="hint">{dirty ? s.unsaved : ''}</span>
-            <button type="button" className="btn btn-ghost" onClick={onReset}>
-              {s.reset}
-            </button>
-            <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
-              {s.save}
-            </button>
-          </div>
-        )}
+        <div className="modal-footer">
+          <span className="hint">{dirty ? s.unsaved : ''}</span>
+          <button type="button" className="btn btn-ghost" onClick={onReset}>
+            {s.reset}
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
+            {s.save}
+          </button>
+        </div>
       </motion.div>
     </div>
   )

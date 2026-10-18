@@ -30,6 +30,9 @@ export default function App() {
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
   const [hotwords, setHotwords] = useState<HotwordStore | null>(null)
+  const [hotwordDraft, setHotwordDraft] = useState<HotwordStore | null>(null)
+  const [settingsBaseline, setSettingsBaseline] = useState<Settings | null>(null)
+  const [hotwordsBaseline, setHotwordsBaseline] = useState<HotwordStore | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statsOpen, setStatsOpen] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
@@ -43,7 +46,31 @@ export default function App() {
     [draft?.ui_language, settings?.ui_language]
   )
   const s = t(lang)
-  const dirty = !!(settings && draft && !deepEq(settings, draft))
+  const dirty = !!(
+    settingsBaseline &&
+    draft &&
+    hotwordsBaseline &&
+    hotwordDraft &&
+    (!deepEq(settingsBaseline, draft) || !deepEq(hotwordsBaseline, hotwordDraft))
+  )
+
+  const openSettingsFn = useCallback(
+    async (tab: SettingsTab = 'general') => {
+      const savedSettings = settings || (await window.oneasr.getSettings())
+      const savedHw = hotwords || (await window.oneasr.getHotwords())
+      setSettings(savedSettings)
+      setHotwords(savedHw)
+      const sSnap = structuredClone(savedSettings)
+      const hSnap = structuredClone(savedHw)
+      setSettingsBaseline(sSnap)
+      setHotwordsBaseline(hSnap)
+      setDraft(structuredClone(sSnap))
+      setHotwordDraft(structuredClone(hSnap))
+      setSettingsTab(tab)
+      setSettingsOpen(true)
+    },
+    [settings, hotwords]
+  )
 
   useEffect(() => {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
@@ -59,20 +86,24 @@ export default function App() {
         if (name === 'stats') {
           setStats(await window.oneasr.getStats())
         }
-        if (name === 'hotwords') {
-          setHotwords(await window.oneasr.getHotwords())
-          setSettingsTab('hotwords')
+        if (name === 'hotwords' || name === 'settings') {
+          const savedSettings = await window.oneasr.getSettings()
+          const savedHw = await window.oneasr.getHotwords()
+          setSettings(savedSettings)
+          setHotwords(savedHw)
+          const sSnap = structuredClone(savedSettings)
+          const hSnap = structuredClone(savedHw)
+          setSettingsBaseline(sSnap)
+          setHotwordsBaseline(hSnap)
+          setDraft(structuredClone(sSnap))
+          setHotwordDraft(structuredClone(hSnap))
+          setSettingsTab(name === 'hotwords' ? 'hotwords' : 'general')
           setSettingsOpen(true)
           setStatsOpen(false)
           setGuideOpen(false)
           return
         }
-        if (name === 'settings') {
-          setSettingsTab('general')
-          setSettingsOpen(true)
-        } else {
-          setSettingsOpen(false)
-        }
+        setSettingsOpen(false)
         setStatsOpen(name === 'stats')
         setGuideOpen(name === 'guide')
       },
@@ -120,14 +151,20 @@ export default function App() {
     }
   }, [refreshModels, refreshStats])
 
-  const saveSettings = async () => {
-    if (!draft) return
+  const saveAllSettings = async () => {
+    if (!draft || !hotwordDraft) return
     const saved = await window.oneasr.saveSettings(draft)
+    const savedHw = await window.oneasr.saveHotwords(hotwordDraft)
     setSettings(saved)
     setDraft(saved)
+    setHotwords(savedHw)
+    setHotwordDraft(structuredClone(savedHw))
+    setSettingsBaseline(structuredClone(saved))
+    setHotwordsBaseline(structuredClone(savedHw))
     await refreshModels()
     pushToast('success', s.saved)
   }
+
 
   const dismissWelcome = async (openSettings: boolean) => {
     if (!draft) return
@@ -136,7 +173,7 @@ export default function App() {
     setSettings(saved)
     setDraft(saved)
     setWelcomeOpen(false)
-    if (openSettings) setSettingsOpen(true)
+    if (openSettings) void openSettingsFn('general')
   }
 
   const addFiles = async (paths?: string[]) => {
@@ -224,10 +261,7 @@ export default function App() {
         <button
           className="btn btn-ghost"
           data-shot="settings"
-          onClick={() => {
-            setSettingsTab('general')
-            setSettingsOpen(true)
-          }}
+          onClick={() => void openSettingsFn('general')}
         >
           {s.settings}
         </button>
@@ -293,26 +327,25 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {settingsOpen && draft && (
+        {settingsOpen && draft && hotwordDraft && (
           <SettingsDrawer
             lang={lang}
             draft={draft}
             models={models}
             dirty={dirty}
-            hotwords={hotwords}
+            hotwordDraft={hotwordDraft}
             initialTab={settingsTab}
             onChange={setDraft}
-            onSave={() => void saveSettings()}
-            onReset={() =>
-              void window.oneasr.resetSettings().then(async (r) => {
-                setSettings(r)
-                setDraft(r)
-                await refreshModels()
-                pushToast('info', s.reset)
-              })
-            }
+            onHotwordsChange={setHotwordDraft}
+            onSave={() => void saveAllSettings()}
+            onReset={() => {
+              if (settingsBaseline) setDraft(structuredClone(settingsBaseline))
+              if (hotwordsBaseline) setHotwordDraft(structuredClone(hotwordsBaseline))
+              pushToast('info', s.reset)
+            }}
             onClose={() => {
-              setDraft(settings)
+              if (settings) setDraft(structuredClone(settings))
+              if (hotwords) setHotwordDraft(structuredClone(hotwords))
               setSettingsOpen(false)
               setSettingsTab('general')
             }}
@@ -336,11 +369,6 @@ export default function App() {
             }
             onOpenModels={() => void window.oneasr.openModelsFolder()}
             onRefreshModels={() => void refreshModels()}
-            onSaveHotwords={async (store) => {
-              const saved = await window.oneasr.saveHotwords(store)
-              setHotwords(saved)
-              pushToast('success', s.saved)
-            }}
           />
         )}
       </AnimatePresence>
