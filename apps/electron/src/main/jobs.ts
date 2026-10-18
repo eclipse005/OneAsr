@@ -59,9 +59,13 @@ export class JobManager extends EventEmitter {
 
   /** 退出前把在跑的 CLI 收掉，别留孤儿进程。 */
   shutdown(): void {
-    // 与取消路径共用同一条树杀：Windows 上第一次调用就已经 /T /F 收了整棵树，
-    // 第二次调用只是"万一没死透"的兜底（不是唯一的树杀时机）
+    // 与取消路径共用同一条树杀。Windows 上 taskkill /T /F 就是最终手段，
+    // 发两遍只会对可能已死的 pid 再开一个进程 —— 合并成一次。
     this.children.forEach((child) => {
+      if (process.platform === 'win32') {
+        killProcessTree(child, 'SIGKILL')
+        return
+      }
       killProcessTree(child, 'SIGTERM')
       killProcessTree(child, 'SIGKILL')
     })
