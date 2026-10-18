@@ -466,6 +466,26 @@ export function SettingsDrawer({
         </div>
 
         <div className="modal-footer">
+          {activeTab === 'hotwords' && hotwordDraft ? (
+            <div className="hw-default-toggle" title={s.defaultGroup}>
+              <span className="pref-label">{s.defaultGroupShort}</span>
+              <button
+                type="button"
+                className={`toggle ${hotwordDraft.default_group_enabled ? 'on' : ''}`}
+                role="switch"
+                aria-checked={hotwordDraft.default_group_enabled}
+                aria-label={s.defaultGroup}
+                onClick={() =>
+                  onHotwordsChange({
+                    ...hotwordDraft,
+                    default_group_enabled: !hotwordDraft.default_group_enabled,
+                    default_group:
+                      hotwordDraft.default_group || hotwordDraft.groups[0]?.id || null
+                  })
+                }
+              />
+            </div>
+          ) : null}
           <span className="hint">{dirty ? s.unsaved : ''}</span>
           <button type="button" className="btn btn-ghost" onClick={onReset}>
             {s.reset}

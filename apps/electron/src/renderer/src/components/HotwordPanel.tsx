@@ -259,24 +259,6 @@ export function HotwordEditor({
             <span className="hw-add-feedback">+{lastAdded}</span>
           )}
         </div>
-        <div className="hw-default-toggle" title={s.defaultGroup}>
-          <span className="pref-label">{s.defaultGroupShort}</span>
-          <button
-            type="button"
-            className={`toggle ${value.default_group_enabled ? 'on' : ''}`}
-            role="switch"
-            aria-checked={value.default_group_enabled}
-            aria-label={s.defaultGroup}
-            disabled={!group}
-            onClick={() =>
-              touch({
-                ...value,
-                default_group_enabled: !value.default_group_enabled,
-                default_group: value.default_group || group?.id || null
-              })
-            }
-          />
-        </div>
       </div>
     </div>
   )
