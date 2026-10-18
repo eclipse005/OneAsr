@@ -75,6 +75,8 @@ const zh = {
   ready: '就绪',
   missing: '缺失',
   statsEmpty: '还没有运行记录 — 完成一次转写后这里会亮起来',
+  minimize: '最小化',
+  maximize: '最大化',
   statsTitle: '运行统计',
   totalRuns: '总次数',
   success: '成功',
@@ -214,6 +216,8 @@ const en: Dict = {
   ready: 'Ready',
   missing: 'Missing',
   statsEmpty: 'No runs yet — finish a transcription to light this up',
+  minimize: 'Minimize',
+  maximize: 'Maximize',
   statsTitle: 'Run stats',
   totalRuns: 'Total',
   success: 'Success',
@@ -294,6 +298,11 @@ export const LANG_OPTIONS = [
   { id: 'ko', label: '한국어' },
   { id: 'auto', label: 'Auto' }
 ]
+
+/** 「还有 N 条」/「N more」：折叠列表的计数后缀。Dict 只放字符串，带参数的走 helper。 */
+export function moreItems(lang: UiLang, n: number): string {
+  return lang === 'zh' ? `还有 ${n} 条` : `${n} more`
+}
 
 export function formatDuration(sec: number | null | undefined): string {
   if (sec == null || !Number.isFinite(sec)) return '—'

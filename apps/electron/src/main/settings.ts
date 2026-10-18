@@ -2,8 +2,29 @@ import fs from 'fs'
 import path from 'path'
 import type { Settings } from '../shared/types'
 
+/**
+ * 安装目录 = 含 bin/ffmpeg[.exe] 的目录（与 Rust 侧 resolve_app_root 同一约定）。
+ * 从本文件所在目录往上找，最多 6 层：开发期 out/main → 仓库根即可命中，
+ * 省掉每次启动都要 export ONEASR_APP_ROOT。
+ */
+function detectAppRoot(): string | undefined {
+  const markers =
+    process.platform === 'win32'
+      ? ['bin/ffmpeg.exe', 'bin/ffmpeg']
+      : ['bin/ffmpeg', 'bin/ffmpeg.exe']
+  let dir = __dirname
+  for (let i = 0; i < 6; i++) {
+    if (markers.some((m) => fs.existsSync(path.join(dir, m)))) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
+
+/** 环境变量优先（Linux 上运行目录与代码目录分离时仍然靠它），其次自动探测。 */
 export const DEFAULT_APP_ROOT =
-  process.env.ONEASR_APP_ROOT || '/workspace/oneasr-runtime'
+  process.env.ONEASR_APP_ROOT || detectAppRoot() || '/workspace/oneasr-runtime'
 
 const ASR_CATALOG = [
   'Qwen3-ASR-0.6B-hf',
@@ -166,6 +187,18 @@ export function checkModels(settings: Settings, appRoot = DEFAULT_APP_ROOT) {
     alignerLabel: path.basename(alignerPath) || settings.aligner_model,
     backend: settings.backend || 'auto'
   }
+}
+
+/** oneasr-cli 落点：运行目录优先，其次开发期的 target/release|debug（免去手工拷）。 */
+export function resolveCli(appRoot = DEFAULT_APP_ROOT): string {
+  const names =
+    process.platform === 'win32' ? ['oneasr-cli.exe', 'oneasr-cli'] : ['oneasr-cli', 'oneasr-cli.exe']
+  const candidates = [
+    ...names.map((n) => path.join(appRoot, n)),
+    ...names.map((n) => path.join(appRoot, 'target', 'release', n)),
+    ...names.map((n) => path.join(appRoot, 'target', 'debug', n))
+  ]
+  return candidates.find((p) => fs.existsSync(p)) ?? path.join(appRoot, 'oneasr-cli')
 }
 
 export { ASR_CATALOG, ALIGNER_CATALOG }

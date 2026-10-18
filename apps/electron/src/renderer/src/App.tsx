@@ -282,7 +282,9 @@ export default function App() {
             initial={{ opacity: 0.6 }}
             animate={{ opacity: 1 }}
           >
-            <div className="icon">♪</div>
+            <div className="icon">
+              <span className="audio-glyph" />
+            </div>
             <h2>{dragging ? s.dropActive : s.emptyTitle}</h2>
             <p>{s.emptyHint}</p>
           </motion.div>

@@ -6,6 +6,7 @@ import {
   checkModels,
   defaultSettings,
   loadSettings,
+  resolveCli,
   saveSettings
 } from './settings'
 import { JobManager } from './jobs'
@@ -15,6 +16,20 @@ import type { HotwordStore, Settings } from '../shared/types'
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
 app.commandLine.appendSwitch('no-sandbox')
+
+// 任务栏 / 窗口图标：与 GPUI 版同一份 assets/icons/app-icon.ico。
+// GPUI 是用 winresource 把图标嵌进 exe，Electron 必须在运行时显式交给窗口。
+// AppUserModelID 让任务栏把窗口归到 OneAsr 名下，而不是并进 electron.exe。
+app.setAppUserModelId('com.eclipse005.oneasr')
+
+/** 定位仓库里那份图标：源码树里跑与将来打包后的 resources 两种落点都试。 */
+function resolveAppIcon(): string | undefined {
+  const name = process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png'
+  const candidates = [join(__dirname, '../../../../assets/icons', name)] // 源码树：out/main → 仓库根
+  if (process.resourcesPath) candidates.push(join(process.resourcesPath, 'icons', name))
+  candidates.push(join(__dirname, '../../assets/icons', name))
+  return candidates.find((p) => fs.existsSync(p))
+}
 
 let mainWindow: BrowserWindow | null = null
 const jobs = new JobManager()
@@ -90,15 +105,46 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
   }
 }
 
+/** 标题栏高度。CSS 里 .titlebar 的 44px 必须跟它一致（overlay 高度、红绿灯对中都读它）。 */
+const TITLEBAR_HEIGHT = 44
+
+/**
+ * 窗口按钮一律交给系统，不自绘：
+ * - Windows / Linux：titleBarStyle hidden + Window Controls Overlay →
+ *   min/max/close 归系统（Windows 由 DWM 画；Linux 由 Electron 按桌面主题画，
+ *   symbolColor 在 Linux 不传，Electron 自动取满足对比度的颜色）。
+ *   Windows 上命中测试是真的 HTMINBUTTON/HTMAXBUTTON/HTCLOSE —— Win11 贴靠布局因此可用。
+ * - macOS：titleBarStyle hidden + trafficLightPosition → 左上角红绿灯，
+ *   位置对齐 44px 标题栏（系统默认位置是按 ~28px 标题栏给的，不设会偏上）。
+ */
+function windowChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
+  if (process.platform === 'darwin') {
+    return {
+      titleBarStyle: 'hidden',
+      trafficLightPosition: { x: 16, y: Math.round((TITLEBAR_HEIGHT - 14) / 2) }
+    }
+  }
+  const overlay: Electron.TitleBarOverlay = { color: '#ffffff', height: TITLEBAR_HEIGHT }
+  if (process.platform === 'win32') overlay.symbolColor = '#475569'
+  return { titleBarStyle: 'hidden', titleBarOverlay: overlay }
+}
+
 function createWindow(): void {
+  const icon = resolveAppIcon()
+  // 一行启动诊断：窗口装饰归谁、图标从哪来，出问题时先看这条（Electron 33 没有 getTitleBarOverlay 可查）。
+  console.log(
+    `[oneasr] platform=${process.platform} appRoot=${DEFAULT_APP_ROOT} cli=${resolveCli()}\n` +
+      `[oneasr] icon=${icon ?? '(none)'} chrome=${JSON.stringify(windowChrome())}`
+  )
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
     minHeight: 620,
-    frame: false,
+    ...windowChrome(),
     backgroundColor: '#f4f6f8',
     title: 'OneAsr',
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -130,7 +176,7 @@ function createWindow(): void {
 function registerIpc(): void {
   ipcMain.handle('app:info', () => ({
     appRoot: DEFAULT_APP_ROOT,
-    cliPath: join(DEFAULT_APP_ROOT, 'oneasr-cli'),
+    cliPath: resolveCli(),
     display: process.env.DISPLAY,
     version: '0.2.0-electron'
   }))
@@ -222,6 +268,12 @@ function registerIpc(): void {
 
 app.whenReady().then(() => {
   registerIpc()
+  // macOS 的 Dock 图标不认 BrowserWindow.icon：打包后由 .app 里的 AppIcon.icns 决定
+  // （scripts/pack-unix.sh 用 iconutil 生成），未打包开发期这里先顶上同一份图标。
+  if (process.platform === 'darwin') {
+    const dockIcon = resolveAppIcon()
+    if (dockIcon) app.dock?.setIcon(dockIcon)
+  }
   createWindow()
 })
 

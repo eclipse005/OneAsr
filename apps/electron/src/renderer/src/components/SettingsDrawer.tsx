@@ -173,7 +173,7 @@ export function SettingsDrawer({
   return (
     <div className="overlay" onClick={tryClose}>
       <motion.div
-        className="modal-shell settings-shell"
+        className="modal-shell"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}

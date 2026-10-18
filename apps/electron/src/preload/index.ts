@@ -3,6 +3,7 @@ import type { OneAsrApi } from './api'
 import type { HotwordStore, Settings, StatsSnapshot, TaskSnapshot } from '../shared/types'
 
 const api: OneAsrApi = {
+  platform: process.platform,
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings: Settings) => ipcRenderer.invoke('settings:save', settings),

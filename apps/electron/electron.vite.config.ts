@@ -25,6 +25,13 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    // 图标只有一份真源：仓库根的 assets/（GPUI 版 include_bytes! 的就是它）。
+    // CSS 里用 url('@assets/icons/xxx.svg')，Vite 会当资源打包并改成 file:// 下可用的相对路径。
+    resolve: {
+      alias: {
+        '@assets': resolve(__dirname, '../../assets')
+      }
+    },
     build: {
       rollupOptions: {
         input: {

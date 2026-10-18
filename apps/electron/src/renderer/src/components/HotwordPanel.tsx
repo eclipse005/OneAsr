@@ -282,7 +282,7 @@ export function HotwordPanel({
   return (
     <div className="overlay" onClick={onClose}>
       <motion.div
-        className="modal-shell hw-shell"
+        className="modal-shell"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}

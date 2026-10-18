@@ -1,6 +1,14 @@
 import { motion } from 'framer-motion'
-import { formatDuration, t, UiLang } from '../i18n'
+import { formatDuration, moreItems, t, UiLang } from '../i18n'
 import type { StatsSnapshot } from '../../../shared/types'
+
+/**
+ * 列表封顶：多出来的折成「还有 N 条」，放在卡片标题行里（不额外占高度）。
+ * 面板在统一的 900×640 浮窗里铺满：30 天折线是唯一弹性区，多出来的高度给它；
+ * 窗口压到最小时它先收到底，所以统计面板不出现滚动条。
+ */
+const LANGS_MAX = 4
+const RECENT_MAX = 6
 
 function heatLevel(mediaSec: number, errors: number): string {
   if (errors > 0 && mediaSec <= 0) return 'err'
@@ -37,10 +45,14 @@ export function StatsPanel({
     })
     .join(' ')
 
+  const langs = stats.langs.slice(0, LANGS_MAX)
+  const recent = stats.recentSession.slice(0, RECENT_MAX)
+  const hasRecent = recent.length > 0 || !!stats.lastOutput
+
   return (
     <div className="overlay" onClick={onClose}>
       <motion.div
-        className="modal-shell wide"
+        className="modal-shell"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -56,7 +68,7 @@ export function StatsPanel({
             {s.close}
           </button>
         </div>
-        <div className="modal-body" style={{ whiteSpace: 'normal' }}>
+        <div className="modal-body stats-body" style={{ whiteSpace: 'normal' }}>
           {empty ? (
             <p>{s.statsEmpty}</p>
           ) : (
@@ -102,9 +114,16 @@ export function StatsPanel({
                 </div>
               </div>
 
-              <div className="chart-card">
+              <div className="chart-card spark-card">
                 <h5>{s.mediaProcessed} · 30d</h5>
-                <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="media sparkline">
+                <svg
+                  className="spark"
+                  width="100%"
+                  viewBox={`0 0 ${w} ${h}`}
+                  preserveAspectRatio="none"
+                  role="img"
+                  aria-label="media sparkline"
+                >
                   <polyline
                     fill="none"
                     stroke="#0d9488"
@@ -134,39 +153,65 @@ export function StatsPanel({
                 </div>
               </div>
 
-              {stats.langs.length > 0 && (
-                <div className="chart-card">
-                  <h5>{s.langTitle}</h5>
-                  {stats.langs.map((l) => (
-                    <div className="bar-row" key={l.lang}>
-                      <span className="lab">{l.lang}</span>
-                      <div className="track">
-                        <b style={{ width: `${(l.count / maxLang) * 100}%` }} />
+              {(stats.langs.length > 0 || hasRecent) && (
+                <div className="stats-row">
+                  {stats.langs.length > 0 && (
+                    <div className="chart-card">
+                      <h5>
+                        {s.langTitle}
+                        {stats.langs.length > LANGS_MAX && (
+                          <span className="more-note">
+                            {moreItems(lang, stats.langs.length - LANGS_MAX)}
+                          </span>
+                        )}
+                      </h5>
+                      <div className="lang-list">
+                        {langs.map((l) => (
+                          <div className="bar-row" key={l.lang}>
+                            <span className="lab">{l.lang}</span>
+                            <div className="track">
+                              <b style={{ width: `${(l.count / maxLang) * 100}%` }} />
+                            </div>
+                            <span className="num">{l.count}</span>
+                          </div>
+                        ))}
                       </div>
-                      <span style={{ width: 28, textAlign: 'right', color: 'var(--muted)' }}>
-                        {l.count}
-                      </span>
                     </div>
-                  ))}
+                  )}
+
+                  {hasRecent && (
+                    <div className="chart-card">
+                      <h5>
+                        {s.recent}
+                        {stats.recentSession.length > RECENT_MAX && (
+                          <span className="more-note">
+                            {moreItems(lang, stats.recentSession.length - RECENT_MAX)}
+                          </span>
+                        )}
+                      </h5>
+                      {recent.length > 0 && (
+                        <ul className="recent-list">
+                          {recent.map((r, i) => (
+                            <li key={i}>
+                              <span className="recent-name" title={r.name}>
+                                {r.name}
+                              </span>
+                              <span className={`recent-status ${r.status}`}>{r.status}</span>
+                              {r.durationMs != null && (
+                                <span className="recent-ms">{(r.durationMs / 1000).toFixed(1)}s</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {stats.lastOutput && (
+                        <p className="last-output" title={stats.lastOutput}>
+                          {stats.lastOutput}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-
-              {stats.lastOutput && (
-                <p style={{ wordBreak: 'break-all', fontSize: '0.82rem' }}>{stats.lastOutput}</p>
-              )}
-
-              {stats.recentSession.length > 0 && (
-                <>
-                  <h4 style={{ color: 'var(--text)', margin: '8px 0' }}>{s.recent}</h4>
-                  <ul style={{ paddingLeft: 18, margin: 0, color: 'var(--muted)' }}>
-                    {stats.recentSession.map((r, i) => (
-                      <li key={i}>
-                        {r.name} · {r.status}
-                        {r.durationMs != null ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </>
               )}
             </>
           )}

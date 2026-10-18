@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { EventEmitter } from 'events'
 import type { Settings, StatsSnapshot, TaskSnapshot } from '../shared/types'
-import { DEFAULT_APP_ROOT, loadSettings, resolveAsrDir } from './settings'
+import { DEFAULT_APP_ROOT, loadSettings, resolveAsrDir, resolveCli } from './settings'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
 import { loadHotwords, wordsCsv } from './hotword'
 
@@ -182,7 +182,7 @@ export class JobManager extends EventEmitter {
     return new Promise((resolve) => {
       const settings = loadSettings()
       const appRoot = DEFAULT_APP_ROOT
-      const cli = path.join(appRoot, 'oneasr-cli')
+      const cli = resolveCli(appRoot)
       const asrDir = resolveAsrDir(settings, appRoot)
       if (asrDir !== settings.asr_model_dir) {
         settings.asr_model_dir = asrDir

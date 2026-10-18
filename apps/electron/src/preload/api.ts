@@ -19,6 +19,8 @@ export interface DialogPathResult {
 }
 
 export interface OneAsrApi {
+  /** process.platform：win32 / darwin / linux —— 窗口按钮归系统还是自绘按它分。 */
+  platform: string
   getAppInfo: () => Promise<AppInfo>
   getSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
