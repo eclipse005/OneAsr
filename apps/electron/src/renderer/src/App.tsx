@@ -1,8 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GuidePanel } from './components/GuidePanel'
-import { HotwordPanel } from './components/HotwordPanel'
-import { SettingsDrawer } from './components/SettingsDrawer'
+import { SettingsDrawer, type SettingsTab } from './components/SettingsDrawer'
 import { StatsPanel } from './components/StatsPanel'
 import { StatusBar } from './components/StatusBar'
 import { TaskList } from './components/TaskList'
@@ -34,7 +33,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [statsOpen, setStatsOpen] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
-  const [hotwordOpen, setHotwordOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [toasts, setToasts] = useState<ToastPayload[]>([])
@@ -57,14 +56,23 @@ export default function App() {
       },
       open: async (name: 'settings' | 'hotwords' | 'stats' | 'guide' | 'none') => {
         setWelcomeOpen(false)
-        if (name === 'hotwords') {
-          setHotwords(await window.oneasr.getHotwords())
-        }
         if (name === 'stats') {
           setStats(await window.oneasr.getStats())
         }
-        setSettingsOpen(name === 'settings')
-        setHotwordOpen(name === 'hotwords')
+        if (name === 'hotwords') {
+          setHotwords(await window.oneasr.getHotwords())
+          setSettingsTab('hotwords')
+          setSettingsOpen(true)
+          setStatsOpen(false)
+          setGuideOpen(false)
+          return
+        }
+        if (name === 'settings') {
+          setSettingsTab('general')
+          setSettingsOpen(true)
+        } else {
+          setSettingsOpen(false)
+        }
         setStatsOpen(name === 'stats')
         setGuideOpen(name === 'guide')
       },
@@ -205,18 +213,6 @@ export default function App() {
         </button>
         <button
           className="btn btn-ghost"
-          data-shot="hotwords"
-          onClick={() => {
-            void (async () => {
-              setHotwords(await window.oneasr.getHotwords())
-              setHotwordOpen(true)
-            })()
-          }}
-        >
-          {s.hotwords}
-        </button>
-        <button
-          className="btn btn-ghost"
           data-shot="stats"
           onClick={() => {
             void refreshStats()
@@ -225,7 +221,14 @@ export default function App() {
         >
           {s.stats}
         </button>
-        <button className="btn btn-ghost" data-shot="settings" onClick={() => setSettingsOpen(true)}>
+        <button
+          className="btn btn-ghost"
+          data-shot="settings"
+          onClick={() => {
+            setSettingsTab('general')
+            setSettingsOpen(true)
+          }}
+        >
           {s.settings}
         </button>
       </div>
@@ -296,6 +299,8 @@ export default function App() {
             draft={draft}
             models={models}
             dirty={dirty}
+            hotwords={hotwords}
+            initialTab={settingsTab}
             onChange={setDraft}
             onSave={() => void saveSettings()}
             onReset={() =>
@@ -309,6 +314,7 @@ export default function App() {
             onClose={() => {
               setDraft(settings)
               setSettingsOpen(false)
+              setSettingsTab('general')
             }}
             onPickDir={() =>
               void window.oneasr.pickDirectory(draft.output_dir).then((r) => {
@@ -330,6 +336,11 @@ export default function App() {
             }
             onOpenModels={() => void window.oneasr.openModelsFolder()}
             onRefreshModels={() => void refreshModels()}
+            onSaveHotwords={async (store) => {
+              const saved = await window.oneasr.saveHotwords(store)
+              setHotwords(saved)
+              pushToast('success', s.saved)
+            }}
           />
         )}
       </AnimatePresence>
@@ -344,20 +355,6 @@ export default function App() {
         {guideOpen && <GuidePanel lang={lang} onClose={() => setGuideOpen(false)} />}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {hotwordOpen && hotwords && (
-          <HotwordPanel
-            lang={lang}
-            store={hotwords}
-            onClose={() => setHotwordOpen(false)}
-            onSave={async (store) => {
-              const saved = await window.oneasr.saveHotwords(store)
-              setHotwords(saved)
-              pushToast('success', s.saved)
-            }}
-          />
-        )}
-      </AnimatePresence>
     </div>
   )
 }

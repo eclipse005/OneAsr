@@ -188,12 +188,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   max-height: min(90vh, 720px);
 }
 .modal-shell.settings-shell {
-  width: min(860px, 100%);
-  height: auto;
-  max-height: min(90vh, 760px);
-  /* grow with content; only the whole shell scrolls if viewport is tiny */
-  overflow-x: hidden;
-  overflow-y: auto;
+  /* Fixed frame across all tabs (sized for models + hotwords) */
+  width: 900px;
+  height: 640px;
+  max-width: min(900px, calc(100vw - 24px));
+  max-height: min(640px, 92vh);
+  overflow: hidden;
 }
 
 .modal-header {
@@ -479,8 +479,13 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 @media (max-width: 720px) {
   .hw-layout { grid-template-columns: 1fr; min-height: 0; }
   .hw-params { grid-template-columns: 1fr; }
-  .modal-shell, .modal-shell.wide, .modal-shell.settings-shell { width: 100%; max-height: 92vh; height: auto; }
-  .modal-shell.settings-shell { overflow: auto; }
+  .modal-shell, .modal-shell.wide { width: 100%; max-height: 92vh; height: auto; }
+  .modal-shell.settings-shell {
+    width: min(900px, 100%);
+    height: min(640px, 92vh);
+    max-height: 92vh;
+    overflow: hidden;
+  }
 }
 
 .hw-topbar {
@@ -501,9 +506,10 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 /* Settings left-nav layout */
 .settings-body {
   display: grid;
-  grid-template-columns: 148px 1fr;
+  grid-template-columns: 140px 1fr;
   background: var(--panel);
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .settings-nav {
   display: flex;
@@ -512,7 +518,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   padding: 8px 6px;
   background: #f8fafb;
   border-right: 1px solid var(--line);
-  overflow: visible;
+  overflow: hidden;
 }
 .settings-nav-item {
   text-align: left;
@@ -536,13 +542,19 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-weight: 750;
 }
 .settings-pane {
-  overflow: visible;
+  overflow: hidden;
   padding: 12px 16px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   background: var(--panel);
   min-width: 0;
+  min-height: 0;
+}
+.settings-pane.is-hotwords {
+  padding: 8px 10px 8px;
+  gap: 0;
+  overflow: hidden;
 }
 .pane-divider {
   height: 1px;
@@ -643,3 +655,42 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 .models-status { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
 .models-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* Hotwords embedded in settings */
+.hw-embed {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  gap: 6px;
+}
+.hw-embed .hw-layout {
+  min-height: 0;
+  flex: 1;
+  height: auto;
+  gap: 8px;
+  grid-template-columns: 148px 1fr;
+}
+.hw-embed.compact .hw-sidebar-head { padding: 8px 10px; }
+.hw-embed.compact .hw-group-item { padding: 8px 10px; }
+.hw-embed.compact .hw-editor { padding: 10px 12px; gap: 8px; }
+.hw-embed.compact .hw-chips {
+  min-height: 110px;
+  padding: 10px;
+  border-radius: 12px;
+}
+.hw-embed-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+.hw-embed-foot .hint {
+  flex: 1;
+  color: var(--warn);
+  font-size: 0.82rem;
+  font-weight: 600;
+}

@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
-import type { ModelStatus, Settings } from '../../../shared/types'
+import type { HotwordStore, ModelStatus, Settings } from '../../../shared/types'
+import { HotwordEditor } from './HotwordPanel'
 
-type SettingsTab = 'general' | 'output' | 'models' | 'compute'
+export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -93,6 +94,8 @@ export function SettingsDrawer({
   draft,
   models,
   dirty,
+  hotwords,
+  initialTab = 'general',
   onChange,
   onSave,
   onReset,
@@ -100,12 +103,15 @@ export function SettingsDrawer({
   onPickDir,
   onPickModel,
   onOpenModels,
-  onRefreshModels
+  onRefreshModels,
+  onSaveHotwords
 }: {
   lang: UiLang
   draft: Settings
   models: ModelStatus | null
   dirty: boolean
+  hotwords: HotwordStore | null
+  initialTab?: SettingsTab
   onChange: (next: Settings) => void
   onSave: () => void
   onReset: () => void
@@ -114,11 +120,22 @@ export function SettingsDrawer({
   onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir') => void
   onOpenModels: () => void
   onRefreshModels: () => void
+  onSaveHotwords: (store: HotwordStore) => Promise<void>
 }) {
   const s = t(lang)
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
+  const [hwDirty, setHwDirty] = useState(false)
+  const onHwDirty = useCallback((d: boolean) => setHwDirty(d), [])
+  useEffect(() => {
+    setActiveTab(initialTab)
+  }, [initialTab])
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     onChange({ ...draft, [key]: value })
+
+  const tryClose = () => {
+    if ((dirty || hwDirty) && !confirm(s.confirmDiscard)) return
+    onClose()
+  }
 
   const size = asrSizeOf(draft.asr_model)
   const quant = asrQuantOf(draft.asr_model)
@@ -152,11 +169,12 @@ export function SettingsDrawer({
     { id: 'general', label: s.sectionGeneral },
     { id: 'output', label: s.sectionOutput },
     { id: 'models', label: s.sectionModels },
+    { id: 'hotwords', label: s.sectionHotwords },
     { id: 'compute', label: s.sectionCompute }
   ]
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" onClick={tryClose}>
       <motion.div
         className="modal-shell settings-shell"
         role="dialog"
@@ -170,7 +188,7 @@ export function SettingsDrawer({
         <div className="modal-header">
           <h3>{s.settings}</h3>
           <div style={{ flex: 1 }} />
-          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>
+          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={tryClose}>
             {s.close}
           </button>
         </div>
@@ -191,7 +209,7 @@ export function SettingsDrawer({
             ))}
           </nav>
 
-          <div className="settings-pane" data-shot={`settings-pane-${activeTab}`}>
+          <div className={`settings-pane${activeTab === 'hotwords' ? ' is-hotwords' : ''}`} data-shot={`settings-pane-${activeTab}`}>
             {activeTab === 'general' && (
               <>
                 <div className="field">
@@ -412,6 +430,22 @@ export function SettingsDrawer({
               </>
             )}
 
+            {activeTab === 'hotwords' && (
+              <>
+                {hotwords ? (
+                  <HotwordEditor
+                    lang={lang}
+                    store={hotwords}
+                    compact
+                    onDirtyChange={onHwDirty}
+                    onSave={onSaveHotwords}
+                  />
+                ) : (
+                  <p className="hint" style={{ color: 'var(--muted)' }}>…</p>
+                )}
+              </>
+            )}
+
             {activeTab === 'compute' && (
               <>
                 <div className="field">
@@ -435,15 +469,17 @@ export function SettingsDrawer({
           </div>
         </div>
 
-        <div className="modal-footer">
-          <span className="hint">{dirty ? s.unsaved : ''}</span>
-          <button type="button" className="btn btn-ghost" onClick={onReset}>
-            {s.reset}
-          </button>
-          <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
-            {s.save}
-          </button>
-        </div>
+        {activeTab !== 'hotwords' && (
+          <div className="modal-footer">
+            <span className="hint">{dirty ? s.unsaved : ''}</span>
+            <button type="button" className="btn btn-ghost" onClick={onReset}>
+              {s.reset}
+            </button>
+            <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
+              {s.save}
+            </button>
+          </div>
+        )}
       </motion.div>
     </div>
   )
