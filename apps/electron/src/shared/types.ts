@@ -122,6 +122,8 @@ export interface TaskSnapshot {
   queueRank?: number
   /** 当前阶段的稳定 key（CLI 事件流给；界面文案按它出） */
   stageKey?: string
+  /** 失败时的原始 stderr（详情：给「展开」与「复制错误」用；摘要在 error 里） */
+  errorDetail?: string
   /** 完成后由 CLI 的 timing 事件给出的阶段耗时（label 是 CLI 的语言，key 才是稳定的） */
   stageTimings?: { key?: string; stage: string; ms: number }[]
   /** CLI 报的总耗时（含模型加载） */

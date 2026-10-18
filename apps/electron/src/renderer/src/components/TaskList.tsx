@@ -52,6 +52,42 @@ function ChipMenu({
   )
 }
 
+/**
+ * 失败原因：默认只显示**最后一条非空行**（CLI 的结论，如「音频处理错误: ffmpeg failed: …」），
+ * 前面那些横幅 / 参数 / 阶段行是噪音。要全文就展开，或者直接复制去搜。
+ */
+function RowError({
+  summary,
+  detail,
+  labels,
+  onCopy
+}: {
+  /** CLI 的 error 事件（一句话，双语） */
+  summary: string
+  /** 原始 stderr；没有就不给「展开」 */
+  detail?: string
+  labels: { expand: string; collapse: string; copy: string }
+  onCopy: (text: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const full = detail ?? summary
+  return (
+    <div className="row-error">
+      <span className={`err-text ${open ? 'open' : ''}`} title={full}>
+        {open ? full : summary}
+      </span>
+      {detail && (
+        <button type="button" className="btn-mini" onClick={() => setOpen((v) => !v)}>
+          {open ? labels.collapse : labels.expand}
+        </button>
+      )}
+      <button type="button" className="btn-mini" onClick={() => onCopy(full)}>
+        {labels.copy}
+      </button>
+    </div>
+  )
+}
+
 export function TaskList({
   lang,
   tasks,
@@ -137,8 +173,13 @@ export function TaskList({
                     <span aria-hidden />
                   )}
                   {/* 完整路径放 title：文件名放不下或者需要确认位置时，悬停就能看到 */}
-                  <span className="task-name" title={`${task.name}\n${task.input}`}>
-                    {task.name}
+                  <span className="name-main">
+                    <span className="task-name" title={`${task.name}\n${task.input}`}>
+                      {task.name}
+                    </span>
+                    {/* 元数据跟着文件名同一行（列表里它只是"看一眼就过"的补充信息，
+                        单独占一行会把卡片撑高、也抢走 chip 行的注意力） */}
+                    {meta && <span className="name-meta">{meta}</span>}
                   </span>
                   {task.status === 'running' ? (
                     <span className="badge running" title={stageText}>
@@ -161,7 +202,6 @@ export function TaskList({
                     <span aria-hidden />
                   )}
                 </div>
-                {meta && <div className="row-meta">{meta}</div>}
                 {/* 路径默认不占行（文件名已经在上面，留着只是噪音）；
                     只有**同名不同目录**时才显示——那时它是唯一能区分两者的信息 */}
                 {duplicateName && <div className="meta">{task.input}</div>}
@@ -219,16 +259,12 @@ export function TaskList({
                 </div>
 
                 {task.error && (
-                  <div className="row-error">
-                    <span className="err-text">{task.error}</span>
-                    <button
-                      type="button"
-                      className="btn-mini"
-                      onClick={() => onCopyError(task.error!)}
-                    >
-                      {s.copyError}
-                    </button>
-                  </div>
+                  <RowError
+                    summary={task.error}
+                    detail={task.errorDetail}
+                    labels={{ expand: s.expand, collapse: s.collapse, copy: s.copyError }}
+                    onCopy={onCopyError}
+                  />
                 )}
               </div>
 

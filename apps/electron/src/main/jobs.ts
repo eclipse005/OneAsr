@@ -324,6 +324,8 @@ export class JobManager extends EventEmitter {
       this.running = child
       let stderr = ''
       const stageTimings: { key?: string; stage: string; ms: number }[] = []
+      /** CLI 结构化报错（error 事件）；失败摘要优先用它，见下面的收尾处理 */
+      let eventError: string | undefined
 
       const onLine = (buf: Buffer, stream: 'out' | 'err'): void => {
         const text = buf.toString('utf8')
@@ -363,7 +365,10 @@ export class JobManager extends EventEmitter {
               if (ev.output) task.outputPath = ev.output
               break
             case 'error':
-              if (ev.message) task.error = ev.message.slice(-600)
+              if (ev.message) {
+                eventError = ev.message
+                task.error = ev.message
+              }
               break
           }
           this.emitUpdate()
@@ -426,7 +431,10 @@ export class JobManager extends EventEmitter {
           this.lastOutput = produced
         } else {
           task.status = 'error'
-          task.error = (stderr || `exit ${code}`).slice(-600)
+          // 摘要是 CLI 的 `error` 事件（Rust 的双语文案，结构化）；
+          // 原始 stderr 只在没有事件时兜底，并且始终作为「详情」保留给展开/复制。
+          task.error = eventError ?? (stderr || `exit ${code}`).slice(-600)
+          task.errorDetail = stderr.trim() ? stderr.trim().slice(-8000) : undefined
           task.progress = 'error'
           task.progressPct = 100
           // 失败的现场全部落盘：命令行、退出码、耗时、stderr 尾部（截 8 KB）

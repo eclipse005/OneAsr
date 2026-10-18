@@ -153,7 +153,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .task-card .row-meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 2px; }
 .badge.rank { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
-.row-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.row-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .chip-wrap { position: relative; }
 .row-chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -190,29 +190,54 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .chip-menu-item:hover { background: var(--row-hover); }
 .chip-menu-item.active { background: var(--accent-soft); color: var(--logo); font-weight: 650; }
 .row-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 5px; }
-.row-error .err-text { flex: 1; min-width: 0; color: var(--danger); font-size: 0.78rem; word-break: break-all; }
+/* 默认一行结论（省略号），展开后给全文并限高——报错不该把卡片撑成一堵墙 */
+.row-error .err-text {
+  flex: 1; min-width: 0; color: var(--danger); font-size: 0.78rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row-error .err-text.open {
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 30vh; overflow: auto;
+}
 .btn-mini {
   flex: none; height: 22px; padding: 0 8px; border-radius: 6px;
   border: 1px solid var(--line); background: #fff; font-size: 0.72rem; color: var(--muted);
 }
 .btn-mini:hover { border-color: var(--danger); color: var(--danger); }
 .task-card {
-  display: grid; grid-template-columns: 1fr auto; gap: 12px;
-  padding: 14px 16px; border-radius: var(--radius);
+  position: relative;
+  /* 两列都定宽：信息列吃掉余量，动作列**固定 252px**——否则完成行多一个
+     「打开输出」就会把动作列撑宽、连带把状态药丸整列左移（实测 821 → 721）。 */
+  display: grid; grid-template-columns: minmax(0, 1fr) 252px; gap: 10px;
+  padding: 11px 14px 11px 18px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--line);
   box-shadow: 0 4px 16px rgba(15,23,42,0.04);
   transition: border-color .15s, box-shadow .15s, transform .15s;
 }
+/* 左侧状态色条：扫列表时状态一眼可见，不用去读药丸上的字（GPUI 也是这个做法） */
+.task-card::before {
+  content: ''; position: absolute; left: 6px; top: 11px; bottom: 11px; width: 3px;
+  border-radius: 999px; background: var(--line);
+}
+.task-card.status-running::before { background: var(--accent); }
+.task-card.status-done::before { background: #10b981; }
+.task-card.status-error::before { background: var(--danger); }
+.task-card.status-cancelled::before { background: var(--warn); }
 .task-card:hover { border-color: var(--divider); box-shadow: var(--shadow); }
 /* 任务行首行是**固定列**：媒体图标 15 / 文件名（吃掉余量、省略号截断）/ 状态 122 / 位次 96。
    状态药丸的位置只由列定义决定——文件名再长也推不动它，也不会把行高撑成两行。 */
 .task-card .name {
   display: grid;
-  grid-template-columns: 15px minmax(0, 1fr) 122px 96px;
+  grid-template-columns: 15px minmax(0, 1fr) 110px 88px;
   align-items: center;
   gap: 8px;
   font-weight: 650;
-  margin-bottom: 4px;
+}
+/* 文件名吃掉余量并截断；元数据紧随其后、不参与挤压（列宽固定，内容不推列） */
+.task-card .name-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.task-card .name-meta {
+  flex: none; color: var(--muted); font-size: 0.75rem; font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 .task-card .name .task-name {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -222,7 +247,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .task-card .meta { color: var(--muted); font-size: 0.82rem; word-break: break-all; }
-.task-card .actions { display: flex; gap: 6px; align-items: start; flex-wrap: wrap; justify-content: flex-end; }
+.task-card .actions {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+}
 
 
 .badge {
