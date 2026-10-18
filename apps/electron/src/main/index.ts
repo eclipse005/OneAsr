@@ -267,6 +267,7 @@ function registerIpc(): void {
    * 模型状态、就绪判据、开跑门禁、可选模型清单（catalog）——全部来自
    * `oneasr-cli status --json`。壳只转发，不再自己判断目录够不够。
    */
+  ipcMain.handle('tasks:applyToAll', (_e, id: string) => jobs.applyToAll(id))
   ipcMain.handle('models:status', async () => {
     const r = await runCliJson<StatusSnapshot>(['status', '--json'], 20000)
     return r.ok ? r.data : null

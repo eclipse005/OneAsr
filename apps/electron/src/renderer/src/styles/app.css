@@ -192,6 +192,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border-radius: 10px; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column;
 }
+.chip-menu-sep { height: 1px; margin: 5px 2px; background: var(--line); }
 .chip-menu-item { text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; color: var(--text); }
 .chip-menu-item:hover { background: var(--row-hover); }
 .chip-menu-item.active { background: var(--accent-soft); color: var(--logo); font-weight: 650; }
@@ -271,8 +272,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .task-card .meta { color: var(--muted); font-size: 0.82rem; word-break: break-all; }
 .task-card .actions {
-  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  /* 三槽位定宽：图标天然等宽，于是整列严格对齐（空槽由 .icon-slot 占位） */
+  display: grid; grid-template-columns: repeat(3, 32px); gap: 6px; align-items: center;
 }
+.icon-slot { width: 32px; height: 32px; }
 /* 行内按钮压到 30px 高（基类 .btn 是固定 34px，padding 改不动它），
    状态药丸也定到 30px —— 两者顶边与文字基线在首行精确重合 */
 .task-card .actions .btn { height: 30px; padding: 0 12px; font-size: 0.82rem; }
@@ -286,6 +289,34 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
      免得用户以为状态也能点（另一个 AI 提的"混淆"问题，这里用边框区分而不是换形状） */
   background: var(--row-hover); color: var(--muted); border: 1px solid transparent;
 }
+/* 状态灯：药丸里的小圆点（用 currentColor，所以跟着状态色走） */
+.task-card .badge:not(.rank)::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; opacity: .75; flex: none;
+}
+/* 进行中：药丸轻微呼吸，一眼能看出"还在跑"（尊重用户的减少动效设置） */
+.task-card .badge.running { animation: badgePulse 1.6s ease-in-out infinite; }
+@keyframes badgePulse { 0%, 100% { opacity: 1; } 50% { opacity: .68; } }
+@media (prefers-reduced-motion: reduce) {
+  .task-card .badge.running { animation: none; }
+}
+/* 图标按钮：等宽 32，hover 才出底色；危险动作 hover 才转红 */
+.icon-btn {
+  width: 32px; height: 32px; flex: none; display: grid; place-items: center;
+  border-radius: 9px; border: 1px solid transparent; background: transparent;
+  color: var(--muted); transition: background .12s, color .12s, border-color .12s;
+}
+.icon-btn:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
+.icon-btn.primary { background: var(--accent); color: #fff; }
+.icon-btn.primary:hover:not(:disabled) { background: var(--logo); color: #fff; }
+.icon-btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+.icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+.icon-glyph { width: 15px; height: 15px; background: currentColor; }
+.icon-glyph.i-play { -webkit-mask: url('@assets/icons/play.svg') center / contain no-repeat; mask: url('@assets/icons/play.svg') center / contain no-repeat; }
+.icon-glyph.i-stop { -webkit-mask: url('@assets/icons/stop.svg') center / contain no-repeat; mask: url('@assets/icons/stop.svg') center / contain no-repeat; }
+.icon-glyph.i-folder { -webkit-mask: url('@assets/icons/folder.svg') center / contain no-repeat; mask: url('@assets/icons/folder.svg') center / contain no-repeat; }
+.icon-glyph.i-retry { -webkit-mask: url('@assets/icons/redownload.svg') center / contain no-repeat; mask: url('@assets/icons/redownload.svg') center / contain no-repeat; }
+.icon-glyph.i-trash { -webkit-mask: url('@assets/icons/trash.svg') center / contain no-repeat; mask: url('@assets/icons/trash.svg') center / contain no-repeat; }
 .badge.running { background: var(--accent-soft); color: var(--logo); border-color: #99f6e4; }
 .badge.done { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
 .badge.error { background: var(--danger-soft); color: var(--danger); border-color: #fecaca; }

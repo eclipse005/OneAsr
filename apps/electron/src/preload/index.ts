@@ -38,6 +38,7 @@ const api: OneAsrApi = {
   cancelTask: (id: string) => ipcRenderer.invoke('tasks:cancel', id),
   setTaskLanguage: (id: string, language: string) =>
     ipcRenderer.invoke('tasks:setLanguage', id, language),
+  applyTaskToAll: (id: string) => ipcRenderer.invoke('tasks:applyToAll', id),
   setTaskVocalSeparation: (id: string, on: boolean) =>
     ipcRenderer.invoke('tasks:setVocalSeparation', id, on),
   setTaskHotwordGroup: (id: string, groupId: string | null) =>

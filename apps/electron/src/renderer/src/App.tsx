@@ -378,6 +378,7 @@ export default function App() {
             onSetVocalSeparation={(id, on) =>
               void window.oneasr.setTaskVocalSeparation(id, on).then(setTasks)
             }
+            onApplyToAll={(id) => void window.oneasr.applyTaskToAll(id).then(setTasks)}
             onSetHotwordGroup={(id, groupId) =>
               void window.oneasr.setTaskHotwordGroup(id, groupId).then(setTasks)
             }

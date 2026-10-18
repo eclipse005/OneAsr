@@ -47,6 +47,8 @@ export interface OneAsrApi {
   startAll: () => Promise<StartResult>
   cancelTask: (id: string) => Promise<void>
   setTaskLanguage: (id: string, language: string) => Promise<TaskSnapshot[]>
+  /** 把这一行的语言/词库/人声分离推给其它行（运行中的行跳过） */
+  applyTaskToAll: (id: string) => Promise<TaskSnapshot[]>
   setTaskVocalSeparation: (id: string, on: boolean) => Promise<TaskSnapshot[]>
   setTaskHotwordGroup: (id: string, groupId: string | null) => Promise<TaskSnapshot[]>
   copyText: (text: string) => Promise<void>

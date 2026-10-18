@@ -180,6 +180,26 @@ export class JobManager extends EventEmitter {
       : { ok: false, reason: r.data.can_start.reason ?? undefined }
   }
 
+  /**
+   * 把这一行的运行参数（识别语言 / 词库 / 人声分离）推给所有其它行。
+   *
+   * 拖 20 个文件进来挨个点 20 次太蠢，而「顶部预设」解决不了"已经加进来了"这件事；
+   * 一次点击把当前行当作模板，比多选批量更省事（运行中的行锁定，跳过）。
+   */
+  applyToAll(id: string): TaskSnapshot[] {
+    const src = this.tasks.find((t) => t.id === id)
+    if (src) {
+      for (const t of this.tasks) {
+        if (t.id === src.id || t.status === 'running') continue
+        t.language = src.language
+        t.hotwordGroupId = src.hotwordGroupId
+        t.vocalSeparation = src.vocalSeparation
+      }
+      this.emitUpdate()
+    }
+    return this.list()
+  }
+
   cancel(id: string): void {
     const t = this.tasks.find((x) => x.id === id)
     if (!t) return

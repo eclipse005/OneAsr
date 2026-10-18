@@ -53,6 +53,38 @@ function ChipMenu({
 }
 
 /**
+ * 行内图标按钮：32×32 等宽，所以「开始 / 打开输出 / 重新转录」怎么变，右侧都是齐的。
+ * 图标来自仓库 assets/icons（与 GPUI 版同一份资产），用 CSS mask 上色 → 跟随主题。
+ * 纯图标必须配 title + aria-label，否则就成了猜谜。
+ */
+function IconButton({
+  icon,
+  label,
+  tone = 'ghost',
+  disabled,
+  onClick
+}: {
+  icon: 'play' | 'stop' | 'folder' | 'retry' | 'trash'
+  label: string
+  tone?: 'ghost' | 'primary' | 'danger'
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`icon-btn ${tone}`}
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className={`icon-glyph i-${icon}`} aria-hidden />
+    </button>
+  )
+}
+
+/**
  * 悬停弹卡（阶段耗时明细）。
  *
  * **必须 portal 到 body**：列表容器是 `.task-list{overflow:auto}`，卡片内部的绝对定位弹卡
@@ -97,6 +129,7 @@ export function TaskList({
   onOpen,
   onSetLanguage,
   onSetVocalSeparation,
+  onApplyToAll,
   onSetHotwordGroup,
   onCopyError
 }: {
@@ -111,6 +144,8 @@ export function TaskList({
   onOpen: (path: string) => void
   onSetLanguage: (id: string, language: string) => void
   onSetVocalSeparation: (id: string, on: boolean) => void
+  /** 把这一行的语言/词库/人声分离推给其它行 */
+  onApplyToAll: (id: string) => void
   onSetHotwordGroup: (id: string, groupId: string | null) => void
   onCopyError: (text: string) => void
 }) {
@@ -252,38 +287,45 @@ export function TaskList({
                   </span>
                 )}
 
+              {/* 动作区用图标按钮：等宽 → 各行控件严格对齐；文字说明交给 title / aria-label
+                  （图标是仓库里那 5 个 SVG，GPUI 版同一份资产，mask 上色跟着主题走） */}
               <div className="actions">
-                {task.status === 'running' ? (
-                  <button className="btn btn-ghost btn-danger-ghost" onClick={() => onCancel(task.id)}>
-                    {s.cancel}
-                  </button>
-                ) : task.status === 'queued' && task.queueRank != null ? (
-                  // 已经在队列里，主操作是「撤下来」，而不是再点一次开始
-                  <button className="btn btn-ghost btn-danger-ghost" onClick={() => onCancel(task.id)}>
-                    {s.cancelQueued}
-                  </button>
-                ) : doneWithOutput ? (
-                  // 跑完了：主操作是看结果，重跑降级（避免"手一滑把跑完的覆盖了"）
-                  <button className="btn btn-primary" onClick={() => onOpen(task.outputPath!)}>
-                    {s.openOutput}
-                  </button>
+                {/* 固定三槽位：主操作 / 次操作 / 删除。空槽也占位——所以不管这一行是
+                    待处理还是完成，右侧图标、状态药丸、参数 chip 的 x 坐标都一样，
+                    整列像表格一样对齐（文字按钮做不到这一点：宽度随文案变） */}
+                {task.status === 'running' || (task.status === 'queued' && task.queueRank != null) ? (
+                  <IconButton
+                    icon="stop"
+                    label={task.status === 'running' ? s.cancel : s.cancelQueued}
+                    tone="danger"
+                    onClick={() => onCancel(task.id)}
+                  />
                 ) : (
-                  <button className="btn btn-primary" onClick={() => onStart(task.id)}>
-                    {task.status === 'error' ? s.retry : s.start}
-                  </button>
+                  <IconButton
+                    icon={doneWithOutput ? 'folder' : task.status === 'error' ? 'retry' : 'play'}
+                    label={doneWithOutput ? s.openOutput : task.status === 'error' ? s.retry : s.start}
+                    tone="primary"
+                    onClick={() =>
+                      doneWithOutput ? onOpen(task.outputPath!) : onStart(task.id)
+                    }
+                  />
                 )}
-                {doneWithOutput && (
-                  <button className="btn btn-ghost" onClick={() => onStart(task.id)}>
-                    {s.retranscribe}
-                  </button>
+                {doneWithOutput ? (
+                  <IconButton
+                    icon="retry"
+                    label={s.retranscribe}
+                    onClick={() => onStart(task.id)}
+                  />
+                ) : (
+                  <span className="icon-slot" aria-hidden />
                 )}
-                <button
-                  className="btn btn-ghost btn-danger-ghost"
+                <IconButton
+                  icon="trash"
+                  label={s.remove}
+                  tone="danger"
                   disabled={locked}
                   onClick={() => onRemove(task.id)}
-                >
-                  {s.remove}
-                </button>
+                />
               </div>
               </div>
 
@@ -317,6 +359,17 @@ export function TaskList({
                       {o.label}
                     </button>
                   ))}
+                  <div className="chip-menu-sep" />
+                  <button
+                    type="button"
+                    className="chip-menu-item"
+                    onClick={() => {
+                      onApplyToAll(task.id)
+                      closeMenu()
+                    }}
+                  >
+                    {s.applyToAll}
+                  </button>
                 </ChipMenu>
               )}
 
@@ -345,6 +398,17 @@ export function TaskList({
                       {g.name}
                     </button>
                   ))}
+                  <div className="chip-menu-sep" />
+                  <button
+                    type="button"
+                    className="chip-menu-item"
+                    onClick={() => {
+                      onApplyToAll(task.id)
+                      closeMenu()
+                    }}
+                  >
+                    {s.applyToAll}
+                  </button>
                 </ChipMenu>
               )}
             </motion.div>
