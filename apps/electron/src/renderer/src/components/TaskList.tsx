@@ -268,13 +268,12 @@ export function TaskList({
                     className={`row-chip sep-chip ${task.vocalSeparation ? 'is-on' : ''}`}
                     disabled={locked}
                     title={s.vocalSep}
+                    // 开关状态**只靠颜色**表达（开=主题色底+粗体）：加个 ✓ 的话，
+                    // 关的时候那块位置空着更难看；而且文案不变成等宽本来就不需要占位。
+                    // 无障碍层面用 aria-pressed 说清楚，不依赖视觉。
+                    aria-pressed={!!task.vocalSeparation}
                     onClick={() => onSetVocalSeparation(task.id, !task.vocalSeparation)}
                   >
-                    {/* ✓ 占一个固定宽度：开关前后 chip 等宽，整簇控件不会被推着晃
-                        （英文 "Vocal separation" 这种长标签也不会被固定宽度截断） */}
-                    <span className="sep-check" aria-hidden>
-                      {task.vocalSeparation ? '✓' : ''}
-                    </span>
                     {s.vocalSep}
                   </button>
                 </div>

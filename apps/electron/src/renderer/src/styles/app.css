@@ -173,8 +173,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    竖直对齐，看起来像一张表格；开关 chip 不定宽（英文 Vocal separation 会被截断）。 */
 .row-chip.lang-chip { width: 94px; justify-content: center; }
 .row-chip.hw-chip { width: 94px; justify-content: center; }
-.row-chip.sep-chip { gap: 4px; }
-.row-chip .sep-check { width: 13px; flex: none; text-align: center; }
 .row-chip .caret { color: var(--muted); font-size: 0.6rem; line-height: 1; }
 .row-chip .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 人声分离是个开关：关着要看得出来"没开"（灰虚线），开着要一眼看到（主题色 + ✓） */
