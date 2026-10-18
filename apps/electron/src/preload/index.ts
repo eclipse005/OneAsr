@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { OneAsrApi } from './api'
 import type {
   DownloadState,
@@ -10,6 +10,20 @@ import type {
 
 const api: OneAsrApi = {
   platform: process.platform,
+  /**
+   * 拖进来的文件 → 绝对路径。
+   *
+   * Electron 32 起**移除了非标准的 `File.path`**（渲染层再也读不到拖入文件的路径），
+   * 替代品就是 preload 里的 `webUtils.getPathForFile`。之前这里没有它，
+   * 拖放拿到的一直是 undefined —— 拖进去只会弹「未选择文件」。
+   */
+  getPathForFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings: Settings) => ipcRenderer.invoke('settings:save', settings),

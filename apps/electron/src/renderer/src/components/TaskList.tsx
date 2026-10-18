@@ -28,7 +28,12 @@ function ChipMenu({
       if ((e.target as HTMLElement).closest('.chip-menu')) return
       onClose()
     }
-    const onMove = (): void => onClose()
+    // 菜单自己滚动（词组多时 max-height 260 + overflow:auto）不该把自己关掉：
+    // 捕获阶段的 scroll 事件 target 就是那个可滚动的菜单本体，排除它
+    const onMove = (e: Event): void => {
+      if ((e.target as HTMLElement | null)?.closest?.('.chip-menu')) return
+      onClose()
+    }
     window.addEventListener('mousedown', onDown, true)
     window.addEventListener('scroll', onMove, true)
     window.addEventListener('resize', onMove)

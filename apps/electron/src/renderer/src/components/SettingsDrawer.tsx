@@ -141,6 +141,8 @@ export function SettingsDrawer({
   /** 没装的模型；下载中的那条也在里面（它本来就是缺的） */
   // 缺哪些模型由 CLI 的 catalog 说（目录名也来自 Rust，壳不再硬编码）
   const missingModels = (status?.catalog ?? []).filter((m) => !m.ready)
+  // 只有"进行中"才算忙碌：终态（完成/失败/取消）不能让其它模型的按钮一直禁用
+  const downloading = download?.state === 'downloading' || download?.state === 'verifying'
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   useEffect(() => {
     setActiveTab(initialTab)
@@ -365,7 +367,7 @@ export function SettingsDrawer({
                         return (
                           <div className="dl-row" key={m.id}>
                             <span className="dl-name">{m.id}</span>
-                            {active && (
+                            {active && downloading && (
                               <span className="dl-progress">
                                 <span className="dl-bar">
                                   <i style={{ width: `${pct}%` }} />
@@ -377,7 +379,7 @@ export function SettingsDrawer({
                                 </span>
                               </span>
                             )}
-                            {active ? (
+                            {active && downloading ? (
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"
@@ -389,10 +391,10 @@ export function SettingsDrawer({
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"
-                                disabled={!!download}
+                                disabled={downloading}
                                 onClick={() => onDownloadStart(m.id)}
                               >
-                                {download ? s.downloading : s.download}
+                                {downloading ? s.downloading : s.download}
                               </button>
                             )}
                           </div>

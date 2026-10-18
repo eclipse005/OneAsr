@@ -285,15 +285,20 @@ function registerIpc(): void {
 
   ipcMain.handle('dialog:pickFiles', async () => {
     try {
+      // 过滤器也问 CLI 要扩展名：这里曾经硬编码 11 个，比 core 少 opus/wma/flv/ts/m4v/
+      // mpeg/mpg/wmv/3gp（拖放能进、对话框却选不到）。拿不到就退回"全部"，不猜一份表。
+      const status = await runCliJson<StatusSnapshot>(['status', '--json'], 20000)
+      const exts = status.ok ? (status.data?.media_exts ?? []) : []
+      const filters =
+        exts.length > 0
+          ? [
+              { name: 'Media', extensions: exts },
+              { name: 'All', extensions: ['*'] }
+            ]
+          : [{ name: 'All', extensions: ['*'] }]
       const r = await dialog.showOpenDialog(mainWindow!, {
         properties: ['openFile', 'multiSelections'],
-        filters: [
-          {
-            name: 'Media',
-            extensions: ['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg', 'mp4', 'mkv', 'mov', 'webm', 'avi']
-          },
-          { name: 'All', extensions: ['*'] }
-        ]
+        filters
       })
       return { ok: true as const, paths: r.canceled ? [] : r.filePaths }
     } catch (e) {

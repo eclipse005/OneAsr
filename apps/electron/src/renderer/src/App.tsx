@@ -177,6 +177,8 @@ export default function App() {
   useEffect(() => {
     if (downloadPhase !== 'done' && downloadPhase !== 'error') return
     if (downloadPhase === 'done') notify('success', s.downloadDone)
+    else if (download?.message === 'cancelled') notify('info', s.cancelled)
+    else if (download?.message) notify('error', `${s.downloadFailed}：${download.message}`)
     else notify('error', s.downloadFailed)
     void refreshModels()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -262,8 +264,15 @@ export default function App() {
     setDragging(false)
     // 过滤与提示都在 addFiles 里统一做（对话框与拖放走同一条路）
     const files = Array.from(e.dataTransfer.files || [])
+    // Electron 32 起 File.path 没了：必须走 preload 的 webUtils.getPathForFile
+    // （旧写法拿到的一直是 undefined → 拖放只会弹「未选择文件」）
     const paths = files
-      .map((f) => (f as File & { path?: string }).path)
+      .map(
+        (f) =>
+          window.oneasr.getPathForFile?.(f) ||
+          (f as File & { path?: string }).path ||
+          ''
+      )
       .filter((p): p is string => !!p)
     if (paths.length) void addFiles(paths)
     else notify('warn', s.noFiles)

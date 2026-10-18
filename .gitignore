@@ -8,6 +8,10 @@
 !/bin/.gitkeep
 # Downloaded ASR/aligner weights (multi-GB; never commit)
 /models
+# 本地构建/拷贝到运行目录的 CLI（约 62 MB）：Electron 壳与 GPUI 都直接跑它，
+# 但它是产物不是源码，留在忽略里，免得 git add . 把它带进来
+/oneasr-cli.exe
+/oneasr-cli
 # CUDA DLLs installed next to the exe / into dll/
 /dll
 # User preferences (local machine paths)

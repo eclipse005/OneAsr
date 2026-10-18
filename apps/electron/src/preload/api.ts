@@ -9,6 +9,9 @@ import type {
   HotwordStore
 } from '../shared/types'
 
+/** 拖放/选择拿到的文件 → 绝对路径（Electron 32+ 只能用 webUtils.getPathForFile） */
+export type GetPathForFile = (file: File) => string
+
 export interface DialogFilesResult {
   ok: boolean
   paths: string[]
@@ -23,6 +26,8 @@ export interface DialogPathResult {
 export interface OneAsrApi {
   /** process.platform：win32 / darwin / linux —— 窗口按钮归系统还是自绘按它分。 */
   platform: string
+  /** 拖放取路径（Electron 32+ 用 webUtils.getPathForFile；File.path 已被移除） */
+  getPathForFile: (file: File) => string
   getAppInfo: () => Promise<AppInfo>
   getSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
