@@ -22,7 +22,10 @@ export function runCliJson<T>(args: string[], timeoutMs = 60000): Promise<CliRes
     try {
       child = spawn(cli, args, {
         cwd: DEFAULT_APP_ROOT,
-        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT }
+        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT },
+        // Windows 上不加这个每次 spawn 都会闪一个控制台窗口
+        //（probe/status/transcribe/download 都走这里）
+        windowsHide: true
       })
     } catch (error) {
       logError(`cli spawn failed: ${cli} ${args.join(' ')}`, error)

@@ -48,7 +48,8 @@ export class DownloadManager extends EventEmitter {
     try {
       child = spawn(cli, args, {
         cwd: DEFAULT_APP_ROOT,
-        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT }
+        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT },
+        windowsHide: true
       })
     } catch (error) {
       logError(`download spawn failed: ${cli}`, error)
