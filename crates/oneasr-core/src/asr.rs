@@ -206,6 +206,25 @@ impl AsrStage {
             (Self::Exporting, UiLang::En) => "Exporting subtitles",
         }
     }
+
+    /// 机器可读的稳定标识（`--events=json` 的 `key` 字段）。
+    ///
+    /// 与 [`Self::label`] 分工：label 跟着界面语言变，key 永远是同一个英文蛇形名，
+    /// 上层按它做状态机 / 图标映射，不去解析人读文案。**改名等于改接口**——加阶段
+    /// 可以，别顺手改已有阶段的名字。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Converting => "converting",
+            Self::Separating => "separating",
+            Self::Planning => "planning",
+            Self::RoughTranscribing => "rough_transcribing",
+            Self::LoadingAsr => "loading_asr",
+            Self::Transcribing => "transcribing",
+            Self::LoadingAligner => "loading_aligner",
+            Self::Aligning => "aligning",
+            Self::Exporting => "exporting",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -656,7 +675,10 @@ struct VadPlan {
 /// TXT 不吃时间轴（见 [`crate::txt`]），所以只勾 TXT 的任务连对齐模型都不用校验：
 /// 打轴产物在这条路上没有任何消费者。CLI 的 words-json / timeline sidecar 是例外
 /// ——它们要的正是测量结果。
-fn needs_alignment(settings: &Settings, export: &ProcessExportOptions) -> bool {
+///
+/// **公开**是因为它同时是「这一趟会不会有加载对齐模型 / 打轴两个阶段」的唯一判据：
+/// CLI 的 `--events=json` 阶段编号按它算，命令行不再重抄一遍条件。
+pub fn needs_alignment(settings: &Settings, export: &ProcessExportOptions) -> bool {
     settings.output_srt
         || settings.output_ass
         || export.words_json.is_some()
@@ -1749,6 +1771,43 @@ mod tests {
         assert_eq!(AsrStage::Transcribing.label(UiLang::Zh), "转写");
         assert_eq!(AsrStage::Aligning.label(UiLang::Zh), "打轴");
         assert!(timing.has_breakdown());
+    }
+
+    /// 机器可读 key：9 个阶段各一个、互不相同、全是小写蛇形。
+    ///
+    /// 断骨锚点：把 `key()` 里任意两个分支写成同一个字符串（或改掉一个已有的名字），
+    /// 本用例立刻变红 —— 上层按 key 做状态机，重名 / 改名都是接口破坏。
+    #[test]
+    fn every_stage_has_a_distinct_machine_key() {
+        let keys: Vec<&str> = [
+            AsrStage::Converting,
+            AsrStage::Separating,
+            AsrStage::Planning,
+            AsrStage::RoughTranscribing,
+            AsrStage::LoadingAsr,
+            AsrStage::Transcribing,
+            AsrStage::LoadingAligner,
+            AsrStage::Aligning,
+            AsrStage::Exporting,
+        ]
+        .into_iter()
+        .map(AsrStage::key)
+        .collect();
+        assert_eq!(keys.len(), 9);
+        for key in &keys {
+            assert!(
+                !key.is_empty()
+                    && key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    && !key.starts_with('_'),
+                "key 必须是英文小写蛇形名: {key}"
+            );
+        }
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len(), "阶段 key 不能重名: {keys:?}");
+        assert_eq!(AsrStage::Transcribing.key(), "transcribing");
+        assert_eq!(AsrStage::RoughTranscribing.key(), "rough_transcribing");
     }
 
     #[test]

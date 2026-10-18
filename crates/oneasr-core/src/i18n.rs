@@ -628,6 +628,8 @@ Usage:
   oneasr-cli render     --timeline <{stem}.timeline.json> [options]
   oneasr-cli align      --audio <media> --text <transcript> [options]
   oneasr-cli download   --model <id> [--app-root <dir>] [--data-root <dir>]
+  oneasr-cli status     [--app-root <dir>] [--data-root <dir>] [--json]
+  oneasr-cli probe      --input <media> [--json]
 
 Commands:
   transcribe   Full pipeline → {data-root}/output/{stem}.srt by default  (alias: run, pipeline)
@@ -642,6 +644,50 @@ Commands:
   download     Download one model (ASR / aligner / Demucs / hotword) into
                {data-root}/models/<install-layout name>; already complete files
                are never downloaded twice
+  status       Machine-readable state of this install: roots, the selected
+               models, readiness (the same check_*_model_dir the pipeline uses),
+               all 8 catalog entries, and whether a run can start
+  probe        Size + duration + audio/video kind of one media file
+
+status options:
+  --app-root <dir>         App root (install dir; default: this exe's install dir)
+  --data-root <dir>        Data dir holding settings.json / models/ (default: --app-root)
+  --json                   Print ONE JSON object on stdout; human-readable lines go
+                           to stderr. Shape (key order is not part of the contract):
+                             version, app_root, data_root, models_root, output_dir,
+                             backend, language, ui_language,
+                             models: {asr, aligner, demucs, sensevoice}
+                                     each {id, dir, ready, error},
+                             catalog: [{id, kind, dir, ready}]  (all 8 entries;
+                                      kind = asr | aligner | demucs | sensevoice),
+                             can_start: {ok, reason}
+                           ready is the one rule the pipeline uses; dir is resolved
+                           exactly like transcribe resolves it; language / ui_language
+                           are the resolved values (never \"system\").
+                           Exits 0 even when can_start.ok is false: the verdict is
+                           the field, not the exit code
+  --language <code>        This row recognizes as <code>
+  --vocal-separation       This row runs vocal separation (Demucs becomes required)
+  --hotword-group <id|name>
+                           This row uses that saved hotword group
+  --hotwords <list>        This row uses this inline word list
+  --txt / --ass / --no-srt Same flags with the SAME meaning as transcribe: turn
+                           TXT / ASS on, turn SRT off. Nothing is implied about the
+                           other formats — SRT stays on unless --no-srt says
+                           otherwise. Without any override the verdict is the global
+                           settings.json one; with them it answers \"can THIS row
+                           start?\", which is what a per-row shell gate asks
+
+probe options:
+  --input <path>           Media file (required)
+  --json                   Print ONE JSON object on stdout:
+                             {\"input\":\"...\",\"size_bytes\":412460,
+                              \"duration_sec\":9.35,\"kind\":\"audio\"}
+                           duration_sec is null when probing fails (no ffmpeg,
+                           unreadable container); kind is audio | video from the
+                           extension table in core. A file whose metadata cannot be
+                           read exits non-zero with a bilingual reason on stderr.
+                           Without --json: three human-readable lines
 
 transcribe options:
   --input <path>           Media file (required)
@@ -679,6 +725,8 @@ transcribe options:
                            instead of a saved group
   --sensevoice-model-dir <dir>
                            Directory holding the SenseVoiceSmall hotword model
+  --events=json            Machine-readable progress on stdout; see the events
+                           section below. Off by default
 
 asr-chunk options:
   --wav <path>             16 kHz mono wav (required)
@@ -707,6 +755,8 @@ align options:
   --no-srt                 Suppress the .srt file (requires --txt or --ass)
   --beautify               Polish finished cues (punctuation; spaces beside Han
                            and English or digits, not beside punctuation)
+  --events=json            Machine-readable progress on stdout; see the events
+                           section below. Off by default
 
 render options:
   --timeline <path>        Measured timeline written by transcribe (required)
@@ -750,6 +800,26 @@ download progress (all on one line each; wrapped here for width):
                                       model goes straight from verifying to done
                            error      exits non-zero, reason on stderr (bilingual)
 
+events (--events=json, transcribe / align):
+  stdout                   one JSON object per line; the human-readable [stage]
+                           lines stay on stderr. Events, in order:
+                             {\"event\":\"stage\",\"key\":\"transcribing\",\"label\":\"Transcribing\",
+                              \"index\":6,\"total\":9,\"pct\":67}
+                               one per stage change. key is a stable English id:
+                               converting / separating / planning / rough_transcribing /
+                               loading_asr / transcribing / loading_aligner /
+                               aligning / exporting. index counts from 1; total counts
+                               only the stages THIS run will have (no separation -> no
+                               separating; no word list -> no rough_transcribing);
+                               pct = index / total, rounded to an integer
+                             {\"event\":\"timing\",\"key\":\"transcribing\",\"label\":\"Transcribing\",\"ms\":587}
+                               per-stage wall time, emitted at the end of the run
+                             {\"event\":\"total\",\"ms\":12828}
+                             {\"event\":\"done\",\"output\":\"D:\\...\\x.srt\"}   success close-out
+                             {\"event\":\"error\",\"message\":\"...\"}    failure; exits non-zero
+                           Off by default: stdout stays empty and existing callers
+                           see exactly what they saw before
+
 Env:
   ONEASR_DATA_DIR=<dir>    Override the data directory (same as --data-root)
   ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
@@ -767,6 +837,8 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
   oneasr-cli render     --timeline <{stem}.timeline.json> [选项]
   oneasr-cli align      --audio <音视频> --text <文稿> [选项]
   oneasr-cli download   --model <id> [--app-root <目录>] [--data-root <目录>]
+  oneasr-cli status     [--app-root <目录>] [--data-root <目录>] [--json]
+  oneasr-cli probe      --input <音视频> [--json]
 
 子命令：
   transcribe   完整流水线，默认输出到 {data-root}/output/{stem}.srt（别名：run、pipeline）
@@ -778,6 +850,45 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
                读 {stem}.timeline.json，再写一遍字幕
   download     下载一个模型（识别 / 对齐 / 人声分离 / 热词）到
                {data-root}/models/<安装布局目录名>；已装好且校验通过的不重下
+  status       这份安装 + 这份设置的机器可读快照：根目录、选中的模型、就绪
+               （与管线同一套 check_*_model_dir）、8 条可选模型、能不能开跑
+  probe        一个媒体文件的尺寸 + 时长 + 音频/视频类型
+
+status 选项：
+  --app-root <目录>        应用目录（与其它子命令同一个意思；默认取本程序安装目录）
+  --data-root <目录>       数据目录（放 settings.json 与 models/；默认取 --app-root）
+  --json                   stdout 只输出一个 JSON 对象；人读行一律走 stderr。形状
+                           （键名是契约，顺序不保证）：
+                             version、app_root、data_root、models_root、output_dir、
+                             backend、language、ui_language、
+                             models: {asr, aligner, demucs, sensevoice}
+                                     各是 {id, dir, ready, error}，
+                             catalog: [{id, kind, dir, ready}]（8 条全列；
+                                      kind = asr | aligner | demucs | sensevoice），
+                             can_start: {ok, reason}
+                           ready 用管线那唯一一条判据；dir 与 transcribe 解析出来的
+                           完全一致；language / ui_language 都是解析后的值（不会是
+                           system）。can_start.ok = false 时退出码仍是 0 —— 结论在
+                           字段里，不在退出码里
+  --language <代码>        这一行按 <代码> 识别
+  --vocal-separation       这一行做人声分离（于是要求 Demucs 就位）
+  --hotword-group <id|组名>
+                           这一行用这个热词组
+  --hotwords <词表>        这一行用这份即席词表
+  --txt / --ass / --no-srt 与 transcribe `同义` 的同名旗标：打开 TXT / ASS、关掉
+                           SRT，其余格式不受影响（不给 --no-srt，SRT 就还开着）。
+                           一个开关都不给 → 全局 settings.json 的结论；给了 → 回答
+                           「这一行能不能起」，逐行门禁问的正是这个
+
+probe 选项：
+  --input <路径>           音视频文件（必填）
+  --json                   stdout 只输出一个 JSON 对象：
+                             {\"input\":\"...\",\"size_bytes\":412460,
+                              \"duration_sec\":9.35,\"kind\":\"audio\"}
+                           duration_sec 探不到时是 null（缺 ffmpeg、容器读不了）；
+                           kind 只有 audio | video 两个值，表在 core。读不到文件
+                           元数据时非 0 退出，原因双语写 stderr。
+                           不带 --json：人读三行
 
 transcribe 选项：
   --input <路径>           音视频文件（必填）
@@ -810,6 +921,8 @@ transcribe 选项：
   --hotwords <词表>        直接给热词表（逗号 / 换行分隔），不经过热词组
   --sensevoice-model-dir <目录>
                            存放 SenseVoiceSmall 热词模型的目录
+  --events=json            机器可读进度走 stdout，格式见下面「事件流」一节；
+                           默认关闭
 
 asr-chunk 选项：
   --wav <路径>             16 kHz 单声道 wav（必填）
@@ -835,6 +948,7 @@ align 选项：
   --ass                    额外写出 {stem}.ass（卡拉OK）
   --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
   --beautify               成稿字幕美化（标点；汉字与英文、数字之间加空格，标点旁边不加）
+  --events=json            机器可读进度走 stdout，格式见下面「事件流」一节；默认关闭
 
 render 选项：
   --timeline <路径>        transcribe 写出的已测时间轴（必填）
@@ -874,6 +988,23 @@ download 进度（每行都是一整行，这里为排版折行）：
                            verifying  正在检查已装文件
                            done       校验通过；已经装好的模型会从 verifying 直接到 done
                            error      退出码非 0，原因在 stderr（双语）
+
+事件流（--events=json，transcribe / align）：
+  stdout                   每行一个 JSON 对象；人读的 [阶段] 行仍走 stderr。事件按顺序：
+                             {\"event\":\"stage\",\"key\":\"transcribing\",\"label\":\"转写\",
+                              \"index\":6,\"total\":9,\"pct\":67}
+                               阶段变化时一条。key 是稳定的英文标识：converting /
+                               separating / planning / rough_transcribing /
+                               loading_asr / transcribing / loading_aligner /
+                               aligning / exporting。index 从 1 数；total 只算这一趟
+                               真会出现的阶段（没人声分离就不含 separating，没热词组
+                               就不含 rough_transcribing）；pct = index / total 四舍五入
+                             {\"event\":\"timing\",\"key\":\"transcribing\",\"label\":\"转写\",\"ms\":587}
+                               每个阶段的耗时，收尾时发出
+                             {\"event\":\"total\",\"ms\":12828}
+                             {\"event\":\"done\",\"output\":\"D:\\...\\x.srt\"}   成功收尾
+                             {\"event\":\"error\",\"message\":\"...\"}    失败收尾，退出码非 0
+                           默认关闭：stdout 保持空，现有调用方看到的行为逐字不变
 
 环境变量：
   ONEASR_DATA_DIR=<目录>   覆盖数据目录（等价于 --data-root）
@@ -1313,6 +1444,125 @@ fn human_bytes(n: u64) -> String {
         format!("{:.0} KB", x / KB)
     } else {
         format!("{n} B")
+    }
+}
+
+// ─── CLI：status / probe（机器可读优先，人读走 stderr） ──────────────
+//
+// 这两个子命令是给上层壳用的：它只解析 stdout 上的 JSON，人读摘要一律走 stderr
+// （与 download 同一约定）。所以下面的文案只服务「没有 --json 时」那一眼。
+
+/// `=== OneAsr CLI · 状态 ===` / `=== OneAsr CLI · status ===`。
+pub fn cli_status_banner() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "=== OneAsr CLI · 状态 ===",
+        UiLang::En => "=== OneAsr CLI · status ===",
+    }
+}
+
+/// 见 [`CLI_KV_INPUT`]：版本号（跟 Cargo.toml 的 workspace 版本走）。
+pub const CLI_KV_VERSION: Str = Str::new("版本:    ", "version: ");
+/// 见 [`CLI_KV_INPUT`]：模型根目录（`{data-root}/models`）。
+pub const CLI_KV_MODELS_ROOT: Str = Str::new("模型库:  ", "models:  ");
+/// 见 [`CLI_KV_INPUT`]：推理后端。
+pub const CLI_KV_BACKEND: Str = Str::new("后端:    ", "backend: ");
+/// 见 [`CLI_KV_INPUT`]：识别语言。
+pub const CLI_KV_LANGUAGE: Str = Str::new("语言:    ", "language:");
+/// 见 [`CLI_KV_INPUT`]：界面语言（已解析成 zh / en，不会是 system）。
+pub const CLI_KV_UI_LANGUAGE: Str = Str::new("界面语言:", "ui:      ");
+/// 见 [`CLI_KV_INPUT`]：开跑门禁的结论。
+pub const CLI_KV_CAN_START: Str = Str::new("开跑:    ", "can_start:");
+
+/// `[模型]` / `[models]` —— status 人读输出的模型小节标题。
+pub fn cli_status_models_header() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "[模型]",
+        UiLang::En => "[models]",
+    }
+}
+
+/// `[可选模型]` / `[catalog]`。
+pub fn cli_status_catalog_header() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => "[可选模型]",
+        UiLang::En => "[catalog]",
+    }
+}
+
+/// 就绪 / 未就绪标签（模型行与 catalog 行共用一份）。
+fn ready_tag(ready: bool) -> &'static str {
+    match (ready, ui_lang()) {
+        (true, UiLang::Zh) => "就绪  ",
+        (true, UiLang::En) => "ready ",
+        (false, UiLang::Zh) => "未就绪",
+        (false, UiLang::En) => "not ready",
+    }
+}
+
+/// 一行模型槽位：`asr       就绪  Qwen3-ASR-0.6B-hf  D:\…`。
+///
+/// 未就绪时打印**原因**而不是目录 —— 那才是要修的东西；目录在 JSON 里，
+/// 上层要看随时能拿（人读这一眼只回答「缺什么」）。
+pub fn cli_model_row(
+    role: &str,
+    id: &str,
+    dir: &std::path::Path,
+    ready: bool,
+    error: Option<&str>,
+) -> String {
+    match (ready, error) {
+        (false, Some(e)) => format!("{role:<10} {} {id}  {e}", ready_tag(false)),
+        _ => format!("{role:<10} {} {id}  {}", ready_tag(ready), dir.display()),
+    }
+}
+
+/// catalog 的一行：`asr       就绪  Qwen3-ASR-0.6B-hf`。
+pub fn cli_catalog_row(kind: &str, id: &str, ready: bool) -> String {
+    format!("{kind:<10} {} {id}", ready_tag(ready))
+}
+
+/// 门禁结论：`可以开跑` / `开不了跑：{reason}`。
+pub fn cli_can_start_line(ok: bool, reason: Option<&str>) -> String {
+    match (ui_lang(), ok, reason) {
+        (UiLang::Zh, true, _) => "可以开跑".to_string(),
+        (UiLang::Zh, false, Some(r)) => format!("开不了跑：{r}"),
+        (UiLang::Zh, false, None) => "开不了跑".to_string(),
+        (UiLang::En, true, _) => "ready to start".to_string(),
+        (UiLang::En, false, Some(r)) => format!("cannot start: {r}"),
+        (UiLang::En, false, None) => "cannot start".to_string(),
+    }
+}
+
+/// 见 [`CLI_KV_INPUT`]：文件大小。
+pub const CLI_KV_SIZE: Str = Str::new("大小:    ", "size:    ");
+/// 见 [`CLI_KV_INPUT`]：媒体时长。
+pub const CLI_KV_DURATION: Str = Str::new("时长:    ", "duration:");
+/// 见 [`CLI_KV_INPUT`]：媒体类型（音频 / 视频）。
+pub const CLI_KV_KIND: Str = Str::new("类型:    ", "kind:    ");
+
+/// 时长：`9.35 s`；探测不到时是「未知」/ `unknown`（不是 0）——「探不到」
+/// 与「真的是 0 秒」必须能分开。
+pub fn cli_probe_duration(secs: Option<f64>) -> String {
+    match (secs, ui_lang()) {
+        (Some(s), _) => format!("{s:.2} s"),
+        (None, UiLang::Zh) => "未知".to_string(),
+        (None, UiLang::En) => "unknown".to_string(),
+    }
+}
+
+/// 读不到文件信息（不存在 / 无权限）：非 0 退出，原因双语。
+pub fn cli_probe_failed(path: &std::path::Path, e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("读不到文件信息: {}（{e}）", path.display()),
+        UiLang::En => format!("cannot read file metadata: {} ({e})", path.display()),
+    }
+}
+
+/// `--events=<x>` 只认 `json`；别的值报用法错误，不猜默认。
+pub fn cli_events_unknown(raw: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("--events 只支持 json，收到: {raw}"),
+        UiLang::En => format!("--events only supports json, got: {raw}"),
     }
 }
 
@@ -1915,6 +2165,57 @@ mod tests {
         }
     }
 
+    /// status / probe 的人读文案：两种语言都成对存在，且键值行与现有 cli_kv 同款。
+    #[test]
+    fn cli_status_and_probe_helpers_follow_the_ui_language() {
+        let path = std::path::Path::new("C:/tmp/x");
+        with_ui_lang(UiLang::Zh, || {
+            assert_eq!(cli_status_banner(), "=== OneAsr CLI · 状态 ===");
+            assert_eq!(cli_kv(CLI_KV_VERSION, path), "版本:    C:/tmp/x");
+            assert_eq!(cli_can_start_line(true, None), "可以开跑");
+            assert_eq!(
+                cli_can_start_line(false, Some("缺模型")),
+                "开不了跑：缺模型"
+            );
+            let not_ready = cli_model_row("asr", "m", path, false, Some("缺文件"));
+            assert!(
+                not_ready.starts_with("asr")
+                    && not_ready.contains("未就绪")
+                    && not_ready.ends_with("缺文件"),
+                "{not_ready}"
+            );
+            let ready = cli_model_row("asr", "m", path, true, None);
+            assert!(
+                ready.contains("就绪") && ready.contains("C:/tmp/x"),
+                "{ready}"
+            );
+            assert!(cli_catalog_row("asr", "m", true).contains("就绪"));
+            assert_eq!(cli_probe_duration(None), "未知");
+            assert_eq!(cli_probe_duration(Some(9.35)), "9.35 s");
+            assert_eq!(
+                cli_probe_failed(path, "os error 2"),
+                "读不到文件信息: C:/tmp/x（os error 2）"
+            );
+            assert_eq!(cli_events_unknown("xml"), "--events 只支持 json，收到: xml");
+        });
+        with_ui_lang(UiLang::En, || {
+            assert_eq!(cli_status_banner(), "=== OneAsr CLI · status ===");
+            assert_eq!(cli_kv(CLI_KV_VERSION, path), "version: C:/tmp/x");
+            assert_eq!(cli_can_start_line(true, None), "ready to start");
+            assert_eq!(
+                cli_can_start_line(false, Some("missing")),
+                "cannot start: missing"
+            );
+            let row = cli_model_row("asr", "m", path, true, None);
+            assert!(row.contains("ready") && row.contains("C:/tmp/x"), "{row}");
+            assert_eq!(cli_probe_duration(None), "unknown");
+            assert_eq!(
+                cli_events_unknown("xml"),
+                "--events only supports json, got: xml"
+            );
+        });
+    }
+
     #[test]
     fn cli_str_table_has_no_single_sided_entries() {
         let table = [
@@ -1927,6 +2228,15 @@ mod tests {
             ("CLI_KV_MODEL", CLI_KV_MODEL),
             ("CLI_KV_TARGET", CLI_KV_TARGET),
             ("CLI_KV_TIMELINE", CLI_KV_TIMELINE),
+            ("CLI_KV_VERSION", CLI_KV_VERSION),
+            ("CLI_KV_MODELS_ROOT", CLI_KV_MODELS_ROOT),
+            ("CLI_KV_BACKEND", CLI_KV_BACKEND),
+            ("CLI_KV_LANGUAGE", CLI_KV_LANGUAGE),
+            ("CLI_KV_UI_LANGUAGE", CLI_KV_UI_LANGUAGE),
+            ("CLI_KV_CAN_START", CLI_KV_CAN_START),
+            ("CLI_KV_SIZE", CLI_KV_SIZE),
+            ("CLI_KV_DURATION", CLI_KV_DURATION),
+            ("CLI_KV_KIND", CLI_KV_KIND),
             ("CLI_ASR_TEXT_BEGIN", CLI_ASR_TEXT_BEGIN),
             ("CLI_ASR_TEXT_END", CLI_ASR_TEXT_END),
             ("CLI_HOTWORD_INLINE", CLI_HOTWORD_INLINE),

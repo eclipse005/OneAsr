@@ -30,7 +30,7 @@ pub use asr::{
     AsrStage, ProcessExportOptions, StageClock, StageTiming, StageUpdate, TaskTiming,
     TranscriptInput, check_aligner_model_dir, check_asr_model_dir, check_demucs_model_dir,
     check_sensevoice_model_dir, format_process_ms, invalidate_all_model_checks,
-    invalidate_model_check, is_model_ready, process_media_file_with_export,
+    invalidate_model_check, is_model_ready, needs_alignment, process_media_file_with_export,
     process_media_file_with_progress, process_media_file_with_provider,
     process_media_file_with_transcript, process_media_file_with_transcript_export,
 };
@@ -44,7 +44,8 @@ pub use lang::{
     SOURCE_LANGUAGES, SourceLanguage, normalize_source_language, source_language_by_id,
 };
 pub use media::{
-    FfmpegSource, ffmpeg_source, probe_duration_async, probe_duration_sec, resolve_app_root,
+    FfmpegSource, MediaKind, VIDEO_EXTS, ffmpeg_source, is_video_ext, media_kind,
+    probe_duration_async, probe_duration_sec, resolve_app_root,
 };
 pub use model::{
     DownloadHandle, DownloadOutcome, DownloadProgress, DownloadState, HTDEMUCS_FT, ModelId,

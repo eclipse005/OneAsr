@@ -27,6 +27,20 @@ pub enum ModelKind {
     Hotword,
 }
 
+impl ModelKind {
+    /// 机器可读的稳定标识（`status --json` 的 catalog `kind` 字段）。
+    ///
+    /// 与枚举名分开写死：接口上的值不跟着 Rust 标识符改名漂。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Asr => "asr",
+            Self::Align => "aligner",
+            Self::Demucs => "demucs",
+            Self::Hotword => "sensevoice",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelId {
     Qwen3Asr06B,
@@ -125,6 +139,22 @@ impl ModelId {
             other => other,
         }
     }
+
+    /// 全部 8 个 catalog 条目 —— **唯一**的完整清单。
+    ///
+    /// 顺序 = `status --json` 的 catalog 顺序（同尺寸的 fp16 / int8 相邻，再对齐器、
+    /// 人声分离、热词）。新增模型必须加在这里：清单只写一份，界面清单、status 与
+    /// 下载解析的完整性测试都从它枚举。
+    pub const ALL: [ModelId; 8] = [
+        Self::Qwen3Asr06B,
+        Self::Qwen3Asr06BInt8,
+        Self::Qwen3Asr17B,
+        Self::Qwen3Asr17BInt8,
+        Self::QwenAlign06B,
+        Self::OmniAsrCtc300M,
+        Self::HtdemucsFt,
+        Self::SenseVoiceSmall,
+    ];
 
     pub const ASR_CHOICES: [ModelId; 2] = [ModelId::Qwen3Asr06B, ModelId::Qwen3Asr17B];
 

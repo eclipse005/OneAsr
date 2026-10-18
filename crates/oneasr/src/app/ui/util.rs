@@ -74,21 +74,8 @@ pub(crate) fn format_thousands(n: u64) -> String {
 }
 
 pub(crate) fn is_video_format(fmt: &str) -> bool {
-    matches!(
-        fmt.to_ascii_lowercase().as_str(),
-        "mp4"
-            | "mkv"
-            | "mov"
-            | "webm"
-            | "avi"
-            | "flv"
-            | "ts"
-            | "m4v"
-            | "mpeg"
-            | "mpg"
-            | "wmv"
-            | "3gp"
-    )
+    // 表在 core（`media::VIDEO_EXTS`）：CLI 的 `probe` 与这里必须是同一个答案。
+    oneasr_core::media::is_video_ext(fmt)
 }
 
 /// Status accent for media plate border (replaces free-floating status circle).

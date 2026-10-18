@@ -280,6 +280,61 @@ pub fn is_target_pcm_wav(path: &Path) -> bool {
         && spec.bits_per_sample == 16
 }
 
+// ─── 媒体类型判定 ───────────────────────────────────────────────────
+
+/// 视频容器扩展名 —— 界面图标与 CLI `probe` 共用这一份表。
+///
+/// 判定只在 core 做一次：`oneasr-cli probe` 靠它给 `kind`，GUI 的
+/// `is_video_format` 也转调 [`is_video_ext`]（同一个问题不再有第二个答案）。
+pub const VIDEO_EXTS: &[&str] = &[
+    "mp4", "mkv", "mov", "webm", "avi", "flv", "ts", "m4v", "mpeg", "mpg", "wmv", "3gp",
+];
+
+/// 扩展名（大小写不限、可带前导点）是不是视频容器。
+pub fn is_video_ext(ext: &str) -> bool {
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    VIDEO_EXTS.iter().any(|known| *known == ext)
+}
+
+/// 媒体类型：只有落在 [`VIDEO_EXTS`] 里的算视频，其余一律按音频处理。
+///
+/// 值域就这两个。判不出来时按音频报而不是报错——时长 / 尺寸探测对容器不敏感，
+/// 少一个图标远好过让整行加不进列表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Audio,
+    Video,
+}
+
+impl MediaKind {
+    /// 机器可读值（`probe --json` 的 `kind` 字段）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::Video => "video",
+        }
+    }
+
+    /// 人读标签（双语）。
+    pub fn label(self, lang: crate::i18n::UiLang) -> &'static str {
+        use crate::i18n::UiLang;
+        match (self, lang) {
+            (Self::Audio, UiLang::Zh) => "音频",
+            (Self::Audio, UiLang::En) => "audio",
+            (Self::Video, UiLang::Zh) => "视频",
+            (Self::Video, UiLang::En) => "video",
+        }
+    }
+}
+
+/// 按扩展名判定媒体类型（见 [`MediaKind`]）。
+pub fn media_kind(path: &Path) -> MediaKind {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if is_video_ext(ext) => MediaKind::Video,
+        _ => MediaKind::Audio,
+    }
+}
+
 /// Duration of a WAV from header + sample count (no process spawn).
 pub fn wav_duration_sec(path: &Path) -> Option<f64> {
     let reader = hound::WavReader::open(path).ok()?;

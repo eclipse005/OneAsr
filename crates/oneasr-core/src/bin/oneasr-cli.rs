@@ -13,6 +13,10 @@
 //!   download --model 0.6b --data-root "D:\\OneAsr"
 //! ```
 //!
+//! 机器可读出口有三个：`status --json`（安装 / 模型的完整快照）、`probe --json`
+//! （一个文件的尺寸 / 时长 / 类型）与 `transcribe|align --events=json`（每行一个
+//! JSON 事件）。三者都只在 stdout 上说话，人读行一律 stderr。
+//!
 //! `download` 把人类可读的进度写 stderr（双语，与其它子命令一致），把机器可读的
 //! 那一行写 **stdout**（`[download] state=… model=… done=… total=… pct=…`）——上层只解析
 //! stdout，报警文本不会混进解析流。完整格式与「先验后下」的语义见 `--help` 的 download 段落。
@@ -33,11 +37,12 @@ use oneasr_core::i18n;
 use oneasr_core::media::slice_wav;
 use oneasr_core::model::HTDEMUCS_FT;
 use oneasr_core::{
-    DownloadHandle, DownloadOutcome, GroupLookup, HotwordRun, HotwordStore, ModelId, ModelKind,
-    ProcessExportOptions, Settings, StageClock, StageUpdate, download_model, ffmpeg_source,
-    process_media_file_with_export, resolve_app_root,
+    AsrStage, DownloadHandle, DownloadOutcome, GroupLookup, HotwordRun, HotwordStore, ModelId,
+    ModelKind, ProcessExportOptions, Settings, StageClock, StageUpdate, TaskTiming, download_model,
+    ffmpeg_source, process_media_file_with_export, resolve_app_root,
 };
 use qwen3_asr_wgpu::{AsrInference, Backend as AsrBackend, TranscribeOptions};
+use serde_json::json;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -75,6 +80,8 @@ fn main() -> ExitCode {
         "align" => cmd_align(rest),
         "render" => cmd_render(rest),
         "download" => cmd_download(rest),
+        "status" => cmd_status(rest),
+        "probe" => cmd_probe(rest),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -104,6 +111,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         print_help();
         return Ok(());
     }
+    let events_json = events_json_arg(args)?;
     let input = require_arg(args, "--input")?;
     let app_root = parse_app_root(args)?;
     // 数据目录必须在任何 `Settings::default()` / 路径解析之前钉住。
@@ -257,8 +265,6 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| input_path.display().to_string());
 
-    let mut clock = StageClock::new();
-    let t0 = Instant::now();
     let export = ProcessExportOptions {
         words_json: words_json.clone(),
         // The sidecar is what makes `render` possible, so it stays on by default.
@@ -266,6 +272,11 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         // would need the aligner at all (see `needs_alignment`).
         timeline_json: !no_timeline,
     };
+    // 阶段编号的分母在**开跑前**算好：条件阶段与管线同一套判据（见
+    // `transcribe_stage_plan`），运行中不会再变。
+    let mut events = StageEvents::new(events_json, transcribe_stage_plan(&settings, &export));
+    let mut clock = StageClock::new();
+    let t0 = Instant::now();
     let result = process_media_file_with_export(
         &input_path,
         &media_name,
@@ -273,6 +284,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         &data_root,
         |update: StageUpdate| {
             clock.note(&update);
+            events.note(&update);
             if let Some(w) = &update.warning {
                 eprintln!("{}", i18n::cli_warn(w));
             }
@@ -290,10 +302,14 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
                 if let Some(parent) = dst.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                std::fs::copy(&primary, &dst).map_err(|e| {
-                    eprintln!("{}", i18n::cli_copy_failed(&e.to_string()));
-                    1
-                })?;
+                if let Err(e) = std::fs::copy(&primary, &dst) {
+                    let message = e.to_string();
+                    eprintln!("{}", i18n::cli_copy_failed(&message));
+                    // 复制失败也是失败收尾：事件流最后一条必须是 done 或 error。
+                    events.finish(&timing);
+                    events.error(&i18n::cli_copy_failed(&message));
+                    return Err(1);
+                }
                 eprintln!("{}", i18n::cli_copied(&dst));
             }
             if let Some(wj) = words_json {
@@ -312,6 +328,8 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
                     )
                 );
             }
+            events.finish(&timing);
+            events.done(&primary);
             Ok(())
         }
         Err(e) => {
@@ -325,9 +343,600 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
                     )
                 );
             }
+            events.finish(&timing);
+            events.error(&e.to_string());
             Err(1)
         }
     }
+}
+
+// ─── 事件流（--events=json） ───────────────────────────────────────
+
+/// `--events=json`：机器可读进度走 stdout，人读行仍走 stderr。
+///
+/// 同时接受 `--events=json` 与 `--events json` 两种写法（壳用的是前者）；值只认
+/// `json`。别的值报用法错误（2）而不是猜一个默认——猜错等于让调用方以为拿到的是
+/// JSON，下一句 `JSON.parse` 才发现。
+fn events_json_arg(args: &[String]) -> Result<bool, i32> {
+    let raw = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--events="))
+        .map(str::to_string)
+        .or_else(|| arg(args, "--events"));
+    if raw.is_none() && flag(args, "--events") {
+        // 末尾孤零零一个 `--events`：当成「没给」等于静默关掉事件流。
+        eprintln!("{}", i18n::cli_missing_required("--events"));
+        return Err(2);
+    }
+    match raw.as_deref() {
+        None => Ok(false),
+        Some(v) if v.eq_ignore_ascii_case("json") => Ok(true),
+        Some(v) => {
+            eprintln!("{}", i18n::cli_events_unknown(v));
+            Err(2)
+        }
+    }
+}
+
+/// 一个阶段在**这一次运行**里的位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StageProgress {
+    /// 从 1 数。
+    index: usize,
+    /// 计划里的阶段总数（条件阶段已经筛过）。
+    total: usize,
+    /// `index / total` 四舍五入到整数。
+    pct: u32,
+}
+
+/// 阶段在计划里的编号；不在计划里返回 `None`（调用方自己兜底）。
+///
+/// 纯函数：分母是**计划**的长度，所以不参与运行的阶段不会被算进去。
+fn stage_progress(plan: &[AsrStage], stage: AsrStage) -> Option<StageProgress> {
+    let index = plan.iter().position(|s| *s == stage)? + 1;
+    let total = plan.len();
+    let pct = ((index as f64 / total as f64) * 100.0).round() as u32;
+    Some(StageProgress { index, total, pct })
+}
+
+/// `transcribe` 这一趟会出现的阶段，顺序 = 管线实际发射顺序。
+///
+/// 条件阶段与管线**同一套判据**（这里不重抄条件）：
+/// - `Separating` ← `settings.vocal_separation`；
+/// - `RoughTranscribing` ← 语言接热词 + 词表可用 + 音素索引非空
+///   （`asr.rs::stage_rough_transcribe` 的前三道闸）；
+/// - `LoadingAligner` / `Aligning` ← [`oneasr_core::needs_alignment`]（TXT-only 不跑）。
+fn transcribe_stage_plan(settings: &Settings, export: &ProcessExportOptions) -> Vec<AsrStage> {
+    let mut plan = Vec::new();
+    if settings.vocal_separation {
+        plan.push(AsrStage::Separating);
+    }
+    plan.push(AsrStage::Converting);
+    plan.push(AsrStage::Planning);
+    if hotword_rough_will_run(settings) {
+        plan.push(AsrStage::RoughTranscribing);
+    }
+    plan.push(AsrStage::LoadingAsr);
+    plan.push(AsrStage::Transcribing);
+    if oneasr_core::needs_alignment(settings, export) {
+        plan.push(AsrStage::LoadingAligner);
+        plan.push(AsrStage::Aligning);
+    }
+    plan.push(AsrStage::Exporting);
+    plan
+}
+
+/// `align` 这一趟的阶段：没有识别、没有分段规划、没有热词
+/// （见 `asr.rs::Pipeline::run_with_transcript`）。
+fn align_stage_plan(settings: &Settings) -> Vec<AsrStage> {
+    let mut plan = Vec::new();
+    if settings.vocal_separation {
+        plan.push(AsrStage::Separating);
+    }
+    plan.push(AsrStage::Converting);
+    plan.push(AsrStage::LoadingAligner);
+    plan.push(AsrStage::Aligning);
+    plan.push(AsrStage::Exporting);
+    plan
+}
+
+/// 热词粗转这一趟会不会真跑（与 `asr.rs::stage_rough_transcribe` 同款三闸）。
+fn hotword_rough_will_run(settings: &Settings) -> bool {
+    if !oneasr_core::lang::supports_hotwords(&settings.language) {
+        return false;
+    }
+    let Some(run) = settings.hotword_run.as_ref().filter(|run| run.is_usable()) else {
+        return false;
+    };
+    !oneasr_core::hotword::HotwordIndex::new(&run.text, run.threshold).is_empty()
+}
+
+/// 一条 stage 事件的 JSON。
+///
+/// 字段名是契约（壳按名取值）；抽成纯函数是为了让**形状**能在单测里断言，
+/// 不必去捕获 stdout。
+fn stage_event(stage: AsrStage, progress: StageProgress) -> serde_json::Value {
+    json!({
+        "event": "stage",
+        "key": stage.key(),
+        "label": stage.label(i18n::ui_lang()),
+        "index": progress.index,
+        "total": progress.total,
+        "pct": progress.pct,
+    })
+}
+
+/// 收尾的耗时事件：每个阶段一条 `timing`，最后一条 `total`。
+///
+/// `timing` 也带 `key`：耗时明细卡要按它出**界面语言**的文案，只有 label 的话
+/// 会跟着 CLI 进程语言（系统语言）跑，与界面语言不一致。key 与 stage 事件同源
+/// （`AsrStage::key()`）。
+fn timing_events(timing: &TaskTiming) -> Vec<serde_json::Value> {
+    let mut events: Vec<serde_json::Value> = timing
+        .stages
+        .iter()
+        .map(|s| {
+            json!({
+                "event": "timing",
+                "key": s.stage.key(),
+                "label": s.stage.label(i18n::ui_lang()),
+                "ms": s.elapsed_ms,
+            })
+        })
+        .collect();
+    events.push(json!({ "event": "total", "ms": timing.total_ms }));
+    events
+}
+
+/// 成功收尾：`output` 是最终产物路径。
+fn done_event(output: &Path) -> serde_json::Value {
+    json!({ "event": "done", "output": output.display().to_string() })
+}
+
+/// 失败收尾：`message` 是双语原因。
+fn error_event(message: &str) -> serde_json::Value {
+    json!({ "event": "error", "message": message })
+}
+
+/// `--events=json` 的事件出口：只在**阶段变化**时发 stage，收尾发 timing / total，
+/// 最后一条是 done 或 error。
+///
+/// 计划外的阶段理论上是「算漏了」，但接口上每个 stage 事件都必须带 index/total/pct；
+/// 宁可就地把它补进计划（total 随之 +1），也不发一个缺字段的事件。正常路径走不到。
+struct StageEvents {
+    enabled: bool,
+    plan: Vec<AsrStage>,
+    last: Option<AsrStage>,
+}
+
+impl StageEvents {
+    fn new(enabled: bool, plan: Vec<AsrStage>) -> Self {
+        Self {
+            enabled,
+            plan,
+            last: None,
+        }
+    }
+
+    /// 收到一次阶段更新：分段进度（同一阶段反复来）不重复发。
+    fn note(&mut self, update: &StageUpdate) {
+        if !self.enabled || self.last == Some(update.stage) {
+            return;
+        }
+        self.last = Some(update.stage);
+        if !self.plan.contains(&update.stage) {
+            self.plan.push(update.stage);
+        }
+        if let Some(progress) = stage_progress(&self.plan, update.stage) {
+            println!("{}", stage_event(update.stage, progress));
+        }
+    }
+
+    /// 每个阶段的耗时 + 总耗时（收尾的第一段）。
+    fn finish(&self, timing: &TaskTiming) {
+        if !self.enabled {
+            return;
+        }
+        for event in timing_events(timing) {
+            println!("{event}");
+        }
+    }
+
+    /// 成功收尾：`output` 是最终产物路径（不是 `--output` 的副本）。
+    fn done(&self, output: &Path) {
+        if !self.enabled {
+            return;
+        }
+        println!("{}", done_event(output));
+    }
+
+    /// 失败收尾：`message` 是双语原因。
+    fn error(&self, message: &str) {
+        if !self.enabled {
+            return;
+        }
+        println!("{}", error_event(message));
+    }
+}
+
+// ─── status ───────────────────────────────────────────────────────
+
+/// `status` —— 这台机器 + 这份设置的机器可读快照（上层壳的就绪判据都在这里）。
+///
+/// 与其它子命令的差别只有一处：它**读 settings.json**（全局设置唯一的一份在那里），
+/// 所以文案语言也跟着 `resolved_ui_language()`；其余子命令只认参数、跟随系统语言。
+/// `--json` 时 stdout 上只有一个 JSON 对象，人读行一律 stderr。
+///
+/// 逐行开关（`--language` / `--vocal-separation` / `--hotword-group` /
+/// `--hotwords` / `--txt` / `--ass` / `--no-srt`）回答的是「**这一行**这样跑能不能起」：
+/// 给了哪些就叠到设置副本上再问 `Settings::can_start()`，一个都不给就是全局设置的
+/// 结论。判据本身只有 core 那一处，这里不做第二次判断。
+fn cmd_status(args: &[String]) -> Result<(), i32> {
+    if flag(args, "--help") || flag(args, "-h") {
+        print_help();
+        return Ok(());
+    }
+    let app_root = parse_app_root(args)?;
+    // 数据目录必须先钉住：settings.json、models/ 都从它算。
+    let data_root = pin_data_root(args, &app_root)?;
+    let want_json = flag(args, "--json");
+
+    let mut settings = Settings::load();
+    // can_start 的原因由 core 按**进程语言**定格，所以先把语言设对再问门禁。
+    i18n::set_ui_lang(settings.resolved_ui_language());
+    apply_status_overrides(&mut settings, args)?;
+    let settings = resolve_status_paths(settings, &app_root, &data_root);
+    let report = status_report(
+        &settings,
+        &app_root,
+        &data_root,
+        &oneasr_core::paths::models_root(),
+    );
+
+    if want_json {
+        println!("{}", report.to_json());
+    } else {
+        print_status_human(&report);
+    }
+    Ok(())
+}
+
+/// 把「这一行怎么跑」的旗标叠到设置副本上。
+///
+/// 只应用**给到的**开关：没给的一项保持 settings.json 原样 —— 这正是「不给任何开关
+/// = 全局 can_start」的实现方式。
+///
+/// 三个输出格式旗标与 transcribe **逐字同义**（`--txt` / `--ass` 打开对应产物、
+/// `--no-srt` 关掉 SRT，其余不动）。别把它做成「只导点名的那些」：壳是按设置原样
+/// 转发这些旗标的，settings 里 SRT 还开着时只传 `--txt` 必须仍然要求对齐模型，
+/// 否则门禁会放行一个跑不起来的任务（假绿）。
+fn apply_status_overrides(settings: &mut Settings, args: &[String]) -> Result<(), i32> {
+    if let Some(language) = arg(args, "--language") {
+        settings.language = language;
+    }
+    if flag(args, "--vocal-separation") {
+        settings.vocal_separation = true;
+    }
+    if flag(args, "--txt") {
+        settings.output_txt = true;
+    }
+    if flag(args, "--ass") {
+        settings.output_ass = true;
+    }
+    if flag(args, "--no-srt") {
+        settings.output_srt = false;
+    }
+    let hotword_group = arg(args, "--hotword-group");
+    let hotword_words = arg(args, "--hotwords");
+    if hotword_group.is_some() || hotword_words.is_some() {
+        let store = load_hotwords_or_warn();
+        settings.hotword_run = resolve_cli_hotwords(
+            &store,
+            hotword_group.as_deref(),
+            hotword_words.as_deref(),
+            i18n::ui_lang(),
+        )?;
+    }
+    Ok(())
+}
+
+/// 模型目录的解析：与 transcribe 同一个函数、同一套 root 顺序。
+///
+/// 与 transcribe 唯一的差别是**显式点名**当前的选中项（[`AsrPick::Exact`]）：不带
+/// 旗标时 `apply_app_root_paths` 按 ASR_CHOICES 扫描（0.6B 优先），那会把设置里选的
+/// 1.7B 静默压回 0.6B —— 门禁于是去看另一个模型的目录，是典型的假绿。壳调 transcribe
+/// 时传的正是设置里的 id（`--asr <id>` / `--aligner <id>`），这里跟上它的选择。
+fn resolve_status_paths(mut settings: Settings, app_root: &Path, data_root: &Path) -> Settings {
+    // transcribe 从 `Settings::default()` 起手：settings 里那种「每个尺寸手选的目录」
+    // （`asr_dirs` / `aligner_dirs`）它一次都读不到，只认 catalog id + root 布局。
+    // status 报的是**命令行这一趟真会用的目录**，所以这里跟着丢掉手选记录 ——
+    // 否则门禁会去查一个 run 根本不加载的目录（假绿）。
+    settings.asr_dirs.clear();
+    settings.aligner_dirs.clear();
+    let asr = settings.selected_asr_id();
+    let aligner = settings.selected_aligner_id();
+    apply_app_root_paths(
+        &mut settings,
+        app_root,
+        data_root,
+        Some(AsrPick::Exact(asr)),
+        Some(aligner),
+    );
+    settings.normalize();
+    settings
+}
+
+/// `status` 的一条模型槽位。
+struct ModelSlot {
+    id: String,
+    dir: PathBuf,
+    ready: bool,
+    /// 不就绪的原因（就绪时 `None`）；文案来自 core，双语。
+    error: Option<String>,
+}
+
+/// `status` 的 catalog 条目。
+struct CatalogEntry {
+    id: &'static str,
+    kind: &'static str,
+    dir: PathBuf,
+    ready: bool,
+}
+
+/// `status` 的全部事实：JSON 与人读摘要共用一份，两个出口不各算一遍。
+struct StatusReport {
+    version: &'static str,
+    app_root: PathBuf,
+    data_root: PathBuf,
+    models_root: PathBuf,
+    output_dir: PathBuf,
+    backend: String,
+    language: String,
+    /// 已解析成 `zh` / `en`（不会是 `system`）——上层不必再探一次系统语言。
+    ui_language: &'static str,
+    asr: ModelSlot,
+    aligner: ModelSlot,
+    demucs: ModelSlot,
+    sensevoice: ModelSlot,
+    catalog: Vec<CatalogEntry>,
+    /// `None` = 可以开跑；`Some(reason)` 就是 `can_start()` 的双语错误串。
+    can_start_reason: Option<String>,
+}
+
+impl StatusReport {
+    fn can_start_ok(&self) -> bool {
+        self.can_start_reason.is_none()
+    }
+
+    /// `status --json` 的 stdout 形状（一个对象，一行）。
+    ///
+    /// **键名是契约**（壳按名取值），key 顺序不是：serde_json 默认按字典序排，
+    /// 调用方按名读即可。
+    fn to_json(&self) -> serde_json::Value {
+        fn slot(slot: &ModelSlot) -> serde_json::Value {
+            json!({
+                "id": slot.id,
+                "dir": slot.dir.display().to_string(),
+                "ready": slot.ready,
+                "error": slot.error,
+            })
+        }
+        json!({
+            "version": self.version,
+            "app_root": self.app_root.display().to_string(),
+            "data_root": self.data_root.display().to_string(),
+            "models_root": self.models_root.display().to_string(),
+            "output_dir": self.output_dir.display().to_string(),
+            "backend": self.backend,
+            "language": self.language,
+            "ui_language": self.ui_language,
+            "models": {
+                "asr": slot(&self.asr),
+                "aligner": slot(&self.aligner),
+                "demucs": slot(&self.demucs),
+                "sensevoice": slot(&self.sensevoice),
+            },
+            "catalog": self
+                .catalog
+                .iter()
+                .map(|entry| json!({
+                    "id": entry.id,
+                    "kind": entry.kind,
+                    "dir": entry.dir.display().to_string(),
+                    "ready": entry.ready,
+                }))
+                .collect::<Vec<_>>(),
+            "can_start": {
+                "ok": self.can_start_ok(),
+                "reason": self.can_start_reason,
+            },
+        })
+    }
+}
+
+/// 组装 `status` 的全部事实（**纯函数**：四个入参给全，单测不读进程级 data root）。
+///
+/// 四条槽位与 catalog 的 `ready` 走**同一个** `check_*_model_dir`（全仓库唯一判据），
+/// `can_start` 直接用 `Settings::can_start()` 的结果。
+fn status_report(
+    settings: &Settings,
+    app_root: &Path,
+    data_root: &Path,
+    models_root: &Path,
+) -> StatusReport {
+    let slot = |id: ModelId, dir: &Path| {
+        let (ready, error) = ready_and_error(id, dir);
+        ModelSlot {
+            id: id.as_str().to_string(),
+            dir: dir.to_path_buf(),
+            ready,
+            error,
+        }
+    };
+    StatusReport {
+        version: env!("CARGO_PKG_VERSION"),
+        app_root: app_root.to_path_buf(),
+        data_root: data_root.to_path_buf(),
+        models_root: models_root.to_path_buf(),
+        output_dir: settings.resolved_output_dir(),
+        backend: settings.backend.clone(),
+        language: settings.language.clone(),
+        ui_language: settings.resolved_ui_language().setting_value(),
+        asr: slot(settings.selected_asr_id(), &settings.asr_model_dir),
+        aligner: slot(settings.selected_aligner_id(), &settings.aligner_model_dir),
+        demucs: slot(ModelId::HtdemucsFt, &settings.resolved_demucs_model_dir()),
+        sensevoice: slot(
+            ModelId::SenseVoiceSmall,
+            &settings.resolved_sensevoice_model_dir(),
+        ),
+        catalog: ModelId::ALL
+            .iter()
+            .map(|id| {
+                let dir = models_root.join(id.as_str());
+                CatalogEntry {
+                    id: id.as_str(),
+                    kind: id.kind().as_str(),
+                    ready: check_model_dir(*id, &dir).is_ok(),
+                    dir,
+                }
+            })
+            .collect(),
+        can_start_reason: settings.can_start().err(),
+    }
+}
+
+/// （就绪, 原因）：判据是 core 的 `check_*_model_dir`，这里只做包装。
+fn ready_and_error(id: ModelId, dir: &Path) -> (bool, Option<String>) {
+    match check_model_dir(id, dir) {
+        Ok(()) => (true, None),
+        Err(error) => (false, Some(error)),
+    }
+}
+
+/// 没有 `--json` 时的人读摘要（stdout；双语跟随 `resolved_ui_language()`）。
+fn print_status_human(report: &StatusReport) {
+    println!("{}", i18n::cli_status_banner());
+    println!("{}", i18n::cli_kv_str(i18n::CLI_KV_VERSION, report.version));
+    println!("{}", i18n::cli_kv(i18n::CLI_KV_APP, &report.app_root));
+    println!("{}", i18n::cli_kv(i18n::CLI_KV_DATA, &report.data_root));
+    println!(
+        "{}",
+        i18n::cli_kv(i18n::CLI_KV_MODELS_ROOT, &report.models_root)
+    );
+    println!("{}", i18n::cli_kv(i18n::CLI_KV_OUTPUT, &report.output_dir));
+    println!(
+        "{}",
+        i18n::cli_kv_str(i18n::CLI_KV_BACKEND, &report.backend)
+    );
+    println!(
+        "{}",
+        i18n::cli_kv_str(i18n::CLI_KV_LANGUAGE, &report.language)
+    );
+    println!(
+        "{}",
+        i18n::cli_kv_str(i18n::CLI_KV_UI_LANGUAGE, report.ui_language)
+    );
+    println!("{}", i18n::cli_status_models_header());
+    for (role, slot) in [
+        ("asr", &report.asr),
+        ("aligner", &report.aligner),
+        ("demucs", &report.demucs),
+        ("sensevoice", &report.sensevoice),
+    ] {
+        println!(
+            "{}",
+            i18n::cli_model_row(role, &slot.id, &slot.dir, slot.ready, slot.error.as_deref())
+        );
+    }
+    println!("{}", i18n::cli_status_catalog_header());
+    for entry in &report.catalog {
+        println!(
+            "{}",
+            i18n::cli_catalog_row(entry.kind, entry.id, entry.ready)
+        );
+    }
+    println!(
+        "{}",
+        i18n::cli_kv_str(
+            i18n::CLI_KV_CAN_START,
+            &i18n::cli_can_start_line(report.can_start_ok(), report.can_start_reason.as_deref()),
+        )
+    );
+}
+
+// ─── probe ────────────────────────────────────────────────────────
+
+/// `probe` —— 一个媒体文件的尺寸 / 时长 / 类型。
+///
+/// 上层壳以前自己 spawn ffmpeg 正则 `Duration`，现在只解析这里的 JSON：
+/// - 时长走 [`oneasr_core::media::probe_duration_sec`]（WAV 读头，其余走 ffmpeg）；
+///   探不到就是 `null`，**不是 0**——「探不到」与「真的是 0 秒」必须能分开；
+/// - 类型由扩展名在 core 判定（audio / video 两个值），壳不再自己看后缀；
+/// - 读不到文件元数据（不存在 / 无权限）是非 0 退出 + 双语原因。
+fn cmd_probe(args: &[String]) -> Result<(), i32> {
+    if flag(args, "--help") || flag(args, "-h") {
+        print_help();
+        return Ok(());
+    }
+    let input = PathBuf::from(require_arg(args, "--input")?);
+    let want_json = flag(args, "--json");
+
+    let info = probe_info(&input).map_err(|error| {
+        eprintln!("{}", i18n::cli_probe_failed(&input, &error));
+        1
+    })?;
+
+    if want_json {
+        println!("{}", info.to_json());
+        return Ok(());
+    }
+    // 不带 --json 就是三行：大小 / 时长 / 类型。
+    println!(
+        "{}",
+        i18n::cli_kv_str(i18n::CLI_KV_SIZE, &format!("{} B", info.size_bytes))
+    );
+    println!(
+        "{}",
+        i18n::cli_kv_str(
+            i18n::CLI_KV_DURATION,
+            &i18n::cli_probe_duration(info.duration_sec)
+        )
+    );
+    println!(
+        "{}",
+        i18n::cli_kv_str(i18n::CLI_KV_KIND, info.kind.label(i18n::ui_lang()))
+    );
+    Ok(())
+}
+
+/// `probe` 的结果（`--json` 的四个字段 / 人读的三行）。
+struct ProbeInfo {
+    input: PathBuf,
+    size_bytes: u64,
+    duration_sec: Option<f64>,
+    kind: oneasr_core::MediaKind,
+}
+
+impl ProbeInfo {
+    fn to_json(&self) -> serde_json::Value {
+        json!({
+            "input": self.input.display().to_string(),
+            "size_bytes": self.size_bytes,
+            "duration_sec": self.duration_sec,
+            "kind": self.kind.as_str(),
+        })
+    }
+}
+
+/// 文件元数据 + 时长 + 类型；读不到元数据直接是错误（与探不探得到时长无关）。
+fn probe_info(path: &Path) -> Result<ProbeInfo, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    Ok(ProbeInfo {
+        input: path.to_path_buf(),
+        size_bytes: meta.len(),
+        duration_sec: oneasr_core::media::probe_duration_sec(path),
+        kind: oneasr_core::media::media_kind(path),
+    })
 }
 
 // ─── asr-chunk ────────────────────────────────────────────────────
@@ -814,6 +1423,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         print_help();
         return Ok(());
     }
+    let events_json = events_json_arg(args)?;
     let audio = PathBuf::from(require_arg(args, "--audio")?);
     if !audio.is_file() {
         eprintln!("{}", i18n::cli_input_not_found(&audio));
@@ -893,6 +1503,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| audio.display().to_string());
+    let mut events = StageEvents::new(events_json, align_stage_plan(&settings));
     let mut clock = StageClock::new();
     let t0 = Instant::now();
     let result = oneasr_core::process_media_file_with_transcript_export(
@@ -906,6 +1517,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         &data_root,
         |update: StageUpdate| {
             clock.note(&update);
+            events.note(&update);
             if let Some(w) = &update.warning {
                 eprintln!("{}", i18n::cli_warn(w));
             }
@@ -928,10 +1540,14 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
                     timing.stages.len()
                 )
             );
+            events.finish(&timing);
+            events.done(&primary);
             Ok(())
         }
         Err(e) => {
             eprintln!("{e}");
+            events.finish(&timing);
+            events.error(&e.to_string());
             Err(1)
         }
     }
@@ -1601,19 +2217,11 @@ mod tests {
     // ── download：`--model` 解析与「先验后下」的扫描顺序 ────────────────
 
     /// catalog 里 8 个条目的**完整目录名**全都认得，且落到它自己（不换成同尺寸的
-    /// 另一份）。目录名从 `as_str()` 取，测试里不复制字面量。
+    /// 另一份）。清单从 `ModelId::ALL` 枚举，测试里不复制第二份字面量。
     #[test]
     fn download_arg_resolves_every_catalog_directory_name() {
-        for id in [
-            ModelId::Qwen3Asr06B,
-            ModelId::Qwen3Asr17B,
-            ModelId::Qwen3Asr06BInt8,
-            ModelId::Qwen3Asr17BInt8,
-            ModelId::QwenAlign06B,
-            ModelId::OmniAsrCtc300M,
-            ModelId::HtdemucsFt,
-            ModelId::SenseVoiceSmall,
-        ] {
+        assert_eq!(ModelId::ALL.len(), 8, "catalog 清单只有一处");
+        for id in ModelId::ALL {
             let pick = parse_download_arg(id.as_str())
                 .unwrap_or_else(|| panic!("目录名 {} 必须认得", id.as_str()));
             assert_eq!(pick.target, id, "目录名 {} 必须落到它自己", id.as_str());
@@ -1918,5 +2526,497 @@ mod tests {
             rendered_txt_body(&sentences),
             "Hello world.\nSecond sentence.\nThird one.\n"
         );
+    }
+
+    // ── status / probe / 事件流（--events=json） ────────────────────────
+
+    /// 假模型目录：**目录名刻意不叫 catalog 名**。
+    ///
+    /// 安装布局名走清单精确校验（逐文件尺寸），4 KB 占位文件过不了；自定义目录名才
+    /// 走「文件在不在 / 够不够大」这条宽松判据 —— 与 settings.rs 的 can_start 用例
+    /// 同一套造法，**不依赖本机真权重**（CI 上没有几 GB 的权重可装）。
+    fn fake_model_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let root = env::temp_dir().join(format!("oneasr-cli-status-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let asr = root.join("asr-test");
+        let aligner = root.join("aligner-test");
+        let demucs = root.join("demucs-test");
+        let sensevoice = root.join("sensevoice-test");
+        for dir in [&asr, &aligner, &demucs, &sensevoice] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let blob = vec![0u8; 4096];
+        for file in ["config.json", "tokenizer.json"] {
+            std::fs::write(asr.join(file), &blob).unwrap();
+        }
+        std::fs::write(asr.join("model.safetensors"), &blob).unwrap();
+        for file in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
+            std::fs::write(aligner.join(file), &blob).unwrap();
+        }
+        std::fs::write(aligner.join("model.safetensors"), &blob).unwrap();
+        std::fs::write(
+            demucs.join(oneasr_core::engine::local::DEMUCS_WEIGHTS_FILE),
+            &blob,
+        )
+        .unwrap();
+        for file in oneasr_core::engine::local::SENSEVOICE_REQUIRED_FILES {
+            std::fs::write(sensevoice.join(file), &blob).unwrap();
+        }
+        (root, asr, aligner, demucs, sensevoice)
+    }
+
+    /// 四个槽位都指向假目录、界面语言钉成 zh 的 settings（探系统语言不适合进断言）。
+    fn settings_with_all_models(
+        asr: &Path,
+        aligner: &Path,
+        demucs: &Path,
+        sensevoice: &Path,
+    ) -> Settings {
+        Settings {
+            asr_model_dir: asr.to_path_buf(),
+            aligner_model_dir: aligner.to_path_buf(),
+            demucs_model_dir: demucs.to_path_buf(),
+            sensevoice_model_dir: sensevoice.to_path_buf(),
+            ui_language: "zh".into(),
+            ..Settings::default()
+        }
+    }
+
+    fn hotword_run(words: &str) -> HotwordRun {
+        HotwordRun {
+            group_id: "cli".into(),
+            group_name: "测试组".into(),
+            text: words.into(),
+            top_k: 7,
+            threshold: 0.42,
+        }
+    }
+
+    /// `status --json` 的形状：四条槽位 + 8 条 catalog + can_start。
+    ///
+    /// 就绪用的是 core 那唯一一条 `check_*_model_dir`：假的自定义目录能过宽松判据
+    /// （ready=true），假的安装布局目录过不了精确校验（catalog ready=false）——
+    /// 两边都不是「目录非空」那种自造判据。
+    ///
+    /// 断骨锚点：把 catalog 那行的 `check_model_dir` 换成常量 false、或把
+    /// `ModelId::ALL` 换成 ASR_CHOICES，本用例立刻变红。
+    #[test]
+    fn status_json_lists_the_four_slots_and_all_eight_catalog_entries() {
+        let (root, asr, aligner, demucs, sensevoice) = fake_model_dirs("json");
+        let settings = settings_with_all_models(&asr, &aligner, &demucs, &sensevoice);
+        let models_root = root.join("models");
+        // 8 条 catalog 目录都建出来，但**都是空目录**：松判据（目录存在 / 目录非空）
+        // 会说 ready=true，只有清单精确校验会说 false —— 下面那条断言靠这个把
+        // 「目录非空即就绪」挡在门外。
+        for id in ModelId::ALL {
+            std::fs::create_dir_all(models_root.join(id.as_str())).unwrap();
+        }
+        let report = status_report(&settings, &root, &root, &models_root);
+        let value = report.to_json();
+
+        assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(value["app_root"], root.display().to_string());
+        assert_eq!(value["data_root"], root.display().to_string());
+        assert_eq!(value["models_root"], models_root.display().to_string());
+        assert_eq!(value["backend"], "auto");
+        assert_eq!(value["language"], "zh");
+        // 界面语言是**解析后**的具体值（system → zh / en），上层不必再探系统语言。
+        assert_eq!(value["ui_language"], "zh");
+
+        for (key, dir, id) in [
+            ("asr", &asr, ModelId::Qwen3Asr06B),
+            ("aligner", &aligner, ModelId::OmniAsrCtc300M),
+            ("demucs", &demucs, ModelId::HtdemucsFt),
+            ("sensevoice", &sensevoice, ModelId::SenseVoiceSmall),
+        ] {
+            assert_eq!(value["models"][key]["id"], id.as_str(), "{key}");
+            assert_eq!(
+                value["models"][key]["dir"],
+                dir.display().to_string(),
+                "{key}"
+            );
+            assert_eq!(value["models"][key]["ready"], true, "{key}");
+            assert_eq!(
+                value["models"][key]["error"],
+                serde_json::Value::Null,
+                "{key}: 就绪时 error 必须是 null"
+            );
+        }
+        assert!(report.can_start_ok(), "{:?}", report.can_start_reason);
+        assert_eq!(value["can_start"]["ok"], true);
+        assert_eq!(value["can_start"]["reason"], serde_json::Value::Null);
+
+        // catalog：8 条全来自 ModelId::ALL，dir = {models_root}/{id}，kind 是契约值。
+        let catalog = value["catalog"].as_array().expect("catalog 必须是数组");
+        assert_eq!(catalog.len(), 8);
+        assert_eq!(ModelId::ALL.len(), 8, "catalog 清单只有一处");
+        let kinds: Vec<&str> = catalog
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "asr",
+                "asr",
+                "asr",
+                "asr",
+                "aligner",
+                "aligner",
+                "demucs",
+                "sensevoice"
+            ]
+        );
+        for (entry, id) in catalog.iter().zip(ModelId::ALL) {
+            assert_eq!(entry["id"], id.as_str());
+            assert_eq!(
+                entry["dir"],
+                models_root.join(id.as_str()).display().to_string()
+            );
+            // 假目录过不了安装布局的精确校验：说明 ready 真去查了文件，不是抄的目录名。
+            assert_eq!(entry["ready"], false, "{} 不该就绪", id.as_str());
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 缺模型：`ready=false` + 非空 `error`，`can_start.ok=false` + 双语原因。
+    #[test]
+    fn status_reports_missing_models_with_a_reason_and_can_start_false() {
+        let root =
+            env::temp_dir().join(format!("oneasr-cli-status-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let settings = Settings {
+            asr_model_dir: root.join("no-asr"),
+            aligner_model_dir: root.join("no-aligner"),
+            demucs_model_dir: root.join("no-demucs"),
+            sensevoice_model_dir: root.join("no-sensevoice"),
+            ui_language: "zh".into(),
+            ..Settings::default()
+        };
+        let report = status_report(&settings, &root, &root, &root.join("models"));
+        let value = report.to_json();
+
+        assert_eq!(value["models"]["asr"]["ready"], false);
+        let reason = value["models"]["asr"]["error"]
+            .as_str()
+            .expect("未就绪必须给原因");
+        assert!(!reason.trim().is_empty());
+        assert_eq!(value["can_start"]["ok"], false);
+        assert!(
+            value["can_start"]["reason"]
+                .as_str()
+                .is_some_and(|r| !r.trim().is_empty()),
+            "can_start 的 reason 就是它的错误串"
+        );
+        assert!(!report.can_start_ok());
+    }
+
+    /// 逐行开关：给到哪几个就只叠哪几个，再问 `Settings::can_start()` —— 全局
+    /// 关着人声分离、这一行开着，Demucs 缺失就必须拦；只导 TXT 则不必有对齐模型。
+    ///
+    /// 断骨锚点：把 `apply_status_overrides` 里三个输出格式旗标改成「只导点名的
+    /// 那些」（`--txt` 顺手关掉 SRT），第三条断言立刻变红。
+    #[test]
+    fn status_overrides_answer_for_this_row() {
+        let (root, asr, aligner, demucs, sensevoice) = fake_model_dirs("overrides");
+        let _ = (&aligner, &demucs, &sensevoice);
+        // 只留 ASR 在盘上，对齐器与人声分离都缺。
+        let base = Settings {
+            asr_model_dir: asr.clone(),
+            aligner_model_dir: root.join("no-aligner"),
+            demucs_model_dir: root.join("no-demucs"),
+            sensevoice_model_dir: root.join("no-sensevoice"),
+            ui_language: "zh".into(),
+            ..Settings::default()
+        };
+        assert!(base.can_start().is_err(), "默认（SRT 开着）要有对齐模型");
+
+        // 只导 TXT：--txt --no-srt → 对齐器不必存在。
+        let mut txt_only = base.clone();
+        apply_status_overrides(
+            &mut txt_only,
+            &["--txt".to_string(), "--no-srt".to_string()],
+        )
+        .unwrap();
+        assert!(txt_only.can_start().is_ok(), "{:?}", txt_only.can_start());
+
+        // 与 transcribe 逐字同义：只给 --txt（settings 里 SRT 还开着）就还得要对齐模型。
+        let mut txt_with_srt = base.clone();
+        apply_status_overrides(&mut txt_with_srt, &["--txt".to_string()]).unwrap();
+        assert!(txt_with_srt.output_srt, "--txt 不许顺手关掉 SRT");
+        assert!(
+            txt_with_srt.can_start().is_err(),
+            "SRT 还开着就必须有对齐模型，否则门禁会放行一个跑不起来的任务"
+        );
+
+        // 人声分离：全局关着，这一行开着 → Demucs 缺失就得拦（逐行门禁问的正是这个）。
+        let mut separating = base.clone();
+        apply_status_overrides(&mut separating, &["--vocal-separation".to_string()]).unwrap();
+        assert!(separating.vocal_separation);
+        assert!(separating.can_start().is_err());
+
+        // 语言门禁：非中英的任务不接热词，空组 / 缺粗转模型都不该拦。
+        // 用 TXT-only 的副本，免得「对齐模型缺失」先一步把门禁拦下、盖住热词这条。
+        let txt_base = Settings {
+            output_srt: false,
+            output_txt: true,
+            ..base.clone()
+        };
+        let mut ja = txt_base.clone();
+        ja.hotword_run = Some(hotword_run("甲词"));
+        apply_status_overrides(&mut ja, &["--language".to_string(), "ja".to_string()]).unwrap();
+        assert!(ja.can_start().is_ok(), "{:?}", ja.can_start());
+        let mut zh = txt_base.clone();
+        zh.hotword_run = Some(hotword_run("甲词"));
+        apply_status_overrides(&mut zh, &["--language".to_string(), "zh".to_string()]).unwrap();
+        assert!(zh.can_start().is_err(), "中文 + 热词组但缺粗转模型必须拦");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 目录解析：与 transcribe 同一条规则 —— 点名的型号赢过扫描，root 布局照常生效。
+    ///
+    /// 断骨锚点：把 `resolve_status_paths` 传的 `AsrPick::Exact` 改回 `None`，
+    /// 第二条断言立刻变红（盘上的 0.6B 会把选中的 1.7B 压回去 —— 门禁看错模型的假绿）。
+    #[test]
+    fn resolve_status_paths_keeps_the_selected_models() {
+        let root = env::temp_dir().join(format!("oneasr-cli-status-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for id in [
+            ModelId::Qwen3Asr06B,
+            ModelId::Qwen3Asr17B,
+            ModelId::Qwen3Asr17BInt8,
+            ModelId::OmniAsrCtc300M,
+        ] {
+            std::fs::create_dir_all(root.join("models").join(id.as_str())).unwrap();
+        }
+        let selected = Settings {
+            asr_model: ModelId::Qwen3Asr17B.as_str().into(),
+            aligner_model: ModelId::OmniAsrCtc300M.as_str().into(),
+            ..Settings::default()
+        };
+        let resolved = resolve_status_paths(selected, &root, &root);
+        assert_eq!(resolved.asr_model, ModelId::Qwen3Asr17B.as_str());
+        assert_eq!(
+            resolved.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr17B.as_str()),
+            "点了 1.7B 就必须是 1.7B，哪怕盘上还躺着 0.6B"
+        );
+        assert_eq!(resolved.aligner_model, ModelId::OmniAsrCtc300M.as_str());
+
+        // 对照组：同样的盘、不带点名去扫描，就会压回 0.6B。
+        let mut scanned = Settings {
+            asr_model: ModelId::Qwen3Asr17B.as_str().into(),
+            ..Settings::default()
+        };
+        apply_app_root_paths(&mut scanned, &root, &root, None, None);
+        assert_eq!(scanned.asr_model, ModelId::Qwen3Asr06B.as_str());
+
+        // 每个尺寸手选的目录（`asr_dirs`）是 GUI 的功能：命令行 transcribe 从
+        // `Settings::default()` 起手，一次都读不到它。status 报的是命令行会用的
+        // 目录，所以手选记录必须被丢掉。
+        // 断骨锚点：把 `resolve_status_paths` 里那两行 clear 删掉，本段变红。
+        let mut with_pick = Settings::default();
+        with_pick.asr_dirs.insert(
+            ModelId::Qwen3Asr06B.as_str().to_string(),
+            root.join("picked-elsewhere"),
+        );
+        let resolved = resolve_status_paths(with_pick, &root, &root);
+        assert_eq!(
+            resolved.asr_model_dir,
+            root.join("models").join(ModelId::Qwen3Asr06B.as_str()),
+            "手选目录不参与命令行的路径解析"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 阶段编号：条件阶段不进分母，pct = index / total 四舍五入。
+    ///
+    /// 断骨锚点：把 `transcribe_stage_plan` 里 `Separating` / `RoughTranscribing` /
+    /// 对齐两段的 if 去掉（无条件全列），前两条断言立刻变红。
+    #[test]
+    fn stage_plan_counts_only_the_stages_this_run_will_have() {
+        let srt = Settings {
+            output_srt: true,
+            ..Settings::default()
+        };
+        let plain = transcribe_stage_plan(&srt, &ProcessExportOptions::default());
+        assert_eq!(
+            plain,
+            vec![
+                AsrStage::Converting,
+                AsrStage::Planning,
+                AsrStage::LoadingAsr,
+                AsrStage::Transcribing,
+                AsrStage::LoadingAligner,
+                AsrStage::Aligning,
+                AsrStage::Exporting,
+            ],
+            "没人声分离、没热词组：两个条件阶段都不进计划"
+        );
+        let progress = stage_progress(&plain, AsrStage::Transcribing).expect("在计划里");
+        assert_eq!((progress.index, progress.total, progress.pct), (4, 7, 57));
+
+        // 人声分离 + 热词组都在：9 个阶段，转写第 6 —— 与契约样例的 6/9 一致。
+        let full = Settings {
+            vocal_separation: true,
+            language: "zh".into(),
+            hotword_run: Some(hotword_run("你好")),
+            ..Settings::default()
+        };
+        let full_plan = transcribe_stage_plan(&full, &ProcessExportOptions::default());
+        assert_eq!(full_plan.len(), 9, "{full_plan:?}");
+        assert_eq!(full_plan.first(), Some(&AsrStage::Separating), "分离先发");
+        assert_eq!(full_plan.last(), Some(&AsrStage::Exporting));
+        let progress = stage_progress(&full_plan, AsrStage::Transcribing).expect("在计划里");
+        assert_eq!((progress.index, progress.total), (6, 9));
+        assert_eq!(progress.pct, 67, "6/9 四舍五入是 67");
+
+        // 计划外阶段没有编号可给（调用方兜底），最后一个阶段是 100%。
+        assert_eq!(stage_progress(&plain, AsrStage::RoughTranscribing), None);
+        let three = [
+            AsrStage::Converting,
+            AsrStage::Exporting,
+            AsrStage::Planning,
+        ];
+        assert_eq!(
+            stage_progress(&three, AsrStage::Exporting).map(|p| (p.index, p.pct)),
+            Some((2, 67))
+        );
+        assert_eq!(
+            stage_progress(&three, AsrStage::Planning).map(|p| (p.index, p.pct)),
+            Some((3, 100))
+        );
+
+        // TXT-only：对齐阶段整段不进计划（也不需要对齐模型）。
+        let txt_only = Settings {
+            output_srt: false,
+            output_txt: true,
+            ..Settings::default()
+        };
+        let export = ProcessExportOptions {
+            words_json: None,
+            timeline_json: false,
+        };
+        let plan = transcribe_stage_plan(&txt_only, &export);
+        assert!(!plan.contains(&AsrStage::LoadingAligner));
+        assert!(!plan.contains(&AsrStage::Aligning));
+
+        // align：没有识别、没有分段规划，也没有热词。
+        assert_eq!(
+            align_stage_plan(&Settings::default()),
+            vec![
+                AsrStage::Converting,
+                AsrStage::LoadingAligner,
+                AsrStage::Aligning,
+                AsrStage::Exporting,
+            ]
+        );
+        let separating = Settings {
+            vocal_separation: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            align_stage_plan(&separating).first(),
+            Some(&AsrStage::Separating)
+        );
+    }
+
+    /// 事件 JSON 的形状：字段名是契约（壳按名取值），一个都不能改名。
+    ///
+    /// 断骨锚点：把 `stage_event` 里任一键改名（例如 `pct` → `percent`），
+    /// 本用例立刻变红。
+    #[test]
+    fn event_json_shapes_match_the_contract() {
+        let stage = stage_event(
+            AsrStage::Transcribing,
+            StageProgress {
+                index: 6,
+                total: 9,
+                pct: 67,
+            },
+        );
+        assert_eq!(stage["event"], "stage");
+        assert_eq!(stage["key"], "transcribing");
+        assert!(stage["label"].as_str().is_some_and(|l| !l.is_empty()));
+        assert_eq!(stage["index"], 6);
+        assert_eq!(stage["total"], 9);
+        assert_eq!(stage["pct"], 67);
+
+        let timing = timing_events(&TaskTiming {
+            stages: vec![oneasr_core::StageTiming {
+                stage: AsrStage::Transcribing,
+                elapsed_ms: 587,
+            }],
+            total_ms: 12_828,
+        });
+        assert_eq!(timing.len(), 2, "每个阶段一条 + 一条 total");
+        assert_eq!(timing[0]["event"], "timing");
+        assert_eq!(timing[0]["ms"], 587);
+        assert!(timing[0]["label"].as_str().is_some_and(|l| !l.is_empty()));
+        // 耗时明细卡按 key 出界面语言的文案（label 跟随 CLI 进程语言）。
+        assert_eq!(timing[0]["key"], AsrStage::Transcribing.key());
+        assert_eq!(timing[0]["key"], "transcribing");
+        assert_eq!(timing[1]["event"], "total");
+        assert_eq!(timing[1]["ms"], 12_828);
+
+        let output = Path::new("output").join("x.srt");
+        let done = done_event(&output);
+        assert_eq!(done["event"], "done");
+        assert_eq!(done["output"], output.display().to_string());
+
+        let error = error_event("模型未就绪：…");
+        assert_eq!(error["event"], "error");
+        assert_eq!(error["message"], "模型未就绪：…");
+    }
+
+    /// `--events` 只认 `json`；末尾孤零零一个旗标也不许当没给。
+    #[test]
+    fn events_flag_accepts_only_json() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(!events_json_arg(&args(&["--input", "x.mp4"])).unwrap());
+        assert!(events_json_arg(&args(&["--events=json"])).unwrap());
+        assert!(events_json_arg(&args(&["--events", "JSON"])).unwrap());
+        assert_eq!(events_json_arg(&args(&["--events=xml"])).unwrap_err(), 2);
+        assert_eq!(events_json_arg(&args(&["--events"])).unwrap_err(), 2);
+    }
+
+    /// `probe`：普通文件给 size/kind，不存在走错误分支；判不出的扩展名按音频。
+    ///
+    /// 断骨锚点：把 `probe_info` 里 `fs::metadata` 的 `?` 改成 `unwrap_or_default()`
+    /// （读不到就给 0），第一条断言立刻变红。
+    #[test]
+    fn probe_reports_size_and_kind_and_errors_on_a_missing_file() {
+        let root = env::temp_dir().join(format!("oneasr-cli-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert!(
+            probe_info(&root.join("nope.mp4")).is_err(),
+            "不存在的文件必须走错误分支"
+        );
+
+        let audio = root.join("track.mp3");
+        std::fs::write(&audio, vec![7u8; 1234]).unwrap();
+        let info = probe_info(&audio).expect("普通文件要给 size/kind");
+        assert_eq!(info.size_bytes, 1234);
+        assert_eq!(info.kind, oneasr_core::MediaKind::Audio);
+        assert_eq!(info.to_json()["input"], audio.display().to_string());
+        assert_eq!(info.to_json()["size_bytes"], 1234);
+        assert_eq!(info.to_json()["kind"], "audio");
+
+        // 视频容器大小写不敏感；判不出来的扩展名按音频而不是报错。
+        let video = root.join("CLIP.MP4");
+        std::fs::write(&video, vec![0u8; 8]).unwrap();
+        assert_eq!(
+            probe_info(&video).unwrap().kind,
+            oneasr_core::MediaKind::Video
+        );
+        let no_ext = root.join("plain");
+        std::fs::write(&no_ext, b"x").unwrap();
+        assert_eq!(
+            probe_info(&no_ext).unwrap().kind,
+            oneasr_core::MediaKind::Audio
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
