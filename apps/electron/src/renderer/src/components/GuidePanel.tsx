@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { t, UiLang } from '../i18n'
 import { useEscClose } from '../esc'
+import { panelMotion } from '../motion'
 
 export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => void }) {
   const s = t(lang)
@@ -20,10 +21,7 @@ export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => voi
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, y: 18, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 10, scale: 0.97 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+        {...panelMotion}
       >
         <div className="modal-header">
           <h3>{s.guideTitle}</h3>

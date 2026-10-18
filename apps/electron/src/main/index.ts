@@ -373,6 +373,13 @@ app.whenReady().then(() => {
   }
   createWindow()
   createTray(resolveAppIcon())
+  // 托盘 tooltip 跟着当前阶段走（GPUI 的 tray.rs 同款）：长任务挂着的时候一眼能看到进展
+  jobs.on('tasks', (list: { status: string; stage?: string }[]) => {
+    if (!tray) return
+    const running = list.find((t) => t.status === 'running')
+    const base = m().trayTooltip
+    tray.setToolTip(running?.stage ? `${base} · ${running.stage}` : base)
+  })
   console.log('[oneasr] tray ready')
 })
 

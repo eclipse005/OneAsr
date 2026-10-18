@@ -20,6 +20,8 @@ const zh = {
   welcomeBody:
     '把音视频拖进来即可生成带时间轴的字幕。请先确认状态栏显示模型就绪，再在设置里调整语言、输出格式与计算后端。',
   emptyTitle: '拖放音视频到此处',
+  emptyTitleNotReady: '先把模型准备好',
+  emptyHintNotReady: '状态栏显示模型未就绪 —— 在「设置 → 模型」里指到权重目录，或把权重放进 models/ 再刷新',
   emptyHint: '或点击「添加」选择文件 · 支持 wav / mp3 / mp4 / mkv …',
   dropActive: '松开以添加文件',
   modelsReady: '模型就绪',
@@ -150,6 +152,9 @@ const zh = {
   emptyGroup: '未命名',
   confirmDiscard: '有未保存更改，确定关闭？',
   confirmDeleteGroup: '删除这个词组？',
+  discardChanges: '放弃更改',
+  restoreDefaults: '恢复默认',
+  restored: '已恢复默认设置',
   removeWord: '移除',
   sensevoicePath: '粗转模型路径',
   dialogFailed: '打开文件对话框失败',
@@ -179,6 +184,8 @@ const en: Dict = {
   welcomeBody:
     'Drop media to generate timed subtitles. Make sure the status bar shows models ready, then tune language, formats, and backend in Settings.',
   emptyTitle: 'Drop media here',
+  emptyTitleNotReady: 'Set up models first',
+  emptyHintNotReady: 'Models are not ready — point to the weights in Settings → Models, or drop them under models/ and refresh',
   emptyHint: 'Or click Add · wav / mp3 / mp4 / mkv …',
   dropActive: 'Release to add',
   modelsReady: 'Models ready',
@@ -309,6 +316,9 @@ const en: Dict = {
   emptyGroup: 'Untitled',
   confirmDiscard: 'Discard unsaved changes?',
   confirmDeleteGroup: 'Delete this group?',
+  discardChanges: 'Discard changes',
+  restoreDefaults: 'Restore defaults',
+  restored: 'Defaults restored',
   removeWord: 'Remove',
   sensevoicePath: 'SenseVoice path',
   dialogFailed: 'File dialog failed',
@@ -334,6 +344,13 @@ export const LANG_OPTIONS = [
   { id: 'ko', label: '한국어' },
   { id: 'auto', label: 'Auto' }
 ]
+
+/** 「已忽略 N 个不支持的文件」/「N unsupported file(s) ignored」：拖放过滤的说明。 */
+export function unsupportedCount(lang: UiLang, n: number): string {
+  return lang === 'zh'
+    ? `已忽略 ${n} 个不支持的文件（支持 wav / mp3 / mp4 / mkv …）`
+    : `${n} unsupported file${n > 1 ? 's' : ''} ignored (wav / mp3 / mp4 / mkv …)`
+}
 
 /** 「排队第 N 位」/「Queued · #N」：队列位次（Dict 只放字符串，带参数的走 helper）。 */
 export function queueRank(lang: UiLang, n: number): string {

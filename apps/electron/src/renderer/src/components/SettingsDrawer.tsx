@@ -4,6 +4,7 @@ import { LANG_OPTIONS, t, UiLang } from '../i18n'
 import type { HotwordStore, ModelStatus, Settings } from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
 import { useEscClose } from '../esc'
+import { panelMotion } from '../motion'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
@@ -101,6 +102,7 @@ export function SettingsDrawer({
   onHotwordsChange,
   onSave,
   onReset,
+  onRestoreDefaults,
   onClose,
   onPickDir,
   onPickModel,
@@ -116,7 +118,10 @@ export function SettingsDrawer({
   onChange: (next: Settings) => void
   onHotwordsChange: (next: HotwordStore) => void
   onSave: () => void
+  /** 放弃未保存的改动（回到已保存的值） */
   onReset: () => void
+  /** 恢复默认设置（会落盘） */
+  onRestoreDefaults: () => void
   onClose: () => void
   onPickDir: () => void
   onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir') => void
@@ -131,7 +136,13 @@ export function SettingsDrawer({
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     onChange({ ...draft, [key]: value })
 
+  /** 有未保存改动时先确认，别让人手一滑丢掉刚调的参数 */
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const tryClose = () => {
+    if (dirty && !confirmDiscard) {
+      setConfirmDiscard(true)
+      return
+    }
     onClose()
   }
 
@@ -180,10 +191,7 @@ export function SettingsDrawer({
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, y: 18, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 10, scale: 0.97 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+        {...panelMotion}
       >
         <div className="modal-header">
           <h3>{s.settings}</h3>
@@ -508,12 +516,38 @@ export function SettingsDrawer({
           ) : null}
           <span className="hint">{dirty ? s.unsaved : ''}</span>
           <button type="button" className="btn btn-ghost" onClick={onReset}>
-            {s.reset}
+            {s.discardChanges}
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onRestoreDefaults}>
+            {s.restoreDefaults}
           </button>
           <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
             {s.save}
           </button>
         </div>
+
+        {confirmDiscard && (
+          <div className="confirm-strip">
+            <span>{s.confirmDiscard}</span>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setConfirmDiscard(false)}
+            >
+              {s.cancel}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setConfirmDiscard(false)
+                onClose()
+              }}
+            >
+              {s.discardChanges}
+            </button>
+          </div>
+        )}
       </motion.div>
     </div>
   )

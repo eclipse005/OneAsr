@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { LANG_OPTIONS, formatDuration, queueRank, t, UiLang } from '../i18n'
 import { useEscClose } from '../esc'
+import { rowMotion } from '../motion'
 import type { HotwordGroup, TaskSnapshot } from '../../../shared/types'
 
 /** 文件大小：GB / MB / KB 自适应。 */
@@ -132,11 +133,7 @@ export function TaskList({
             <motion.div
               className={`task-card status-${task.status}`}
               key={task.id}
-              layout
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8, scale: 0.98 }}
-              transition={{ duration: 0.2 }}
+              {...rowMotion}
             >
               <div>
                 <div className="name">

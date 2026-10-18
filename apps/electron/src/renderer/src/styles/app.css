@@ -100,6 +100,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-danger-ghost:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
 
 .main { flex: 1; min-height: 0; position: relative; padding: 16px; }
+/* 拖着文件进来时，不管列表空不空都要有落点提示（以前只有空态那个虚线框会亮） */
+.main.dragging::after {
+  content: ''; position: absolute; inset: 8px; z-index: 5;
+  border: 2px dashed var(--accent); border-radius: calc(var(--radius) + 6px);
+  background: var(--accent-mist); opacity: 0.5; pointer-events: none;
+}
 
 .dropzone {
   height: 100%;
@@ -129,6 +135,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   -webkit-mask: url('@assets/icons/audio.svg') center / contain no-repeat;
   mask: url('@assets/icons/audio.svg') center / contain no-repeat;
 }
+.dropzone-actions { display: flex; gap: 8px; margin-top: 8px; }
 .dropzone h2 { margin: 0; color: var(--text); font-size: 1.2rem; font-weight: 700; }
 .dropzone p { margin: 0; font-size: 0.92rem; }
 
@@ -278,6 +285,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   flex-shrink: 0;
 }
 .modal-footer .hint { flex: 1; color: var(--warn); font-size: 0.82rem; font-weight: 600; }
+/* 有未保存改动时的关闭确认：贴在面板底部，不另开一层模态 */
+.confirm-strip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-top: 1px solid var(--line);
+  background: var(--warn-soft); color: var(--warn); font-size: 0.84rem; font-weight: 600;
+  flex-shrink: 0;
+}
+.confirm-strip > span { flex: 1; }
 
 /* 使用指南：步骤卡在浮窗里垂直居中，避免固定高度下大片留白 */
 .guide-body { justify-content: center; gap: 12px; overflow: hidden; }

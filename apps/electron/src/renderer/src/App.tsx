@@ -7,7 +7,11 @@ import { StatusBar } from './components/StatusBar'
 import { TaskList } from './components/TaskList'
 import { TitleBar } from './components/TitleBar'
 import { WelcomeModal } from './components/WelcomeModal'
-import { resolveUiLang, t } from './i18n'
+import { resolveUiLang, t, unsupportedCount } from './i18n'
+import { toastMotion } from './motion'
+
+/** 支持的媒体扩展名（与主进程文件对话框的过滤器保持一致）。 */
+const MEDIA_RE = /\.(wav|mp3|flac|m4a|aac|ogg|mp4|mkv|mov|webm|avi)$/i
 import type {
   HotwordStore,
   ModelStatus,
@@ -43,12 +47,15 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastPayload[]>([])
   const [statusMsg, setStatusMsg] = useState<{ kind: string; text: string } | null>(null)
   const statusTimer = useRef<number | undefined>(undefined)
+  /** 正在开系统文件对话框（防重入） */
+  const [picking, setPicking] = useState(false)
 
   const lang = useMemo(
     () => resolveUiLang(draft?.ui_language || settings?.ui_language || 'system'),
     [draft?.ui_language, settings?.ui_language]
   )
   const s = t(lang)
+  const modelsReady = !!models?.ready
   const dirty = !!(
     settingsBaseline &&
     draft &&
@@ -206,26 +213,40 @@ export default function App() {
   }
 
   const addFiles = async (paths?: string[]) => {
+    if (picking) return
     let list = paths
     if (!list) {
-      const r = await window.oneasr.pickFiles()
-      if (!r.ok) {
-        pushToast('error', `${s.dialogFailed}: ${r.error || ''}`)
-        return
+      // 系统对话框是异步的：不加锁的话连点会开好几个窗口
+      setPicking(true)
+      try {
+        const r = await window.oneasr.pickFiles()
+        if (!r.ok) {
+          pushToast('error', `${s.dialogFailed}: ${r.error || ''}`)
+          return
+        }
+        list = r.paths
+      } finally {
+        setPicking(false)
       }
-      list = r.paths
       if (!list.length) {
         pushToast('info', s.noFiles)
         return
       }
     }
-    if (!list.length) return
-    setTasks(await window.oneasr.addTasks(list))
+    // 拖进来的可能什么都有：只收媒体，其余报一次数——不静默吞掉（GPUI 是静默跳过并记日志）
+    const media = list.filter((p) => MEDIA_RE.test(p))
+    const skipped = list.length - media.length
+    if (skipped > 0) {
+      pushToast(media.length === 0 ? 'warn' : 'info', unsupportedCount(lang, skipped))
+    }
+    if (!media.length) return
+    setTasks(await window.oneasr.addTasks(media))
   }
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setDragging(false)
+    // 过滤与提示都在 addFiles 里统一做（对话框与拖放走同一条路）
     const files = Array.from(e.dataTransfer.files || [])
     const paths = files
       .map((f) => (f as File & { path?: string }).path)
@@ -256,7 +277,7 @@ export default function App() {
     <div className="app">
       <TitleBar lang={lang} />
       <div className="toolbar">
-        <button className="btn btn-primary" onClick={() => void addFiles()}>
+        <button className="btn btn-primary" disabled={picking} onClick={() => void addFiles()}>
           {s.add}
         </button>
         <button
@@ -303,7 +324,7 @@ export default function App() {
       </div>
 
       <div
-        className="main"
+        className={`main ${dragging ? 'dragging' : ''}`}
         onDragOver={(e) => {
           e.preventDefault()
           setDragging(true)
@@ -320,8 +341,16 @@ export default function App() {
             <div className="icon">
               <span className="audio-glyph" />
             </div>
-            <h2>{dragging ? s.dropActive : s.emptyTitle}</h2>
-            <p>{s.emptyHint}</p>
+            <h2>{dragging ? s.dropActive : modelsReady ? s.emptyTitle : s.emptyTitleNotReady}</h2>
+            <p>{modelsReady ? s.emptyHint : s.emptyHintNotReady}</p>
+            <div className="dropzone-actions">
+              <button className="btn btn-primary" disabled={picking} onClick={() => void addFiles()}>
+                {s.add}
+              </button>
+              <button className="btn btn-ghost" onClick={() => void openSettingsFn('models')}>
+                {s.openSettings}
+              </button>
+            </div>
           </motion.div>
         ) : (
           <TaskList
@@ -363,9 +392,7 @@ export default function App() {
             <motion.div
               key={toast.id}
               className={`toast ${toast.kind}`}
-              initial={{ opacity: 0, y: 12, x: 8 }}
-              animate={{ opacity: 1, y: 0, x: 0 }}
-              exit={{ opacity: 0, y: 8 }}
+              {...toastMotion}
             >
               {toast.message}
             </motion.div>
@@ -398,7 +425,17 @@ export default function App() {
             onReset={() => {
               if (settingsBaseline) setDraft(structuredClone(settingsBaseline))
               if (hotwordsBaseline) setHotwordDraft(structuredClone(hotwordsBaseline))
-              pushToast('info', s.reset)
+              pushToast('info', s.discardChanges)
+            }}
+            onRestoreDefaults={() => {
+              // 真·恢复默认：写盘（settings:reset），再把草稿与基线对齐
+              void window.oneasr.resetSettings().then((saved) => {
+                setSettings(saved)
+                setSettingsBaseline(structuredClone(saved))
+                setDraft(structuredClone(saved))
+                void refreshModels()
+                pushToast('success', s.restored)
+              })
             }}
             onClose={() => {
               if (settings) setDraft(structuredClone(settings))
