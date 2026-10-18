@@ -140,6 +140,25 @@ export class JobManager extends EventEmitter {
     })
   }
 
+  /** 退出前把在跑的 CLI 收掉，别留孤儿进程。 */
+  shutdown(): void {
+    if (this.running) {
+      try {
+        this.running.kill('SIGTERM')
+      } catch {
+        /* ignore */
+      }
+      try {
+        this.running.kill('SIGKILL')
+      } catch {
+        /* ignore */
+      }
+    }
+    this.running = null
+    this.runningId = null
+    this.queue = []
+  }
+
   /** 行内改一项（运行中锁定，与 GPUI 的 locks_row_actions 一致）。 */
   private patch(id: string, fn: (t: TaskSnapshot) => void): TaskSnapshot[] {
     const t = this.tasks.find((x) => x.id === id)

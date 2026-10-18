@@ -1,4 +1,14 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  shell,
+  Tray
+} from 'electron'
 import { join } from 'path'
 import fs from 'fs'
 import {
@@ -11,6 +21,7 @@ import {
 } from './settings'
 import { JobManager } from './jobs'
 import { addSessionContext, initLog, installProcessHandlers, logPathname } from './log'
+import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
 import type { HotwordStore, Settings } from '../shared/types'
 
@@ -37,7 +48,44 @@ function resolveAppIcon(): string | undefined {
 }
 
 let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+/** 区分「用户点退出」与「点了窗口的关闭键」：前者要真退，后者看 close_to_tray。 */
+let quitting = false
 const jobs = new JobManager()
+
+/** 托盘：左键恢复窗口，菜单里「打开 / 退出」。关窗到托盘的行为在 window 的 close 里。 */
+function createTray(icon: string | undefined): void {
+  const image = icon ? nativeImage.createFromPath(icon) : nativeImage.createEmpty()
+  // Windows 托盘要小图；macOS 用 18pt 比较合适
+  const sized =
+    process.platform === 'win32' ? image.resize({ width: 16, height: 16 }) : image.resize({ width: 18, height: 18 })
+  tray = new Tray(sized.isEmpty() ? nativeImage.createEmpty() : sized)
+  const t = m()
+  tray.setToolTip(t.trayTooltip)
+  const showWindow = (): void => {
+    if (!mainWindow) {
+      createWindow()
+      return
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: t.trayOpen, click: showWindow },
+      { type: 'separator' },
+      {
+        label: t.trayQuit,
+        click: () => {
+          quitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on('click', showWindow)
+}
 
 
 async function runAutoShots(win: BrowserWindow): Promise<void> {
@@ -173,6 +221,15 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
+    }
+  })
+
+  // 关窗：开了「关闭时隐藏到托盘」就藏起来（任务继续跑），否则按真关闭走
+  mainWindow.on('close', (event) => {
+    if (quitting) return
+    if (loadSettings().close_to_tray) {
+      event.preventDefault()
+      mainWindow?.hide()
     }
   })
 
@@ -315,6 +372,24 @@ app.whenReady().then(() => {
     if (dockIcon) app.dock?.setIcon(dockIcon)
   }
   createWindow()
+  createTray(resolveAppIcon())
+  console.log('[oneasr] tray ready')
+})
+
+// 退出前把在跑的 CLI 收掉（否则子进程会变孤儿），并让 close 处理器知道这是真退出
+app.on('before-quit', () => {
+  quitting = true
+  jobs.shutdown()
+})
+
+// macOS：点 Dock 图标 / 关掉唯一窗口后想再打开
+app.on('activate', () => {
+  if (!mainWindow) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
 })
 
 app.on('window-all-closed', () => {
