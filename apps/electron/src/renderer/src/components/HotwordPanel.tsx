@@ -128,192 +128,178 @@ export function HotwordEditor({
   }
 
   return (
-    <div className={`hw-embed ${compact ? 'compact' : ''}`}>
-      <div className="hw-layout">
-        <aside className="hw-sidebar">
-          <div className="hw-sidebar-head">{s.groups}</div>
-          <div className="hw-group-list">
-            <AnimatePresence initial={false}>
-              {draft.groups.map((g) => {
-                const n = parseWords(g.words).length
-                const isDef = draft.default_group === g.id
-                return (
-                  <motion.button
-                    key={g.id}
-                    type="button"
-                    layout
-                    className={`hw-group-item ${g.id === sel ? 'active' : ''}`}
-                    onClick={() => setSel(g.id)}
-                    initial={{ opacity: 0, x: -6 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -6 }}
-                  >
-                    <div>
-                      {g.name.trim() || s.emptyGroup}
-                      {isDef ? ` · ${s.isDefault}` : ''}
-                    </div>
-                    <div className="meta">
-                      {n} {s.wordCount}
-                    </div>
-                  </motion.button>
-                )
-              })}
-            </AnimatePresence>
-          </div>
-          <div className="hw-sidebar-foot">
+    <div className={`hw-embed vertical ${compact ? 'compact' : ''}`}>
+      {/* Top: compact group management */}
+      <div className="hw-group-bar">
+        <select
+          className="hw-group-select"
+          value={group?.id || ''}
+          onChange={(e) => setSel(e.target.value)}
+          aria-label={s.groups}
+        >
+          {draft.groups.map((g) => {
+            const n = parseWords(g.words).length
+            const isDef = draft.default_group === g.id
+            const label = g.name.trim() || s.emptyGroup
+            return (
+              <option key={g.id} value={g.id}>
+                {label}
+                {isDef ? ` · ${s.isDefault}` : ''}
+                {` (${n})`}
+              </option>
+            )
+          })}
+        </select>
+        <input
+          className="text-input hw-name"
+          placeholder={s.groupNamePh}
+          value={group?.name || ''}
+          disabled={!group}
+          onChange={(e) => group && updateGroup(group.id, { name: e.target.value })}
+          aria-label={s.groupName}
+        />
+        <span className="hw-count">
+          {words.length} {s.wordCount}
+        </span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => {
+            const id = `g${Date.now()}`
+            touch({
+              ...draft,
+              groups: [...draft.groups, { id, name: '', words: '' }]
+            })
+            setSel(id)
+          }}
+        >
+          + {s.addGroup}
+        </button>
+        <button
+          type="button"
+          className={`chip ${group && draft.default_group === group.id ? 'active' : ''}`}
+          disabled={!group}
+          onClick={() =>
+            group &&
+            touch({
+              ...draft,
+              default_group: group.id,
+              default_group_enabled: true
+            })
+          }
+        >
+          {s.setDefault}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-danger-ghost btn-sm"
+          disabled={!group || draft.groups.length <= 1}
+          onClick={() => {
+            if (!group) return
+            if (!confirm(s.confirmDeleteGroup)) return
+            const next = draft.groups.filter((g) => g.id !== group.id)
+            const nextDef =
+              draft.default_group === group.id ? next[0]?.id || null : draft.default_group
+            touch({ ...draft, groups: next, default_group: nextDef })
+            setSel(next[0]?.id || 'default')
+          }}
+        >
+          {s.deleteGroup}
+        </button>
+      </div>
+
+      {/* Middle: chip cloud */}
+      <div className={`hw-chips ${words.length === 0 ? 'empty' : ''}`}>
+        {!group ? (
+          <span>{s.emptyGroup}</span>
+        ) : words.length === 0 ? (
+          <span>{s.emptyChips}</span>
+        ) : (
+          <AnimatePresence initial={false}>
+            {words.map((w) => (
+              <motion.span
+                key={w}
+                className="hw-chip"
+                layout
+                initial={{ opacity: 0, scale: 0.88 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.88 }}
+                transition={{ duration: 0.15 }}
+              >
+                {w}
+                <button type="button" aria-label={s.removeWord} onClick={() => removeWord(w)}>
+                  ×
+                </button>
+              </motion.span>
+            ))}
+          </AnimatePresence>
+        )}
+      </div>
+
+      {/* Bottom: add + params */}
+      <div className="hw-bottom">
+        <div className="hw-add">
+          <input
+            className="text-input"
+            placeholder={s.addWordPh}
+            value={addRaw}
+            disabled={!group}
+            onChange={(e) => setAddRaw(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                applyAdd()
+              }
+            }}
+          />
+          <button type="button" className="btn btn-primary btn-sm" disabled={!group} onClick={applyAdd}>
+            {s.addWord}
+          </button>
+          {lastAdded != null && lastAdded > 0 && (
+            <span className="hw-add-feedback">+{lastAdded}</span>
+          )}
+        </div>
+        <div className="hw-params">
+          <div className="pref-row hw-param-toggle">
+            <span className="pref-label">{s.defaultGroup}</span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ width: '100%' }}
-              onClick={() => {
-                const id = `g${Date.now()}`
+              className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
+              role="switch"
+              aria-checked={draft.default_group_enabled}
+              disabled={!group}
+              onClick={() =>
                 touch({
                   ...draft,
-                  groups: [...draft.groups, { id, name: '', words: '' }]
+                  default_group_enabled: !draft.default_group_enabled,
+                  default_group: draft.default_group || group?.id || null
                 })
-                setSel(id)
-              }}
-            >
-              + {s.addGroup}
-            </button>
+              }
+            />
           </div>
-        </aside>
-
-        <div className="hw-editor">
-          {group ? (
-            <>
-              <div className="hw-topbar">
-                <input
-                  className="text-input hw-name"
-                  placeholder={s.groupNamePh}
-                  value={group.name}
-                  onChange={(e) => updateGroup(group.id, { name: e.target.value })}
-                  aria-label={s.groupName}
-                />
-                <span className="hw-count">
-                  {words.length} {s.wordCount}
-                </span>
-                <button
-                  type="button"
-                  className={`chip ${draft.default_group === group.id ? 'active' : ''}`}
-                  onClick={() =>
-                    touch({
-                      ...draft,
-                      default_group: group.id,
-                      default_group_enabled: true
-                    })
-                  }
-                >
-                  {s.setDefault}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-danger-ghost btn-sm"
-                  disabled={draft.groups.length <= 1}
-                  onClick={() => {
-                    if (!confirm(s.confirmDeleteGroup)) return
-                    const next = draft.groups.filter((g) => g.id !== group.id)
-                    const nextDef =
-                      draft.default_group === group.id ? next[0]?.id || null : draft.default_group
-                    touch({ ...draft, groups: next, default_group: nextDef })
-                    setSel(next[0]?.id || 'default')
-                  }}
-                >
-                  {s.deleteGroup}
-                </button>
-              </div>
-
-              <div className="hw-add">
-                <input
-                  className="text-input"
-                  placeholder={s.addWordPh}
-                  value={addRaw}
-                  onChange={(e) => setAddRaw(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      applyAdd()
-                    }
-                  }}
-                />
-                <button type="button" className="btn btn-primary btn-sm" onClick={applyAdd}>
-                  {s.addWord}
-                </button>
-                {lastAdded != null && lastAdded > 0 && (
-                  <span className="hw-add-feedback">+{lastAdded}</span>
-                )}
-              </div>
-
-              <div className={`hw-chips ${words.length === 0 ? 'empty' : ''}`}>
-                {words.length === 0 ? (
-                  <span>{s.emptyChips}</span>
-                ) : (
-                  <AnimatePresence initial={false}>
-                    {words.map((w) => (
-                      <motion.span
-                        key={w}
-                        className="hw-chip"
-                        layout
-                        initial={{ opacity: 0, scale: 0.88 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.88 }}
-                        transition={{ duration: 0.15 }}
-                      >
-                        {w}
-                        <button type="button" aria-label={s.removeWord} onClick={() => removeWord(w)}>
-                          ×
-                        </button>
-                      </motion.span>
-                    ))}
-                  </AnimatePresence>
-                )}
-              </div>
-
-              <div className="hw-params">
-                <div className="field stack">
-                  <label>{s.defaultGroup}</label>
-                  <button
-                    type="button"
-                    className={`toggle ${draft.default_group_enabled ? 'on' : ''}`}
-                    role="switch"
-                    aria-checked={draft.default_group_enabled}
-                    onClick={() =>
-                      touch({
-                        ...draft,
-                        default_group_enabled: !draft.default_group_enabled,
-                        default_group: draft.default_group || group.id
-                      })
-                    }
-                  />
-                </div>
-                <div className="field stack">
-                  <label>{s.topK}</label>
-                  <input
-                    className="text-input"
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={draft.top_k}
-                    onChange={(e) => touch({ ...draft, top_k: Number(e.target.value) || 40 })}
-                  />
-                </div>
-                <div className="field stack">
-                  <label>{s.threshold}</label>
-                  <input
-                    className="text-input"
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={draft.threshold}
-                    onChange={(e) => touch({ ...draft, threshold: Number(e.target.value) || 0.7 })}
-                  />
-                </div>
-              </div>
-            </>
-          ) : (
-            <p style={{ color: 'var(--muted)' }}>{s.emptyGroup}</p>
-          )}
+          <div className="field">
+            <label>{s.topK}</label>
+            <input
+              className="text-input"
+              type="number"
+              min={1}
+              max={200}
+              value={draft.top_k}
+              onChange={(e) => touch({ ...draft, top_k: Number(e.target.value) || 40 })}
+            />
+          </div>
+          <div className="field">
+            <label>{s.threshold}</label>
+            <input
+              className="text-input"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={draft.threshold}
+              onChange={(e) => touch({ ...draft, threshold: Number(e.target.value) || 0.7 })}
+            />
+          </div>
         </div>
       </div>
 
@@ -333,6 +319,7 @@ export function HotwordEditor({
       </div>
     </div>
   )
+
 }
 
 /** @deprecated Standalone modal — prefer SettingsDrawer hotwords tab. Kept for rare callers. */
