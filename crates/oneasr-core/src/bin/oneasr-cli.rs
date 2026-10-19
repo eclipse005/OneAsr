@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     }
 
     // 线程池 / 线程优先级：这里**刻意不调用** `oneasr_core::init_runtime()`。
-    // 它做的唯一一件事是"给 GPUI 事件循环留一个核"（为全局 rayon 池保留一个
+    // 它做的唯一一件事是"给 UI 事件循环留一个核"（为全局 rayon 池保留一个
     // 逻辑核），理由是让 UI 不被模型 CPU 算子饿死；CLI 没有事件循环要保护，
     // 一次性批处理把整台机器用满才是对的，ffmpeg 作为子进程也不需要别人让路。
     // `demote_current_thread()` 同理，那是 GUI worker 线程的优先级策略。
@@ -78,6 +78,7 @@ fn main() -> ExitCode {
         "transcribe" | "run" | "pipeline" => cmd_transcribe(rest),
         "asr-chunk" | "chunk" => cmd_asr_chunk(rest),
         "align" => cmd_align(rest),
+        "transcript" => cmd_transcript(rest),
         "render" => cmd_render(rest),
         "download" => cmd_download(rest),
         "status" => cmd_status(rest),
@@ -134,6 +135,8 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let hotword_group = arg(args, "--hotword-group");
     let hotword_words = arg(args, "--hotwords");
     let sensevoice_model_dir = arg(args, "--sensevoice-model-dir").map(PathBuf::from);
+    let output_dir = arg(args, "--output-dir").map(PathBuf::from);
+    let save_next_to_source = flag(args, "--save-next-to-source");
 
     let input_path = PathBuf::from(&input);
     if !input_path.is_file() {
@@ -192,6 +195,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         asr_override,
         aligner_override,
     );
+    apply_output_flags(&mut settings, output_dir, save_next_to_source);
     if let Some(dir) = demucs_model_dir {
         settings.demucs_model_dir = dir;
     }
@@ -230,7 +234,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     );
     eprintln!(
         "{}",
-        i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.resolved_output_dir())
+        i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.srt_target_dir(&input_path))
     );
     if let Some(run) = &settings.hotword_run {
         // 只报条数、不回显组名（banner 会进日志、会被贴出去，组名是用户内容）。
@@ -451,19 +455,37 @@ fn hotword_rough_will_run(settings: &Settings) -> bool {
     !oneasr_core::hotword::HotwordIndex::new(&run.text, run.threshold).is_empty()
 }
 
+/// 分段计数：`total <= 1` 不算分段（界面不出现 1/1），与 `StageUpdate::label` 同一条规则。
+fn chunk_mark(chunk: Option<(usize, usize)>) -> Option<(usize, usize)> {
+    match chunk {
+        Some((cur, total)) if total > 1 => Some((cur, total)),
+        _ => None,
+    }
+}
+
 /// 一条 stage 事件的 JSON。
 ///
 /// 字段名是契约（壳按名取值）；抽成纯函数是为了让**形状**能在单测里断言，
-/// 不必去捕获 stdout。
-fn stage_event(stage: AsrStage, progress: StageProgress) -> serde_json::Value {
-    json!({
+/// 不必去捕获 stdout。`index` / `total` / `pct` 是**阶段计划**里的位置，不是分段。
+/// 分段（转写 2/5、打轴 3/10）只在 `total > 1` 时多带 `chunk` / `chunkTotal`。
+fn stage_event(
+    stage: AsrStage,
+    progress: StageProgress,
+    chunk: Option<(usize, usize)>,
+) -> serde_json::Value {
+    let mut value = json!({
         "event": "stage",
         "key": stage.key(),
         "label": stage.label(i18n::ui_lang()),
         "index": progress.index,
         "total": progress.total,
         "pct": progress.pct,
-    })
+    });
+    if let Some((cur, total)) = chunk_mark(chunk) {
+        value["chunk"] = json!(cur);
+        value["chunkTotal"] = json!(total);
+    }
+    value
 }
 
 /// 收尾的耗时事件：每个阶段一条 `timing`，最后一条 `total`。
@@ -498,15 +520,43 @@ fn error_event(message: &str) -> serde_json::Value {
     json!({ "event": "error", "message": message })
 }
 
-/// `--events=json` 的事件出口：只在**阶段变化**时发 stage，收尾发 timing / total，
-/// 最后一条是 done 或 error。
+/// 上次发出的阶段，以及当时的分段（没有分段是 `None`）。
+type StageCursor = Option<(AsrStage, Option<(usize, usize)>)>;
+
+/// 这一次阶段更新要不要发 stage 事件。
+///
+/// 阶段变了就发。同一阶段里，只有分段计数变了才再发（`total <= 1` 不算分段）。
+/// 同阶段、没有新分段的更新（例如人声分离改走 CPU 的警告）不发，免得把已经
+/// 显示的 n/N 清掉。返回 `(事件, 下一次用来去重的游标)`。
+fn stage_note(
+    plan: &mut Vec<AsrStage>,
+    last: StageCursor,
+    update: &StageUpdate,
+) -> (Option<serde_json::Value>, StageCursor) {
+    let mark = chunk_mark(update.chunk);
+    if let Some((stage, prev)) = last
+        && stage == update.stage
+        && (mark.is_none() || mark == prev)
+    {
+        return (None, last);
+    }
+    if !plan.contains(&update.stage) {
+        plan.push(update.stage);
+    }
+    let event = stage_progress(plan, update.stage)
+        .map(|progress| stage_event(update.stage, progress, mark));
+    (event, Some((update.stage, mark)))
+}
+
+/// `--events=json` 的事件出口：阶段变化时发 stage，同一阶段里分段变了再发一条，
+/// 收尾发 timing / total，最后一条是 done 或 error。
 ///
 /// 计划外的阶段理论上是「算漏了」，但接口上每个 stage 事件都必须带 index/total/pct；
 /// 宁可就地把它补进计划（total 随之 +1），也不发一个缺字段的事件。正常路径走不到。
 struct StageEvents {
     enabled: bool,
     plan: Vec<AsrStage>,
-    last: Option<AsrStage>,
+    last: StageCursor,
 }
 
 impl StageEvents {
@@ -518,17 +568,15 @@ impl StageEvents {
         }
     }
 
-    /// 收到一次阶段更新：分段进度（同一阶段反复来）不重复发。
+    /// 收到一次阶段更新。分段进度（转写 2/5、打轴 3/10）各发一条；完全相同的不重复。
     fn note(&mut self, update: &StageUpdate) {
-        if !self.enabled || self.last == Some(update.stage) {
+        if !self.enabled {
             return;
         }
-        self.last = Some(update.stage);
-        if !self.plan.contains(&update.stage) {
-            self.plan.push(update.stage);
-        }
-        if let Some(progress) = stage_progress(&self.plan, update.stage) {
-            println!("{}", stage_event(update.stage, progress));
+        let (event, next) = stage_note(&mut self.plan, self.last, update);
+        self.last = next;
+        if let Some(event) = event {
+            println!("{event}");
         }
     }
 
@@ -586,12 +634,17 @@ fn cmd_status(args: &[String]) -> Result<(), i32> {
     i18n::set_ui_lang(settings.resolved_ui_language());
     apply_status_overrides(&mut settings, args)?;
     let settings = resolve_status_paths(settings, &app_root, &data_root);
-    let report = status_report(
+    let mut report = status_report(
         &settings,
         &app_root,
         &data_root,
         &oneasr_core::paths::models_root(),
     );
+    // 文稿任务换一条门禁：文字来自用户，不需要 ASR；--transcript 还把
+    // 「至少 SRT 或 ASS」提前到点开始之前。原因仍是 core 的双语串。
+    if flag(args, "--transcript") {
+        report.can_start_reason = settings.can_start_transcript().err();
+    }
 
     if want_json {
         println!("{}", report.to_json());
@@ -613,6 +666,17 @@ fn cmd_status(args: &[String]) -> Result<(), i32> {
 fn apply_status_overrides(settings: &mut Settings, args: &[String]) -> Result<(), i32> {
     if let Some(language) = arg(args, "--language") {
         settings.language = language;
+    }
+    // 文稿任务固定 CTC；壳在问门禁时显式点名它，否则设置的 Qwen 已装会
+    // 放行、跑到打轴阶段才发现 CTC 缺失（假绿）。
+    if let Some(raw) = arg(args, "--aligner") {
+        match parse_aligner_arg(&raw) {
+            Some(id) => settings.aligner_model = id.as_str().into(),
+            None => {
+                eprintln!("{}", i18n::cli_aligner_unknown(&raw));
+                return Err(2);
+            }
+        }
     }
     if flag(args, "--vocal-separation") {
         settings.vocal_separation = true;
@@ -697,6 +761,8 @@ struct StatusReport {
     /// 全仓库唯一的音视频扩展名清单（core `media::supported_exts()`）：全小写、
     /// 不带点，音频在前、视频在后。壳拿它拼文件过滤器，不再自己维护正则。
     media_exts: Vec<&'static str>,
+    /// 文稿扩展名（core `transcript::TRANSCRIPT_EXTS`）：壳拿它做配对与过滤器。
+    transcript_exts: Vec<&'static str>,
     asr: ModelSlot,
     aligner: ModelSlot,
     demucs: ModelSlot,
@@ -734,6 +800,7 @@ impl StatusReport {
             "language": self.language,
             "ui_language": self.ui_language,
             "media_exts": self.media_exts,
+            "transcript_exts": self.transcript_exts,
             "models": {
                 "asr": slot(&self.asr),
                 "aligner": slot(&self.aligner),
@@ -788,6 +855,7 @@ fn status_report(
         ui_language: settings.resolved_ui_language().setting_value(),
         // 表在 core：status 只转发，壳与 probe 读的是同一份（全仓库唯一判据）。
         media_exts: oneasr_core::media::supported_exts(),
+        transcript_exts: oneasr_core::transcript::TRANSCRIPT_EXTS.to_vec(),
         asr: slot(settings.selected_asr_id(), &settings.asr_model_dir),
         aligner: slot(settings.selected_aligner_id(), &settings.aligner_model_dir),
         demucs: slot(ModelId::HtdemucsFt, &settings.resolved_demucs_model_dir()),
@@ -1241,6 +1309,22 @@ impl Drop for TempFileGuard {
 /// 目录"的规则：CLI 的 `--app-root` / `--data-root` 都是用户自己指的路，两边都查
 /// 一遍最不容易"看不见已下好的模型"（老脚本把权重放在 `--app-root` 下，换到
 /// `--data-root` 后权重在新家）；那里防的是程序自己猜出来的 exe 目录。
+/// CLI 默认把输出放在 `{data-root}/output`（批处理脚本的稳定约定）。GUI 通过
+/// 这两个旗标把「保存到源文件旁」与自定义输出目录带回给核心；最终目录仍由
+/// [`Settings::srt_target_dir`] 决定，源目录不可写时回退到 `--output-dir`。
+fn apply_output_flags(
+    settings: &mut Settings,
+    output_dir: Option<PathBuf>,
+    save_next_to_source: bool,
+) {
+    if let Some(dir) = output_dir {
+        settings.output_dir = dir;
+    }
+    if save_next_to_source {
+        settings.save_next_to_source = true;
+    }
+}
+
 fn apply_app_root_paths(
     settings: &mut Settings,
     app_root: &Path,
@@ -1446,9 +1530,28 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         1
     })?;
 
+    // 输出格式先判：**用法错**要在碰 ffmpeg、模型与目录解析之前就报出来。
+    //
+    // 文稿匹配的产物必须带时间轴（SRT 或 ASS 至少一个）——纯 TXT 的匹配没有
+    // 时间轴产物可言。判据在 core（`settings::timed_output_selected`），门禁
+    // 与这里问的是同一条；这里先判，是为了把「用法错」和「模型没就绪」分开报。
+    //
+    // 顺序也是刻意的：这一段只读旗标，不碰任何进程级状态（`pin_data_root`
+    // 会把数据目录钉死在进程里），所以它能单独被单测盖住。
+    let want_txt = flag(args, "--txt");
+    let want_ass = flag(args, "--ass");
+    let no_srt = flag(args, "--no-srt");
+    if let Err(msg) = check_align_outputs(no_srt, want_ass) {
+        eprintln!("{msg}");
+        return Err(2);
+    }
+    let output_dir = arg(args, "--output-dir").map(PathBuf::from);
+    let save_next_to_source = flag(args, "--save-next-to-source");
+
     let app_root = parse_app_root(args)?;
     // 数据目录必须在任何 `Settings::default()` / 路径解析之前钉住。
     let data_root = pin_data_root(args, &app_root)?;
+
     ensure_ffmpeg(&app_root)?;
 
     let language = arg(args, "--language").unwrap_or_else(|| "zh".into());
@@ -1456,12 +1559,6 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
     let backend = arg(args, "--backend").unwrap_or_else(|| "auto".into());
-    let want_txt = flag(args, "--txt");
-    let want_ass = flag(args, "--ass");
-    let no_srt = flag(args, "--no-srt");
-    if no_srt && !want_txt && !want_ass {
-        eprintln!("{}", i18n::cli_no_srt_warning());
-    }
     // 热词旗标只服务识别阶段；align 整个跳过识别（文字来自文稿），给了也只会
     // 静默失效——说出来，别让用户对着「一点变化都没有」猜。
     if arg(args, "--hotword-group").is_some() || arg(args, "--hotwords").is_some() {
@@ -1488,8 +1585,9 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     }
     // 文稿匹配固定用 CTC：整段一次对齐，块边界不伤词。见设计文档 §1.1。
     settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+    apply_output_flags(&mut settings, output_dir, save_next_to_source);
     settings.normalize();
-    if let Err(e) = settings.can_start() {
+    if let Err(e) = settings.can_start_transcript() {
         eprintln!("{e}");
         return Err(1);
     }
@@ -1507,7 +1605,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     );
     eprintln!(
         "{}",
-        i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.resolved_output_dir())
+        i18n::cli_kv(i18n::CLI_KV_OUTPUT, &settings.srt_target_dir(&audio))
     );
 
     let media_name = audio
@@ -1564,7 +1662,137 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     }
 }
 
+// ─── transcript ───────────────────────────────────────────────────
+
+/// 文稿是纯数据：解析、统计、断句都在 core 里；这里只负责把结果变成
+/// 壳能直接消费的 JSON（`--json`）。
+fn cmd_transcript(args: &[String]) -> Result<(), i32> {
+    match args.first().map(String::as_str) {
+        Some("inspect") => cmd_transcript_inspect(&args[1..]),
+        Some("split") => cmd_transcript_split(&args[1..]),
+        _ => {
+            print_help();
+            Err(2)
+        }
+    }
+}
+
+fn transcript_speech_rate(rate: Option<oneasr_core::transcript::SpeechRate>) -> serde_json::Value {
+    match rate {
+        Some(rate) => json!({
+            "per_second": rate.per_second,
+            "spaced": rate.spaced,
+            "plausible": rate.plausible(),
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// 文稿解析后的 JSON。`text` 一起返回：面板打开时不用再读一遍文件。
+fn transcript_json(
+    transcript: &oneasr_core::transcript::Transcript,
+    audio_seconds: Option<f64>,
+) -> serde_json::Value {
+    let stats = transcript.stats();
+    json!({
+        "kind": match transcript.kind {
+            oneasr_core::transcript::TranscriptKind::Plain => "plain",
+            oneasr_core::transcript::TranscriptKind::SubRip => "subrip",
+        },
+        "text": &transcript.text,
+        "lines": stats.lines,
+        "chars": stats.chars,
+        "dropped_timecodes": transcript.dropped_timecodes(),
+        "speech_rate": transcript_speech_rate(audio_seconds.and_then(|s| stats.rate(s))),
+    })
+}
+
+/// 断句 / 编辑后的纯文本 JSON。kind 仍取源文稿，好让界面继续说
+/// 「原时间轴已忽略」。
+fn transcript_text_json(
+    text: &str,
+    kind: oneasr_core::transcript::TranscriptKind,
+    audio_seconds: Option<f64>,
+) -> serde_json::Value {
+    let stats = oneasr_core::transcript::text_stats(text);
+    json!({
+        "kind": match kind {
+            oneasr_core::transcript::TranscriptKind::Plain => "plain",
+            oneasr_core::transcript::TranscriptKind::SubRip => "subrip",
+        },
+        "text": text,
+        "lines": stats.lines,
+        "chars": stats.chars,
+        "dropped_timecodes": kind == oneasr_core::transcript::TranscriptKind::SubRip,
+        "speech_rate": transcript_speech_rate(audio_seconds.and_then(|s| stats.rate(s))),
+    })
+}
+
+fn cmd_transcript_inspect(args: &[String]) -> Result<(), i32> {
+    let input = require_arg(args, "--input")?;
+    let audio_seconds = arg(args, "--audio-seconds").and_then(|s| s.parse::<f64>().ok());
+    let transcript = oneasr_core::transcript::read_transcript(Path::new(&input)).map_err(|e| {
+        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
+        1
+    })?;
+    if flag(args, "--json") {
+        println!("{}", transcript_json(&transcript, audio_seconds));
+    } else {
+        eprintln!(
+            "{}",
+            i18n::cli_transcript_loaded(
+                transcript.line_count(),
+                transcript.char_count(),
+                transcript.dropped_timecodes()
+            )
+        );
+        println!("{}", transcript.text);
+    }
+    Ok(())
+}
+
+fn cmd_transcript_split(args: &[String]) -> Result<(), i32> {
+    let input = require_arg(args, "--input")?;
+    let lang = arg(args, "--lang").unwrap_or_else(|| "zh".into());
+    let preset = arg(args, "--preset").unwrap_or_else(|| "standard".into());
+    if !matches!(preset.as_str(), "short" | "standard" | "loose") {
+        eprintln!("{}", i18n::cli_preset_unknown(&preset));
+        return Err(2);
+    }
+    let audio_seconds = arg(args, "--audio-seconds").and_then(|s| s.parse::<f64>().ok());
+    let transcript = oneasr_core::transcript::read_transcript(Path::new(&input)).map_err(|e| {
+        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
+        1
+    })?;
+    let text = oneasr_core::sentence_boundary::break_long_lines(&transcript.text, &lang, &preset);
+    if flag(args, "--json") {
+        println!(
+            "{}",
+            transcript_text_json(&text, transcript.kind, audio_seconds)
+        );
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
 // ─── download ─────────────────────────────────────────────────────
+
+/// `align` 的输出组合检查：文稿匹配的产物必须带时间轴（SRT 或 ASS 至少一个）。
+///
+/// 判据只有 core 那一处（[`oneasr_core::settings::timed_output_selected`]），
+/// 门禁（`Settings::can_start_transcript`）与这里问的是同一条；这里先判，
+/// 是为了把「用法错」和「模型没就绪」分开报——前者退出码 2，不该等模型。
+///
+/// 抽成纯函数是为了能在单测里断言**是哪一种组合被拒**（见
+/// `align_needs_a_timestamped_output`）。
+fn check_align_outputs(no_srt: bool, want_ass: bool) -> Result<(), &'static str> {
+    if oneasr_core::settings::timed_output_selected(!no_srt, want_ass) {
+        Ok(())
+    } else {
+        Err(i18n::cli_align_needs_timed_output())
+    }
+}
 
 /// `download --model` 的解析结果：**下载落点**与**已装检查的候选**。
 ///
@@ -1628,7 +1856,7 @@ fn parse_download_arg(raw: &str) -> Option<DownloadPick> {
 /// 存在的理由是 GUI 之外还要一条可脚本化的下载路径（Electron 壳调它）：
 /// - **落点用安装布局名**（`{data-root}/models/{目录名}`）：与设置里的
 ///   `asr_model_dir` / `aligner_model_dir` 是同一批目录，调用方拿 id 就能算出路径；
-/// - **先验后下**，与 GPUI 的 `start_model_download` 同一道门禁：已装且校验通过就
+/// - **先验后下**，与 Electron 壳的下载入口同一道门禁：已装且校验通过就
 ///   一步都不下，只报「已存在」；
 /// - 进度一行给人（stderr，双语）、一行给上层（stdout，机器可读），格式写在
 ///   `--help` 的 download 段落里。
@@ -2715,6 +2943,17 @@ mod tests {
             assert_eq!(*ext, ext.to_ascii_lowercase(), "必须全小写: {ext}");
             assert!(!ext.starts_with('.'), "必须不带点: {ext}");
         }
+        let transcript_exts: Vec<&str> = value["transcript_exts"]
+            .as_array()
+            .expect("transcript_exts 必须是数组")
+            .iter()
+            .map(|v| v.as_str().expect("扩展名必须是字符串"))
+            .collect();
+        assert_eq!(
+            transcript_exts,
+            oneasr_core::transcript::TRANSCRIPT_EXTS,
+            "壳的配对 / 过滤器读这张表"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2810,6 +3049,135 @@ mod tests {
         apply_status_overrides(&mut zh, &["--language".to_string(), "zh".to_string()]).unwrap();
         assert!(zh.can_start().is_err(), "中文 + 热词组但缺粗转模型必须拦");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// align 的产物必须带时间轴：SRT 或 ASS 至少一个。
+    ///
+    /// `--no-srt --txt`（只要纯文本）没有时间轴产物可言 —— 文稿匹配跑不出
+    /// 字幕，与其在管线里失败，不如在用法这一层就拒掉。
+    ///
+    /// 断骨锚点：把 `check_align_outputs` 里的 `timed_output_selected` 换成
+    /// `true`，下面两条 `is_err` 断言立刻变红（该拒的组合被放行）。
+    #[test]
+    fn align_needs_a_timestamped_output() {
+        // 默认：写 SRT —— 合法。
+        assert!(check_align_outputs(false, false).is_ok());
+        // 只要 ASS（`--no-srt --ass`）：ASS 也是带时间轴的 —— 合法。
+        assert!(check_align_outputs(true, true).is_ok());
+        // 只要 TXT（`--no-srt --txt`）：没有时间轴产物 —— 拒。
+        assert!(check_align_outputs(true, false).is_err());
+        // 什么也不要（`--no-srt`）：同样没有时间轴产物 —— 拒。
+        assert!(check_align_outputs(true, false).is_err());
+        // 拒绝的理由要说清怎么改：两种语言的文案都点出 SRT / ASS。
+        let err = check_align_outputs(true, false).unwrap_err();
+        assert!(err.contains("SRT") && err.contains("ASS"), "{err}");
+    }
+
+    /// `align --no-srt --txt` 是一条**用法错**，不是「模型没就绪」。
+    ///
+    /// 这条命令以前能跑（门禁问的是 `can_start()`），改用文稿门禁后必须
+    /// 明确地拒掉，而不是报一个「模型未就绪」让人去装根本用不上的权重。
+    ///
+    /// 断骨锚点：把 `cmd_align` 里 `check_align_outputs` 那段删掉，这条命令
+    /// 会继续往下走（钉数据目录 → 找 ffmpeg），退出码变成 1，断言立刻变红。
+    #[test]
+    fn align_rejects_a_txt_only_output_before_anything_else() {
+        let dir = env::temp_dir().join("oneasr-cli-align-output-gate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("clip.mp4");
+        let text = dir.join("clip.txt");
+        std::fs::write(&audio, b"not really a video").unwrap();
+        std::fs::write(&text, "第一行。\n第二行。\n").unwrap();
+
+        let args = |extra: &[&str]| -> Vec<String> {
+            let mut v = vec![
+                "--audio".to_string(),
+                audio.to_string_lossy().to_string(),
+                "--text".to_string(),
+                text.to_string_lossy().to_string(),
+            ];
+            v.extend(extra.iter().map(|s| s.to_string()));
+            v
+        };
+
+        // 只要 TXT：没有时间轴产物 —— 用法错，退出码 2。
+        assert_eq!(cmd_align(&args(&["--no-srt", "--txt"])).unwrap_err(), 2);
+        // 什么也不要：同样没有时间轴产物 —— 用法错，退出码 2。
+        assert_eq!(cmd_align(&args(&["--no-srt"])).unwrap_err(), 2);
+        // （`--no-srt --ass` 是合法的：它由上面那条纯函数用例盖住。这里不跑
+        //   它——放行之后命令会继续往下走，钉住进程级的数据目录，污染别的用例。）
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GUI 的输出模式：默认 headless 落在 `{data-root}/output`；壳传
+    /// `--save-next-to-source` / `--output-dir` 后必须把这两件事交还给核心。
+    ///
+    /// 断骨锚点：删掉 `if save_next_to_source` 分支，第一条断言变红；删掉
+    /// `--output-dir` 赋值，第二条断言变红。
+    #[test]
+    fn output_flags_restore_the_gui_output_mode() {
+        let dir = env::temp_dir().join("oneasr-cli-output-mode");
+        let mut next_to_source = Settings {
+            output_dir: env::temp_dir().join("headless-output"),
+            save_next_to_source: false,
+            ..Settings::default()
+        };
+        apply_output_flags(&mut next_to_source, Some(dir.clone()), true);
+        assert_eq!(next_to_source.output_dir, dir);
+        assert!(next_to_source.save_next_to_source);
+
+        let mut fixed_dir = Settings {
+            save_next_to_source: false,
+            ..Settings::default()
+        };
+        apply_output_flags(&mut fixed_dir, Some(dir.clone()), false);
+        assert_eq!(fixed_dir.output_dir, dir);
+        assert!(!fixed_dir.save_next_to_source);
+    }
+
+    #[test]
+    fn transcript_json_reports_stats_and_rate() {
+        let t = oneasr_core::transcript::parse_transcript(
+            oneasr_core::transcript::TranscriptKind::Plain,
+            "第一行。\n第二行。",
+        )
+        .unwrap();
+        let v = transcript_json(&t, Some(4.0));
+        assert_eq!(v["lines"], 2);
+        assert_eq!(v["chars"], t.char_count());
+        assert_eq!(v["dropped_timecodes"], false);
+        assert_eq!(v["speech_rate"]["spaced"], false, "中文按字算");
+        assert!(
+            v["speech_rate"]["per_second"].as_f64().is_some(),
+            "给了时长就必须有语速"
+        );
+    }
+
+    #[test]
+    fn transcript_split_json_keeps_the_source_kind() {
+        let t = oneasr_core::transcript::parse_transcript(
+            oneasr_core::transcript::TranscriptKind::SubRip,
+            "1\n00:00:01,000 --> 00:00:03,000\n第一行。\n第二行。\n",
+        )
+        .unwrap();
+        let text = oneasr_core::sentence_boundary::break_long_lines(&t.text, "zh", "short");
+        let v = transcript_text_json(&text, t.kind, None);
+        assert_eq!(v["kind"], "subrip");
+        assert_eq!(v["dropped_timecodes"], true);
+        assert_eq!(v["text"], text);
+    }
+
+    /// 壳问文稿门禁时会点名 CTC：设置里选着 Qwen 也不能让门禁去看 Qwen。
+    #[test]
+    fn status_aligner_override_selects_ctc() {
+        let mut s = Settings::default();
+        apply_status_overrides(&mut s, &["--aligner".into(), "ctc".into()]).unwrap();
+        assert_eq!(
+            s.aligner_model,
+            oneasr_core::ModelId::OmniAsrCtc300M.as_str()
+        );
     }
 
     /// 目录解析：与 transcribe 同一条规则 —— 点名的型号赢过扫描，root 布局照常生效。
@@ -2973,6 +3341,7 @@ mod tests {
                 total: 9,
                 pct: 67,
             },
+            None,
         );
         assert_eq!(stage["event"], "stage");
         assert_eq!(stage["key"], "transcribing");
@@ -2980,6 +3349,36 @@ mod tests {
         assert_eq!(stage["index"], 6);
         assert_eq!(stage["total"], 9);
         assert_eq!(stage["pct"], 67);
+        // 没有分段时不带 chunk 字段，免得壳把「没有」和「0 段」混在一起。
+        assert!(stage.get("chunk").is_none());
+        assert!(stage.get("chunkTotal").is_none());
+
+        let chunked = stage_event(
+            AsrStage::Transcribing,
+            StageProgress {
+                index: 6,
+                total: 9,
+                pct: 67,
+            },
+            Some((2, 5)),
+        );
+        assert_eq!(chunked["chunk"], 2);
+        assert_eq!(chunked["chunkTotal"], 5);
+        // 分段数字不占用阶段计划的 index/total。
+        assert_eq!(chunked["index"], 6);
+        assert_eq!(chunked["total"], 9);
+        // 只有一段时不报 1/1。
+        let single = stage_event(
+            AsrStage::Aligning,
+            StageProgress {
+                index: 1,
+                total: 1,
+                pct: 100,
+            },
+            Some((1, 1)),
+        );
+        assert!(single.get("chunk").is_none());
+        assert!(single.get("chunkTotal").is_none());
 
         let timing = timing_events(&TaskTiming {
             stages: vec![oneasr_core::StageTiming {
@@ -3006,6 +3405,89 @@ mod tests {
         let error = error_event("模型未就绪：…");
         assert_eq!(error["event"], "error");
         assert_eq!(error["message"], "模型未就绪：…");
+    }
+
+    /// 同一阶段的分段进度要逐条发出：转写 1/5 然后 2/5 是两条事件。
+    /// 只有一段、或同阶段没有新分段（警告）时不重发。
+    ///
+    /// 断骨锚点：把 `stage_note` 改回「同一阶段直接 return」，2/5 那条
+    /// `expect` 立刻变红（事件是 None）。把 `chunk_mark` 的 `total > 1` 去掉，
+    /// 「只有一段不带 chunk」那两条 `is_none` 也变红。
+    #[test]
+    fn stage_events_repeat_when_the_chunk_changes() {
+        let mut plan = vec![
+            AsrStage::Converting,
+            AsrStage::Transcribing,
+            AsrStage::Aligning,
+        ];
+        let mut last = None;
+
+        let (first, next) = stage_note(
+            &mut plan,
+            last,
+            &StageUpdate::with_chunk(AsrStage::Transcribing, 1, 5),
+        );
+        let first = first.expect("第一段要发");
+        assert_eq!(first["key"], "transcribing");
+        assert_eq!(first["chunk"], 1);
+        assert_eq!(first["chunkTotal"], 5);
+        // 2/5 是分段，不是阶段计划：转写在这条计划里仍是第 2 个阶段、共 3 个。
+        assert_eq!(first["index"], 2);
+        assert_eq!(first["total"], 3);
+        last = next;
+
+        let (same, next) = stage_note(
+            &mut plan,
+            last,
+            &StageUpdate::with_chunk(AsrStage::Transcribing, 1, 5),
+        );
+        assert!(same.is_none(), "同一段同一进度不重复发");
+        last = next;
+
+        let (second, next) = stage_note(
+            &mut plan,
+            last,
+            &StageUpdate::with_chunk(AsrStage::Transcribing, 2, 5),
+        );
+        let second = second.expect("2/5 要再发一条");
+        assert_eq!(second["chunk"], 2);
+        assert_eq!(second["chunkTotal"], 5);
+        assert_eq!(second["key"], "transcribing");
+        assert_eq!(second["index"], 2);
+        last = next;
+
+        // 打轴只有一段：换阶段要发，但不带 1/1，再来一次也不重复。
+        let (one, next) = stage_note(
+            &mut plan,
+            last,
+            &StageUpdate::with_chunk(AsrStage::Aligning, 1, 1),
+        );
+        let one = one.expect("换阶段要发");
+        assert_eq!(one["key"], "aligning");
+        assert!(one.get("chunk").is_none());
+        assert!(one.get("chunkTotal").is_none());
+        let (repeat, _) = stage_note(
+            &mut plan,
+            next,
+            &StageUpdate::with_chunk(AsrStage::Aligning, 1, 1),
+        );
+        assert!(repeat.is_none(), "只有一段时不发 1/1，也不重复");
+
+        // 人声分离已经报到 3/10，接着一条没分段的警告不能把进度清掉。
+        let mut sep_plan = vec![AsrStage::Separating];
+        let (progress, cursor) = stage_note(
+            &mut sep_plan,
+            None,
+            &StageUpdate::with_chunk(AsrStage::Separating, 3, 10),
+        );
+        assert_eq!(progress.expect("分离进度要发")["chunk"], 3);
+        let (warn, kept) = stage_note(
+            &mut sep_plan,
+            cursor,
+            &StageUpdate::new(AsrStage::Separating).with_warning("已改用 CPU"),
+        );
+        assert!(warn.is_none(), "同阶段没有新分段时不重发");
+        assert_eq!(kept, cursor, "游标留在 3/10，下一次分段还能接着比");
     }
 
     /// `--events` 只认 `json`；末尾孤零零一个旗标也不许当没给。

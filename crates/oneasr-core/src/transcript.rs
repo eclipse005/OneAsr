@@ -15,11 +15,16 @@ use std::path::Path;
 
 use crate::sentence_boundary::join_words;
 
+/// 文稿扩展名（全小写、不带点）。`status --json` 把它交给壳做文件过滤与配对；
+/// 与 [`TranscriptKind::from_path`] 是同一份真相。只收纯文本与 SRT，Markdown
+/// 不再当作文稿（没有独立的解析语义，用户也不会把 `.md` 当字幕稿）。
+pub const TRANSCRIPT_EXTS: &[&str] = &["txt", "srt"];
+
 /// 文稿是什么格式。界面不区分它——两种读进来之后都是同一坨纯文本——但保下来是
 /// 为了「这个文稿原来的时间轴被忽略了」这句话能说准。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptKind {
-    /// `.txt` / `.md`：行就是行。
+    /// `.txt`：行就是行。
     Plain,
     /// `.srt`：序号与时间轴已剥除，每个 cue 合成一行。
     SubRip,
@@ -33,7 +38,7 @@ impl TranscriptKind {
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
-            Some("txt" | "md" | "markdown") => Some(Self::Plain),
+            Some("txt") => Some(Self::Plain),
             Some("srt") => Some(Self::SubRip),
             _ => None,
         }
@@ -552,5 +557,22 @@ mod tests {
             Some(TranscriptKind::SubRip)
         );
         assert_eq!(TranscriptKind::from_path(Path::new("a.mp4")), None);
+        // 文稿只收 txt / srt；Markdown 不再有独立的解析语义。
+        assert_eq!(TranscriptKind::from_path(Path::new("a.md")), None);
+        assert_eq!(TranscriptKind::from_path(Path::new("a.markdown")), None);
+    }
+
+    /// 壳拿 `TRANSCRIPT_EXTS` 做配对与对话框过滤；这张表必须和解析器一致，
+    /// 否则「对话框选不到 / 拖进来却能用」的同一条缝会再次出现。
+    #[test]
+    fn the_extension_table_is_the_parser_table() {
+        for ext in TRANSCRIPT_EXTS {
+            let path = std::path::PathBuf::from(format!("x.{ext}"));
+            assert!(
+                TranscriptKind::from_path(&path).is_some(),
+                "{ext} 必须在解析器里"
+            );
+        }
+        assert!(TranscriptKind::from_path(Path::new("x.mp4")).is_none());
     }
 }

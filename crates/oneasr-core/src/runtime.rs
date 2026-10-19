@@ -3,7 +3,7 @@
 /// Cap the global rayon pool **before** any model load / transcribe.
 ///
 /// Model CPU kernels use rayon's global pool. Leaving every logical core to
-/// rayon freezes the GPUI event loop. Always keep at least one core for UI/OS.
+/// rayon starves the UI / OS event loop. Always keep at least one core for UI/OS.
 pub fn init_runtime() {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())

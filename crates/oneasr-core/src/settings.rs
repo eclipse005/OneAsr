@@ -9,7 +9,7 @@ use crate::i18n;
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::model::{
     ModelId, ModelKind, OMNI_ASR_CTC_300M, QWEN_ALIGN_06B, QWEN3_ASR_06B,
-    default_aligner_model_dir, default_asr_model_dir, resolve_model_dir,
+    default_aligner_model_dir, default_asr_model_dir, resolve_model_dir, resolve_models_root,
 };
 use crate::paths;
 use crate::text_script::{self, TextScript};
@@ -160,14 +160,6 @@ pub struct Settings {
     /// 真退出。
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
-    /// 首次启动欢迎卡是否已经看过（看过 = 永不再弹）。
-    ///
-    /// serde 字段默认是 `true`：老配置里没有这个字段，升级用户不该再看一遍
-    /// 欢迎卡。`false` 只会出现在 [`Self::default`] —— 也就是连 settings.json
-    /// 都不存在的全新安装上。首次关闭时由 GUI 立刻落盘，见 `oneasr` 的
-    /// `dismiss_welcome`。
-    #[serde(default = "default_welcome_done")]
-    pub welcome_done: bool,
     /// Pre-0.2.0 switch, read-only and never written back: `ui_sound` merged
     /// into [`Self::sound`], and an install that had muted either family must
     /// not get sound back just because the field it turned off disappeared from
@@ -239,16 +231,24 @@ fn default_sound() -> bool {
     true
 }
 
-// 欢迎卡只该出现在全新安装上：settings.json 缺这个字段（老配置）落 `true`
-// 不弹，[`Settings::default`]（全新安装的落点）才显式给 `false`。
-fn default_welcome_done() -> bool {
-    true
-}
-
 /// `close_to_tray` 默认关：老用户的关窗语义不变（直接退出），要托盘的显式
 /// 打开一次开关。
 fn default_close_to_tray() -> bool {
     false
+}
+
+/// 选中的输出里有没有**带时间轴**的那一种（SRT / ASS）。
+///
+/// 这条判据全仓库只有这一处，三处都问它：
+/// - [`Settings::can_start`]：带时间轴才需要对齐器（TXT 走纯文本路，不需要权重）；
+/// - [`Settings::can_start_transcript`]：文稿匹配必须有带时间轴的产物——纯 TXT
+///   的匹配没有时间轴可言（管线的 TXT-only 文稿匹配同样被拒）；
+/// - CLI 的用法校验（`align --no-srt --txt`）：那是「用法错」，要在碰模型
+///   之前就报出来，不该等门禁。
+///
+/// 写成自由函数而不是方法：CLI 那时只有两个旗标，还没有一份 [`Settings`]。
+pub fn timed_output_selected(output_srt: bool, output_ass: bool) -> bool {
+    output_srt || output_ass
 }
 
 impl Default for Settings {
@@ -284,8 +284,6 @@ impl Default for Settings {
             hotword_run: None,
             sound: default_sound(),
             close_to_tray: default_close_to_tray(),
-            // 全新安装要弹欢迎卡；serde 字段默认（老配置）是 true 不弹。
-            welcome_done: false,
             legacy_ui_sound: None,
             legacy_task_notify: None,
         }
@@ -682,6 +680,7 @@ impl Settings {
         self.asr_dirs
             .get(id.as_str())
             .cloned()
+            .map(absolutize_model_pick)
             .unwrap_or_else(|| resolve_model_dir(id.as_str()))
     }
 
@@ -736,6 +735,7 @@ impl Settings {
         self.aligner_dirs
             .get(id.as_str())
             .cloned()
+            .map(absolutize_model_pick)
             .unwrap_or_else(|| resolve_model_dir(id.as_str()))
     }
 
@@ -804,7 +804,7 @@ impl Settings {
     /// to download a checkpoint whose output nothing consumes.
     pub fn can_start(&self) -> Result<(), String> {
         crate::asr::check_asr_model_dir(&self.asr_model_dir).map_err(|e| e.to_string())?;
-        if self.output_srt || self.output_ass {
+        if timed_output_selected(self.output_srt, self.output_ass) {
             crate::asr::check_aligner_model_dir(&self.aligner_model_dir)
                 .map_err(|e| e.to_string())?;
         }
@@ -813,6 +813,22 @@ impl Settings {
                 .map_err(|e| e.to_string())?;
         }
         self.check_hotword_ready()
+    }
+
+    /// 文稿匹配的门禁：文字来自用户，**不需要 ASR**；只要对齐器（以及人选的人声
+    /// 分离）在位，且至少有一个带时间轴的输出。热词在文稿路径上没有消费者，不查。
+    pub fn can_start_transcript(&self) -> Result<(), String> {
+        if !timed_output_selected(self.output_srt, self.output_ass) {
+            return Err(
+                crate::i18n::t(crate::i18n::ERR_TRANSCRIPT_REQUIRES_TIMED_OUTPUT).to_string(),
+            );
+        }
+        crate::asr::check_aligner_model_dir(&self.aligner_model_dir).map_err(|e| e.to_string())?;
+        if self.vocal_separation {
+            crate::asr::check_demucs_model_dir(&self.resolved_demucs_model_dir())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// 热词这一路的开跑前检查：选了组就必须有词、且粗转模型在位。
@@ -906,6 +922,22 @@ fn decide_default_aligner(ctc_present: bool, qwen_present: bool) -> ModelId {
     } else {
         ModelId::default_aligner()
     }
+}
+
+/// 相对路径的模型目录按「模型根目录」解释。
+///
+/// 配置里存的往往只是一个目录名（`"Qwen3-ForcedAligner-0.6B-hf"`），
+/// 它相对于哪？只有模型根说得通。绝对化之后，界面上的「路径」框显示的是
+/// 一整条路径，而不是一个孤零零的名字——旁边两个框（ASR / Demucs）都是全路径，
+/// 只有它是裸名，看着像坏值。
+///
+/// 绝对路径原样返回：用户自己挑的目录不许被改写（`Path::join` 遇绝对路径
+/// 本来就是整体替换，这里写出来是为了让这条规则一眼可见）。
+fn absolutize_model_pick(pick: PathBuf) -> PathBuf {
+    if pick.is_absolute() {
+        return pick;
+    }
+    resolve_models_root().join(pick)
 }
 
 fn repair_stale_model_dir(current: &mut PathBuf, default: PathBuf, notes: &mut Vec<String>) {
@@ -1041,6 +1073,84 @@ mod tests {
         .unwrap();
         assert!(s.can_start().is_ok(), "{:?}", s.can_start());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 文稿路径的文字来自用户，ASR 没装也不该挡；但它仍然要求 CTC 对齐器与
+    /// 至少一个带时间轴的输出。断骨锚点：把 `can_start_transcript` 改回
+    /// `can_start()`，第一条断言变红。
+    #[test]
+    fn transcript_start_ignores_missing_asr_but_needs_a_timed_output() {
+        let root =
+            std::env::temp_dir().join(format!("oneasr_transcript_gate_{}", std::process::id()));
+        let align = root.join("align-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&align).unwrap();
+        let blob = vec![0u8; 4096];
+        for name in [
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "model.safetensors",
+        ] {
+            std::fs::write(align.join(name), &blob).unwrap();
+        }
+
+        let s = Settings {
+            asr_model_dir: root.join("missing-asr"),
+            aligner_model_dir: align,
+            output_srt: true,
+            output_ass: false,
+            ..Settings::default()
+        };
+        assert!(s.can_start().is_err(), "普通路径仍然要求 ASR");
+        assert!(
+            s.can_start_transcript().is_ok(),
+            "文稿路径不加载 ASR: {:?}",
+            s.can_start_transcript()
+        );
+
+        let mut txt_only = s.clone();
+        txt_only.output_srt = false;
+        txt_only.output_ass = false;
+        txt_only.output_txt = true;
+        let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || {
+            txt_only.can_start_transcript().unwrap_err()
+        });
+        assert!(err.contains("SRT") && err.contains("ASS"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 「有没有带时间轴的产物」这条判据全仓库只有一处：门禁
+    /// （`can_start` 要不要对齐器、`can_start_transcript` 放不放行）与 CLI 的
+    /// 用法校验（`align --no-srt --txt`）问的是同一个函数。
+    ///
+    /// 断骨锚点：把 `timed_output_selected` 改成 `output_srt`（丢掉 ASS），
+    /// 下面 ASS-only 那条断言立刻变红。
+    #[test]
+    fn the_timed_output_rule_has_one_home() {
+        assert!(timed_output_selected(true, false), "SRT 是带时间轴的");
+        assert!(timed_output_selected(false, true), "ASS 也是带时间轴的");
+        assert!(timed_output_selected(true, true), "两个都要时当然算");
+        assert!(!timed_output_selected(false, false), "纯 TXT 没有时间轴");
+
+        // 门禁跟这条判据一致：纯 TXT 的普通转写不需要对齐器（可以跑），
+        // 但文稿匹配必须拒（没有时间轴产物）。
+        let mut s = Settings {
+            output_srt: false,
+            output_ass: false,
+            output_txt: true,
+            ..Settings::default()
+        };
+        s.normalize();
+        assert!(
+            !timed_output_selected(s.output_srt, s.output_ass),
+            "normalize 不得把 TXT-only 变成有时间轴"
+        );
+        assert!(
+            s.can_start_transcript().is_err(),
+            "纯 TXT 的文稿匹配必须拒：{:?}",
+            s.can_start_transcript()
+        );
     }
 
     /// 热词挡路的判据与 `can_start` **同源**（都走 `check_hotword_ready`）：选了组
@@ -1638,6 +1748,45 @@ mod tests {
         assert!(notes.is_empty(), "no-op repair must not record: {notes:?}");
     }
 
+    /// 相对路径的模型目录按「模型根」绝对化。
+    ///
+    /// 配置里存的是目录名（`"Qwen3-ForcedAligner-0.6B-hf"`），界面上的「路径」框
+    /// 要显示一整条路径，不能是孤零零的名字——旁边两个框都是全路径。
+    ///
+    /// 断骨锚点：把 `absolutize_model_pick` 里的 `resolve_models_root().join(pick)`
+    /// 换成 `pick`（= 不绝对化），第一条断言变红（相对目录原样返回）。
+    #[test]
+    fn a_relative_model_pick_becomes_a_full_path() {
+        let name = QWEN_ALIGN_06B;
+        let abs = absolutize_model_pick(PathBuf::from(name));
+        assert_eq!(
+            abs,
+            resolve_models_root().join(name),
+            "相对目录应按模型根绝对化"
+        );
+        assert!(abs.is_absolute(), "{abs:?}");
+        assert!(abs.ends_with(name), "{abs:?}");
+
+        // 用户自己挑的绝对目录原样返回：pick 是「原样记下」的，不许被改写。
+        let mine = std::env::temp_dir().join("oneasr-my-weights");
+        assert_eq!(absolutize_model_pick(mine.clone()), mine);
+    }
+
+    /// 存进配置的相对 pick，查出来时也是全路径（界面上的「路径」框）。
+    #[test]
+    fn a_stored_relative_pick_resolves_to_a_full_path() {
+        let s = Settings {
+            aligner_dirs: BTreeMap::from([(
+                QWEN_ALIGN_06B.to_string(),
+                PathBuf::from(QWEN_ALIGN_06B),
+            )]),
+            ..Settings::default()
+        };
+        let dir = s.aligner_dir_for(ModelId::QwenAlign06B);
+        assert!(dir.is_absolute(), "{dir:?}");
+        assert!(dir.ends_with(QWEN_ALIGN_06B), "{dir:?}");
+    }
+
     #[test]
     fn load_report_is_notable_reflects_errors() {
         // The report contract, without touching the real settings file on disk:
@@ -1888,25 +2037,17 @@ mod tests {
     }
 
     #[test]
-    fn welcome_card_shows_only_on_fresh_installs() {
-        // 全新安装：连 settings.json 都没有，落 Settings::default() —— 要弹欢迎卡。
-        assert!(!Settings::default().welcome_done);
-        // 升级用户：旧配置没有这个字段，serde 字段默认必须落 true —— 别让人
-        // 升个级再看一遍欢迎卡。
-        let legacy: Settings =
-            serde_json::from_str(r#"{"language":"zh"}"#).expect("legacy config parses");
-        assert!(legacy.welcome_done);
-        // 看过一次就永远不再弹：显式写进配置的值要原样往返（save/load 不改它）。
-        let seen = Settings {
-            welcome_done: true,
-            ..Settings::default()
-        };
-        let text = serde_json::to_string(&seen).unwrap();
-        let back: Settings = serde_json::from_str(&text).unwrap();
-        assert!(back.welcome_done);
-        // normalize 不掺和：它只修「非法」值，看没看过欢迎卡没有非法态。
-        let mut kept = back;
-        kept.normalize();
-        assert!(kept.welcome_done);
+    fn retired_welcome_flag_does_not_round_trip() {
+        // 欢迎卡已删除。老配置里残留的 welcome_done 还要能读进来，保存时不再写回去。
+        let mut legacy: Settings =
+            serde_json::from_str(r#"{"language":"zh","welcome_done":false}"#)
+                .expect("legacy config parses");
+        assert_eq!(legacy.language, "zh");
+        legacy.normalize();
+        let text = serde_json::to_string(&legacy).unwrap();
+        assert!(
+            !text.contains("welcome_done"),
+            "欢迎卡开关不该再落盘：{text}"
+        );
     }
 }

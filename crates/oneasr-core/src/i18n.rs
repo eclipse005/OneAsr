@@ -627,6 +627,8 @@ Usage:
   oneasr-cli asr-chunk  --wav <16k.wav> --start <sec> --end <sec> [options]
   oneasr-cli render     --timeline <{stem}.timeline.json> [options]
   oneasr-cli align      --audio <media> --text <transcript> [options]
+  oneasr-cli transcript inspect --input <transcript> [--audio-seconds <n>] [--json]
+  oneasr-cli transcript split   --input <transcript> [--lang <code>] [--preset <id>] [--json]
   oneasr-cli download   --model <id> [--app-root <dir>] [--data-root <dir>]
   oneasr-cli status     [--app-root <dir>] [--data-root <dir>] [--json]
   oneasr-cli probe      --input <media> [--json]
@@ -639,6 +641,8 @@ Commands:
                the transcript's own line breaks become the subtitle lines
                (one line = one cue). Forced to the CTC aligner, which takes the
                whole file in one pass
+  transcript   Read / summarize / smart-split a transcript without running the
+               pipeline (inspect); used by the GUI before alignment
   render       Re-present a measured timeline. No models, no ffmpeg, no audio:
                reads {stem}.timeline.json and writes a subtitle again
   download     Download one model (ASR / aligner / Demucs / hotword) into
@@ -659,6 +663,8 @@ status options:
                              backend, language, ui_language,
                              media_exts: [\"wav\", \"mp3\", ...]  (lowercase, no
                                       dot; the same table probe's kind comes from),
+                             transcript_exts: [\"txt\", \"srt\"]
+                                      (same table transcript reading / pairing uses),
                              models: {asr, aligner, demucs, sensevoice}
                                      each {id, dir, ready, error},
                              catalog: [{id, kind, dir, ready}]  (all 8 entries;
@@ -673,6 +679,9 @@ status options:
                            Exits 0 even when can_start.ok is false: the verdict is
                            the field, not the exit code
   --language <code>        This row recognizes as <code>
+  --aligner <ctc|qwen>     Ask about this aligner instead of the selected one
+  --transcript             This row matches a transcript: require SRT or ASS
+                           and ask about the CTC aligner
   --vocal-separation       This row runs vocal separation (Demucs becomes required)
   --hotword-group <id|name>
                            This row uses that saved hotword group
@@ -714,6 +723,9 @@ transcribe options:
   --aligner <ctc|qwen>     Forced-aligner engine (default: scan CTC first, then Qwen)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy the primary result (SRT, else TXT) to this path
+  --output-dir <dir>       Directory for all enabled outputs (default: {data-root}/output).
+                           With --save-next-to-source this is only the fallback
+  --save-next-to-source    Write outputs next to the source media (GUI default)
   --txt                    Also write {stem}.txt (one sentence per line; split on
                            sentence punctuation, never on the subtitle timeline)
   --ass                    Also write {stem}.ass (karaoke: a sweep per word / CJK char)
@@ -751,7 +763,7 @@ asr-chunk options:
 
 align options:
   --audio <path>           Media file (required)
-  --text <path>            Transcript .txt / .md / .srt (required). One line = one
+  --text <path>            Transcript .txt / .srt (required). One line = one
                            subtitle line; an .srt's own timings are ignored
   --app-root <dir>         App root with bin/ffmpeg
   --data-root <dir>        Where models/, output/ and runs/ live
@@ -761,11 +773,26 @@ align options:
                            the audio itself
   --txt                    Also write {stem}.txt (one sentence per line)
   --ass                    Also write {stem}.ass (karaoke)
-  --no-srt                 Suppress the .srt file (requires --txt or --ass)
+  --no-srt                 Suppress the .srt file. Transcript matching needs a
+                           timestamped output, so this is only valid with --ass
+  --output-dir <dir>       Directory for all enabled outputs (default: {data-root}/output)
+  --save-next-to-source    Write outputs next to the source media (GUI default);
+                           --output-dir is then only the fallback
+  --vocal-separation       Run HTDemucs vocal separation before alignment
+  --demucs-model-dir <dir> Directory holding htdemucs_ft_vocals.safetensors
   --beautify               Polish finished cues (punctuation; spaces beside Han
                            and English or digits, not beside punctuation)
   --events=json            Machine-readable progress on stdout; see the events
                            section below. Off by default
+
+transcript options:
+  inspect --input <path> [--audio-seconds <n>] [--json]
+                           Read + normalize + summarize (lines / chars / rate);
+                           --json includes the text
+  split   --input <path> [--lang <code>] [--preset <short|standard|loose>]
+          [--audio-seconds <n>] [--json]
+                           Smart-break long lines. One line = one subtitle line;
+                           the source file is never written
 
 render options:
   --timeline <path>        Measured timeline written by transcribe (required)
@@ -813,8 +840,13 @@ events (--events=json, transcribe / align):
   stdout                   one JSON object per line; the human-readable [stage]
                            lines stay on stderr. Events, in order:
                              {\"event\":\"stage\",\"key\":\"transcribing\",\"label\":\"Transcribing\",
-                              \"index\":6,\"total\":9,\"pct\":67}
-                               one per stage change. key is a stable English id:
+                              \"index\":6,\"total\":9,\"pct\":67,\"chunk\":2,\"chunkTotal\":5}
+                               one per stage change, and again when the chunk pair
+                               changes (transcribe, align, vocal separation). chunk
+                               and chunkTotal are the piece in progress (2/5); both
+                               are omitted when the stage has no pieces or only one.
+                               index/total/pct stay the stage plan, not the chunk
+                               count. key is a stable English id:
                                converting / separating / planning / rough_transcribing /
                                loading_asr / transcribing / loading_aligner /
                                aligning / exporting. index counts from 1; total counts
@@ -873,6 +905,8 @@ status 选项：
                              backend、language、ui_language、
                              media_exts: [\"wav\", \"mp3\", ...]（全小写、不带点；
                                       与 probe 的 kind 是同一张表），
+                             transcript_exts: [\"txt\", \"srt\"]
+                                      （文稿读取 / 配对用的同一张表），
                              models: {asr, aligner, demucs, sensevoice}
                                      各是 {id, dir, ready, error}，
                              catalog: [{id, kind, dir, ready}]（8 条全列；
@@ -885,6 +919,8 @@ status 选项：
                            音视频扩展名表（音频在前、视频在后，已去重）：壳拿它
                            拼文件过滤器，别再养第二份
   --language <代码>        这一行按 <代码> 识别
+  --aligner <ctc|qwen>     问这个对齐器，而不是设置里选中的那个
+  --transcript             这一行挂文稿：要求 SRT 或 ASS，并按 CTC 对齐器问门禁
   --vocal-separation       这一行做人声分离（于是要求 Demucs 就位）
   --hotword-group <id|组名>
                            这一行用这个热词组
@@ -919,6 +955,9 @@ transcribe 选项：
   --aligner <ctc|qwen>     对齐引擎（默认按 CTC→Qwen 顺序扫描已装目录）
   --max-new-tokens <n>     转写解码上限（默认取设置 / 2048）
   --output <路径>          把主产物（SRT，没有则 TXT）复制到该路径
+  --output-dir <目录>      所有启用格式的输出目录（默认 {data-root}/output）；
+                           配合 --save-next-to-source 时只作兜底
+  --save-next-to-source    输出写到源文件旁（GUI 默认）
   --txt                    额外写出 {stem}.txt（一行一句；按句末标点断句，
                            不看字幕时间轴）
   --ass                    额外写出 {stem}.ass（卡拉OK：逐词 / 中日韩逐字扫光）
@@ -952,7 +991,7 @@ asr-chunk 选项：
 
 align 选项：
   --audio <路径>           音视频文件（必填）
-  --text <路径>            文稿 .txt / .md / .srt（必填）。一行 = 一条字幕行；
+  --text <路径>            文稿 .txt / .srt（必填）。一行 = 一条字幕行；
                            .srt 自带的时间轴会被忽略
   --app-root <目录>        应用目录（含 bin/ffmpeg）
   --data-root <目录>       数据目录（放 models/、output/、runs/）
@@ -961,9 +1000,21 @@ align 选项：
   --chunk-seconds <30-180> 与 transcribe 保持一致；对齐器自己会开窗
   --txt                    额外写出 {stem}.txt（一行一句）
   --ass                    额外写出 {stem}.ass（卡拉OK）
-  --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
+  --no-srt                 不写 .srt 文件。文稿匹配需要带时间轴的产物，
+                           所以它只能与 --ass 同用
+  --output-dir <目录>      所有启用格式的输出目录（默认 {data-root}/output）
+  --save-next-to-source    输出写到源文件旁（GUI 默认）；--output-dir 此时只作兜底
+  --vocal-separation       对齐前先做人声分离
+  --demucs-model-dir <目录> 存放 htdemucs_ft_vocals.safetensors 的目录
   --beautify               成稿字幕美化（标点；汉字与英文、数字之间加空格，标点旁边不加）
   --events=json            机器可读进度走 stdout，格式见下面「事件流」一节；默认关闭
+
+transcript 选项：
+  inspect --input <路径> [--audio-seconds <秒>] [--json]
+                           读取 + 规范化 + 摘要（行数 / 字数 / 语速）；--json 带正文
+  split   --input <路径> [--lang <代码>] [--preset <short|standard|loose>]
+          [--audio-seconds <秒>] [--json]
+                           智能断句：只拆过长行，绝不写回原文件
 
 render 选项：
   --timeline <路径>        transcribe 写出的已测时间轴（必填）
@@ -1007,8 +1058,12 @@ download 进度（每行都是一整行，这里为排版折行）：
 事件流（--events=json，transcribe / align）：
   stdout                   每行一个 JSON 对象；人读的 [阶段] 行仍走 stderr。事件按顺序：
                              {\"event\":\"stage\",\"key\":\"transcribing\",\"label\":\"转写\",
-                              \"index\":6,\"total\":9,\"pct\":67}
-                               阶段变化时一条。key 是稳定的英文标识：converting /
+                              \"index\":6,\"total\":9,\"pct\":67,\"chunk\":2,\"chunkTotal\":5}
+                               阶段变化时一条；同一阶段里分段变了再发一条（转写、打轴、
+                               人声分离）。chunk / chunkTotal 是正在处理的第几段（2/5）；
+                               这一阶段没有分段、或只有一段时不带这两个字段。
+                               index / total / pct 仍是阶段计划，不是分段计数。
+                               key 是稳定的英文标识：converting /
                                separating / planning / rough_transcribing /
                                loading_asr / transcribing / loading_aligner /
                                aligning / exporting。index 从 1 数；total 只算这一趟
@@ -1102,6 +1157,22 @@ pub fn cli_transcript_read_failed(e: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("读不了文稿: {e}"),
         UiLang::En => format!("cannot read transcript: {e}"),
+    }
+}
+
+/// `align 需要带时间轴的产物：SRT 或 ASS 至少启用一个（--no-srt 只能与 --ass 同用）`
+/// / `align needs a timestamped output: enable SRT or ASS (--no-srt is only valid with --ass)`。
+///
+/// 用法错（退出码 2），不是「模型没就绪」：文稿匹配的产物必须带时间轴，
+/// 判据在 [`crate::settings::timed_output_selected`]。
+pub fn cli_align_needs_timed_output() -> &'static str {
+    match ui_lang() {
+        UiLang::Zh => {
+            "align 需要带时间轴的产物：SRT 或 ASS 至少启用一个（--no-srt 只能与 --ass 同用）"
+        }
+        UiLang::En => {
+            "align needs a timestamped output: enable SRT or ASS (--no-srt is only valid with --ass)"
+        }
     }
 }
 
