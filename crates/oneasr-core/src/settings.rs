@@ -9,7 +9,7 @@ use crate::i18n;
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::model::{
     ModelId, ModelKind, OMNI_ASR_CTC_300M, QWEN_ALIGN_06B, QWEN3_ASR_06B,
-    default_aligner_model_dir, default_asr_model_dir, resolve_model_dir, resolve_models_root,
+    default_aligner_model_dir, default_asr_model_dir, resolve_model_dir,
 };
 use crate::paths;
 use crate::text_script::{self, TextScript};
@@ -680,7 +680,6 @@ impl Settings {
         self.asr_dirs
             .get(id.as_str())
             .cloned()
-            .map(absolutize_model_pick)
             .unwrap_or_else(|| resolve_model_dir(id.as_str()))
     }
 
@@ -735,7 +734,6 @@ impl Settings {
         self.aligner_dirs
             .get(id.as_str())
             .cloned()
-            .map(absolutize_model_pick)
             .unwrap_or_else(|| resolve_model_dir(id.as_str()))
     }
 
@@ -922,22 +920,6 @@ fn decide_default_aligner(ctc_present: bool, qwen_present: bool) -> ModelId {
     } else {
         ModelId::default_aligner()
     }
-}
-
-/// 相对路径的模型目录按「模型根目录」解释。
-///
-/// 配置里存的往往只是一个目录名（`"Qwen3-ForcedAligner-0.6B-hf"`），
-/// 它相对于哪？只有模型根说得通。绝对化之后，界面上的「路径」框显示的是
-/// 一整条路径，而不是一个孤零零的名字——旁边两个框（ASR / Demucs）都是全路径，
-/// 只有它是裸名，看着像坏值。
-///
-/// 绝对路径原样返回：用户自己挑的目录不许被改写（`Path::join` 遇绝对路径
-/// 本来就是整体替换，这里写出来是为了让这条规则一眼可见）。
-fn absolutize_model_pick(pick: PathBuf) -> PathBuf {
-    if pick.is_absolute() {
-        return pick;
-    }
-    resolve_models_root().join(pick)
 }
 
 fn repair_stale_model_dir(current: &mut PathBuf, default: PathBuf, notes: &mut Vec<String>) {
@@ -1321,7 +1303,12 @@ mod tests {
         );
 
         // Each of the four variants remembers its own folder.
-        let custom_int8 = PathBuf::from(r"C:\custom\models\Qwen3-ASR-0.6B-int8");
+        // 路径用 join 构造：写死 r"C:\custom\models\..." 在 Linux 上是一整个
+        // 文件名（不是绝对路径），测的就不是「用户挑的目录」这件事了。
+        let custom_int8 = std::env::temp_dir()
+            .join("custom")
+            .join("models")
+            .join("Qwen3-ASR-0.6B-int8");
         s.set_asr_dir(custom_int8.clone());
         s.set_asr_quantized(false);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06B);
@@ -1373,7 +1360,12 @@ mod tests {
         // The macOS report this fixes: models moved out of the app bundle into a
         // custom root, 0.6B pointed at it, then a size switch threw the path back
         // to the install layout and the choice was gone for good.
-        let custom = PathBuf::from(r"C:\custom-models\Qwen3-ASR-0.6B-hf");
+        //
+        // 路径用 join 构造（AGENTS.md 的跨平台规矩）：写死 r"C:\custom-models\..."
+        // 在 Linux 上只是一个相对文件名，这条断言测的就不是「用户挑的目录」了。
+        let custom = std::env::temp_dir()
+            .join("custom-models")
+            .join("Qwen3-ASR-0.6B-hf");
         s.set_asr_dir(custom.clone());
         assert_eq!(s.asr_model_dir, custom);
 
@@ -1748,43 +1740,29 @@ mod tests {
         assert!(notes.is_empty(), "no-op repair must not record: {notes:?}");
     }
 
-    /// 相对路径的模型目录按「模型根」绝对化。
+    /// 存进配置的目录，原样取回：用户挑哪个目录，就加载哪个目录。
     ///
-    /// 配置里存的是目录名（`"Qwen3-ForcedAligner-0.6B-hf"`），界面上的「路径」框
-    /// 要显示一整条路径，不能是孤零零的名字——旁边两个框都是全路径。
+    /// 这条不变式（WYSIWYG）是 `asr_dir_for` / `aligner_dir_for` 的核心承诺：
+    /// 加载路径不许被「猜」出来。之前在这里给相对 pick 加过一层「按模型根
+    /// 绝对化」，结果把用户挑的相对目录改写成了另一个目录 —— Linux CI 上
+    /// `each_asr_size_keeps_its_own_dir` 变红才把它揪出来。
     ///
-    /// 断骨锚点：把 `absolutize_model_pick` 里的 `resolve_models_root().join(pick)`
-    /// 换成 `pick`（= 不绝对化），第一条断言变红（相对目录原样返回）。
+    /// 相对 pick 的含义本来就是**有歧义的**（相对于谁？），与其悄悄猜一个
+    /// 解释，不如原样加载：猜错了用户看到的是「模型未就绪」，而改写了目录
+    /// 用户看到的是「加载了一个我没挑过的目录」——后者更难查。
+    ///
+    /// 界面上要显示全路径，那是**显示层**的事：壳显示 CLI `status --json` 里
+    /// 已经解析好的那个目录，不让 core 替用户改配置。
     #[test]
-    fn a_relative_model_pick_becomes_a_full_path() {
-        let name = QWEN_ALIGN_06B;
-        let abs = absolutize_model_pick(PathBuf::from(name));
-        assert_eq!(
-            abs,
-            resolve_models_root().join(name),
-            "相对目录应按模型根绝对化"
-        );
-        assert!(abs.is_absolute(), "{abs:?}");
-        assert!(abs.ends_with(name), "{abs:?}");
-
-        // 用户自己挑的绝对目录原样返回：pick 是「原样记下」的，不许被改写。
+    fn a_stored_pick_is_returned_verbatim() {
         let mine = std::env::temp_dir().join("oneasr-my-weights");
-        assert_eq!(absolutize_model_pick(mine.clone()), mine);
-    }
-
-    /// 存进配置的相对 pick，查出来时也是全路径（界面上的「路径」框）。
-    #[test]
-    fn a_stored_relative_pick_resolves_to_a_full_path() {
         let s = Settings {
-            aligner_dirs: BTreeMap::from([(
-                QWEN_ALIGN_06B.to_string(),
-                PathBuf::from(QWEN_ALIGN_06B),
-            )]),
+            aligner_dirs: BTreeMap::from([(QWEN_ALIGN_06B.to_string(), mine.clone())]),
+            asr_dirs: BTreeMap::from([(QWEN3_ASR_06B.to_string(), mine.clone())]),
             ..Settings::default()
         };
-        let dir = s.aligner_dir_for(ModelId::QwenAlign06B);
-        assert!(dir.is_absolute(), "{dir:?}");
-        assert!(dir.ends_with(QWEN_ALIGN_06B), "{dir:?}");
+        assert_eq!(s.aligner_dir_for(ModelId::QwenAlign06B), mine);
+        assert_eq!(s.asr_dir_for(ModelId::Qwen3Asr06B), mine);
     }
 
     #[test]
