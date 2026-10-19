@@ -1389,29 +1389,72 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   padding: 14px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 12px;
 }
-.transcript-file { font-size: 0.95rem; font-weight: 750; color: var(--text); word-break: break-all; }
-.transcript-path { margin-top: 4px; font-size: 0.72rem; color: var(--muted); word-break: break-all; }
-.transcript-meta { font-size: 0.84rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.transcript-file {
+  font-size: 0.95rem; font-weight: 750; color: var(--text); word-break: break-all;
+  /* 文件名往往很长：夹到两行，完整名字挂 title */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.transcript-path {
+  margin-top: 4px; font-size: 0.72rem; color: var(--muted); word-break: break-all;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 .transcript-note { font-size: 0.78rem; line-height: 1.55; color: var(--muted); }
 .transcript-warn { font-size: 0.78rem; line-height: 1.55; color: var(--warn); font-weight: 650; }
 .transcript-error { font-size: 0.78rem; line-height: 1.55; color: var(--danger); word-break: break-word; }
 .transcript-rate { font-size: 0.78rem; line-height: 1.5; color: var(--muted); }
 .transcript-rate.bad { color: var(--danger); font-weight: 650; }
-.transcript-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.transcript-promise {
-  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line);
-  font-size: 0.74rem; line-height: 1.55; color: var(--muted);
-}
+/* 动作按钮沉到侧栏底部，与编辑器底边齐平 */
+.transcript-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 .transcript-editor-wrap {
   min-height: 0; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 12px; overflow: hidden;
 }
-.transcript-editor {
-  flex: 1; width: 100%; min-height: 0; resize: none; border: 0; outline: none;
-  padding: 14px 16px; background: var(--panel); color: var(--text);
+/* 编辑区：行号槽 + 隐形镜像 + textarea 三层叠在一起 */
+.transcript-editor-area { position: relative; flex: 1; min-height: 0; }
+
+/* 编辑器与它的隐形镜像：字体与换行规则必须**逐条一致**，
+   否则镜像量出来的行位置跟 textarea 对不上（号会飘）。
+   一条规则写两处，镜像那侧不许单独改。 */
+.transcript-editor,
+.transcript-mirror {
   font: 0.84rem/1.65 ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  letter-spacing: normal; word-spacing: normal; tab-size: 4;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
 }
+.transcript-editor {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  resize: none; border: 0; outline: none;
+  /* 左边让给行号槽 */
+  padding: 14px 16px 14px 56px;
+  background: var(--panel); color: var(--text);
+}
+/* 隐形镜像：只用来量行在哪儿，文字不可见 */
+.transcript-mirror {
+  position: absolute; left: 0; top: 0; width: 0;
+  visibility: hidden; pointer-events: none;
+}
+.transcript-mirror-row { display: block; margin: 0; padding: 0; }
+/* 空行在 textarea 里也占一行高度，镜像里也得占，否则下面全错位 */
+.transcript-mirror-row:empty { min-height: 1.65em; }
+
+/* 行号槽：号只画在字幕行的第一行上，续行留白。
+   z-index 必须高于 textarea —— textarea 的背景是不透明的，槽压在它下面
+   就整个看不见了。 */
+.transcript-gutter {
+  position: absolute; left: 0; top: 0; width: 44px; bottom: 0;
+  z-index: 2; overflow: hidden; pointer-events: none;
+}
+.transcript-gutter-inner { position: absolute; left: 0; right: 0; top: 0; }
+.transcript-gutter-no {
+  position: absolute; right: 10px; height: 1.65em; line-height: 1.65;
+  font: 0.84rem/1.65 ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  color: var(--muted); opacity: 0.55; font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.transcript-gutter-no.is-caret { color: var(--accent); opacity: 1; font-weight: 700; }
 .transcript-editor:read-only { color: var(--muted); background: var(--bg); }
 .transcript-editor-foot {
   display: flex; justify-content: space-between; gap: 12px;

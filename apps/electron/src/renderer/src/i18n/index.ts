@@ -171,6 +171,19 @@ export const zh = {
   guideSounds: '这个开关会保存。任务完成时的提示音还没接到界面上。',
   guideTray: '开着时，点窗口关闭会缩到托盘，任务继续跑。托盘菜单里的退出才会真正关掉。关掉时，点窗口关闭就是退出。',
   guideLog: '报错记在程序目录的日志里。设置里能看到当前这份和上一份轮转加在一起的大小。打开日志可以把报错原样发给别人。清理会删掉这两份，下一笔报错会重新写上这次运行的信息。',
+  guideTabTranscript: '文稿',
+  guideTranscriptPair:
+    '拖进来的 .txt / .srt 会按文件名跟媒体配对，挂到同一行；没配上同名的会单独点出来，不会被悄悄丢掉。也可以点行里的「文稿」chip 自己选一个。',
+  guideTranscriptPanel:
+    '点开文稿 chip 打开面板：左边是摘要（行数、字数、语速），右边是正文。正文左边的号就是字幕号 —— 一条字幕太长会在屏幕上换行显示，但号只出现一次，所以一眼能看出「这是一条长字幕」还是「两条字幕」。',
+  guideTranscriptEdit:
+    '面板里的修改只改应用内的副本，源文件永远不会被写入。没保存就关掉面板会问你要不要丢改动。',
+  guideTranscriptSplit:
+    '智能断句把过长的行拆成短行，拆完仍然只留在应用里，源文件一个字都不动。',
+  guideTranscriptRealign:
+    '保存只更新这一行的文稿。打轴用那一行外面的开始按钮 —— 文稿匹配跳过识别，直接对齐，产出的字幕跟转写那条路写在一起。改过正文之后，这一行会提示需要重新打轴。',
+  guideTranscriptTimed:
+    '文稿匹配至少要开 SRT 或 ASS：打轴要写出带时间的字幕，只开 TXT 时这一行不能打轴。',
   sectionGeneral: '通用',
   sectionOutput: '输出',
   sectionModels: '模型',
@@ -226,13 +239,11 @@ export const zh = {
   transcriptSource: '源文件',
   transcriptDroppedTimecodes: '已忽略原 SRT 时间轴，将重新打轴',
   transcriptNeedsRealign: '文稿已修改，需要重新打轴',
-  transcriptEditorHint: '一行 = 一条字幕。保存只改应用内的副本，原文件不会被写入。',
   transcriptSmartSplit: '智能断句',
   transcriptReread: '重新读取',
   transcriptRemove: '移除文稿',
   transcriptSave: '保存',
   hotwordIgnoredOnAlign: '打轴不使用热词',
-  transcriptUseRowStart: '保存只更新这一行的文稿。打轴用外面的开始。',
   transcriptSaved: '文稿已保存',
   transcriptSplitDone: '已智能断句',
   transcriptRereadDone: '已重新读取源文件',
@@ -421,6 +432,19 @@ export const en: Dict = {
   guideSounds: 'The switch is saved. A sound when a task finishes is not wired up yet.',
   guideTray: 'When on, closing the window hides it to the tray and tasks keep running. Quit from the tray menu to exit. When off, closing the window quits.',
   guideLog: 'Errors are written to a log in the app folder. Settings shows the size of the current file plus the previous rotation. Open the log to copy an error as-is. Clear deletes both, and the next error starts a new file with this run’s details.',
+  guideTabTranscript: 'Transcript',
+  guideTranscriptPair:
+    'A .txt / .srt you drop is paired with the media by file name and attached to the same row. One without a match is listed on its own instead of being dropped silently. You can also pick one with the transcript chip in the row.',
+  guideTranscriptPanel:
+    'Open the transcript chip for the panel: summary on the left (lines, characters, speech rate), the text on the right. The number on the left is the subtitle number — a subtitle too long for the window wraps on screen but keeps its single number, so you can tell one long cue from two cues at a glance.',
+  guideTranscriptEdit:
+    'Edits only change the copy inside the app; the source file is never written. Closing the panel with unsaved changes asks whether to discard them.',
+  guideTranscriptSplit:
+    'Smart split breaks long lines into short ones. The result still stays inside the app — not a single character of the source file is touched.',
+  guideTranscriptRealign:
+    'Saving only updates this row’s transcript. Aligning is started with the row’s own start button: transcript matching skips recognition and aligns directly, writing its subtitle alongside the ones from transcription. Once the text changed, the row says it needs a new alignment.',
+  guideTranscriptTimed:
+    'Transcript matching needs SRT or ASS: alignment writes a timestamped subtitle, so a TXT-only setup cannot align.',
   sectionGeneral: 'General',
   sectionOutput: 'Output',
   sectionModels: 'Models',
@@ -476,13 +500,11 @@ export const en: Dict = {
   transcriptSource: 'Source',
   transcriptDroppedTimecodes: 'Original SRT timings ignored; the transcript will be realigned',
   transcriptNeedsRealign: 'Transcript changed; realign to update the subtitles',
-  transcriptEditorHint: 'One line = one subtitle. Saving only changes the in-app copy; the source file is never written.',
   transcriptSmartSplit: 'Smart split',
   transcriptReread: 'Re-read',
   transcriptRemove: 'Remove transcript',
   transcriptSave: 'Save',
   hotwordIgnoredOnAlign: 'Alignment does not use hotwords',
-  transcriptUseRowStart: 'Save updates this row’s transcript. Use the row’s start button to align.',
   transcriptSaved: 'Transcript saved',
   transcriptSplitDone: 'Smart split applied',
   transcriptRereadDone: 'Reloaded from source',

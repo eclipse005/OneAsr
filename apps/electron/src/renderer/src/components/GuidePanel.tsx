@@ -4,7 +4,7 @@ import { t, UiLang } from '../i18n'
 import { useEscClose } from '../esc'
 import { usePaneMotion, useSurfaceMotion } from '../motion'
 
-type GuideTab = 'use' | 'general' | 'output' | 'models' | 'hotwords' | 'compute'
+type GuideTab = 'use' | 'transcript' | 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 type Copy = ReturnType<typeof t>
 
 function Entry({ title, body }: { title: string; body: string }) {
@@ -122,6 +122,18 @@ function UseTab({ s }: { s: Copy }) {
 
 function TabBody({ tab, s }: { tab: GuideTab; s: Copy }) {
   if (tab === 'use') return <UseTab s={s} />
+  if (tab === 'transcript') {
+    return (
+      <div className="guide-copy">
+        <Entry title={s.transcript} body={s.guideTranscriptPair} />
+        <Entry title={s.transcriptPanelTitle} body={s.guideTranscriptPanel} />
+        <Entry title={s.transcriptSave} body={s.guideTranscriptEdit} />
+        <Entry title={s.transcriptSmartSplit} body={s.guideTranscriptSplit} />
+        <Entry title={s.transcriptStart} body={s.guideTranscriptRealign} />
+        <Entry title={s.outputs} body={s.guideTranscriptTimed} />
+      </div>
+    )
+  }
   if (tab === 'general') {
     return (
       <div className="guide-copy">
@@ -185,6 +197,7 @@ export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => voi
 
   const tabs: { id: GuideTab; label: string }[] = [
     { id: 'use', label: s.guideTabUse },
+    { id: 'transcript', label: s.guideTabTranscript },
     { id: 'general', label: s.sectionGeneral },
     { id: 'output', label: s.sectionOutput },
     { id: 'models', label: s.sectionModels },
