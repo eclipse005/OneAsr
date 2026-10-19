@@ -2,17 +2,24 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { app } from 'electron'
+import {
+  ERROR_LOG_NAME,
+  clearDiagnosticLogs,
+  diagnosticLogInfo,
+  diagnosticLogPaths,
+  diagnosticLogToOpen,
+  type DiagnosticLogInfo
+} from './log-files'
 
 /**
  * 诊断日志：`{app_root}/oneasr-error.log`，超过 2 MB 轮转到 `.old`。
  *
- * 与 GPUI 版（crates/oneasr/src/crashlog.rs）同一套口径：
+ * 与旧版 crash log 同一套口径：
  * - **会话上下文先缓存在内存里**，只有真的出问题才连同正文一起落盘 ——
  *   一次正常启动不该在日志里留东西，但真出问题时「机器/路径/模型状态」必须已经在那儿。
- * - 失败的任务把命令行、退出码、耗时、stderr 尾部写进去（GPUI 的 task journal 同义）。
+ * - 失败的任务把命令行、退出码、耗时、stderr 尾部写进去（与旧版 task journal 同义）。
  *   成功时不写；想留成功现场就设 ONEASR_KEEP_TASK_LOG=1，落 `oneasr-task-<id>.log`。
  */
-const LOG_NAME = 'oneasr-error.log'
 const TASK_LOG_PREFIX = 'oneasr-task-'
 const MAX_BYTES = 2 * 1024 * 1024
 
@@ -46,7 +53,7 @@ function buildContext(root: string): string {
     `platform:  ${process.platform} ${process.arch} · ${os.release()}`,
     `cpu/ram:   ${os.cpus()[0]?.model ?? '?'} · ${Math.round(os.totalmem() / 1024 ** 3)} GB`,
     `app_root:  ${root}`,
-    `log:       ${path.join(root, LOG_NAME)}`
+    `log:       ${path.join(root, ERROR_LOG_NAME)}`
   ]
   return lines.join('\n')
 }
@@ -54,7 +61,7 @@ function buildContext(root: string): string {
 /** 启动时调用一次：定位日志、铺垫会话上下文（此时不写盘）。 */
 export function initLog(appRoot: string): void {
   appRootDir = appRoot
-  logFile = path.join(appRoot, LOG_NAME)
+  logFile = diagnosticLogPaths(appRoot)[0]
   sessionContext = buildContext(appRoot)
 }
 
@@ -63,15 +70,35 @@ export function addSessionContext(section: string, details: string): void {
   sessionContext += `\n--- ${section} ---\n${details}`
 }
 
-export function logPathname(): string | undefined {
-  return logFile
+/** 设置页显示的大小：当前日志 + 轮转后的 `.old`。 */
+export function logInfo(): Pick<DiagnosticLogInfo, 'bytes'> {
+  if (!appRootDir) return { bytes: 0 }
+  return { bytes: diagnosticLogInfo(appRootDir).bytes }
+}
+
+/**
+ * 删掉当前日志和 `.old`。当前文件没了就忘掉「会话头已写过」，
+ * 下一笔错误仍会带上机器和路径。
+ */
+export function clearDiagnosticLog(): Pick<DiagnosticLogInfo, 'bytes'> {
+  if (!appRootDir) return { bytes: 0 }
+  const info = clearDiagnosticLogs(appRootDir)
+  if (!info.currentExists) contextWritten = false
+  return { bytes: info.bytes }
+}
+
+/** 打开按钮：当前文件优先，否则上一份轮转。都没有就 undefined，调用方改开目录。 */
+export function logFileToOpen(): string | undefined {
+  if (!appRootDir) return undefined
+  return diagnosticLogToOpen(appRootDir)
 }
 
 function rotateIfNeeded(): void {
-  if (!logFile) return
+  if (!logFile || !appRootDir) return
   try {
-    if (fs.existsSync(logFile) && fs.statSync(logFile).size > MAX_BYTES) {
-      fs.renameSync(logFile, `${logFile}.old`)
+    const [current, old] = diagnosticLogPaths(appRootDir)
+    if (fs.existsSync(current) && fs.statSync(current).size > MAX_BYTES) {
+      fs.renameSync(current, old)
     }
   } catch {
     /* 轮转失败就让文件继续长，不能因此挡住写日志 */

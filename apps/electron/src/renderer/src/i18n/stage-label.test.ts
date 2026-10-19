@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { stageLabel } from './index'
+import { stageLabel, stageWithChunk } from './index'
 
 describe('stageLabel', () => {
   it('按 CLI 的稳定 key 出界面语言的文案（中 / 英各自独立于 CLI 进程语言）', () => {
@@ -21,5 +21,22 @@ describe('stageLabel', () => {
 
   it('两者都没有时给空串（渲染层会退到「进行中」文案）', () => {
     expect(stageLabel('zh', undefined, undefined)).toBe('')
+  })
+})
+
+describe('stageWithChunk', () => {
+  it('分段总数大于 1 时接在阶段名后面（转写 2/5、打轴也一样）', () => {
+    expect(stageWithChunk('转写', 2, 5)).toBe('转写 2/5')
+    expect(stageWithChunk('Transcribing', 2, 5)).toBe('Transcribing 2/5')
+    expect(stageWithChunk('打轴', 3, 10)).toBe('打轴 3/10')
+    expect(stageWithChunk('Aligning', 1, 8)).toBe('Aligning 1/8')
+    // 断骨锚点：stageWithChunk 改回直接 return name 时，上面四条全红。
+  })
+
+  it('只有一段、缺数字、或名字是空的，都不拼 1/1', () => {
+    expect(stageWithChunk('转写', 1, 1)).toBe('转写')
+    expect(stageWithChunk('Transcribing', undefined, 5)).toBe('Transcribing')
+    expect(stageWithChunk('打轴', 2, undefined)).toBe('打轴')
+    expect(stageWithChunk('', 2, 5)).toBe('')
   })
 })

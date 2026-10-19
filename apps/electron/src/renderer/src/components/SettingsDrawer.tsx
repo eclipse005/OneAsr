@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
 import type { DownloadState, HotwordStore, Settings, StatusSnapshot } from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
+import { ConfirmStrip } from './ConfirmStrip'
+import { SelectMenu } from './Popover'
 import { useEscClose } from '../esc'
-import { panelMotion } from '../motion'
-import { gib } from '../lib/format'
+import { usePaneMotion, useSurfaceMotion } from '../motion'
+import { formatSize, gib } from '../lib/format'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
@@ -58,17 +60,23 @@ function Seg({
 function CheckChip({
   checked,
   label,
-  onChange
+  onChange,
+  disabled = false,
+  title
 }: {
   checked: boolean
   label: string
   onChange: (v: boolean) => void
+  disabled?: boolean
+  title?: string
 }) {
   return (
     <button
       type="button"
       className={`check-chip ${checked ? 'active' : ''}`}
       aria-pressed={checked}
+      disabled={disabled}
+      title={title}
       onClick={() => onChange(!checked)}
     >
       <span className="check-mark" aria-hidden>
@@ -76,6 +84,53 @@ function CheckChip({
       </span>
       {label}
     </button>
+  )
+}
+
+/** 系统页的诊断日志：大小是当前文件加上一份轮转，清理删掉这两份。 */
+function DiagnosticsLog({ s }: { s: ReturnType<typeof t> }) {
+  const [bytes, setBytes] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void window.oneasr.logInfo().then((info) => {
+      if (alive) setBytes(info.bytes)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  const empty = bytes == null || bytes === 0
+  return (
+    <div className="pref-block">
+      <div className="pref-row">
+        <span className="pref-copy">
+          <span className="pref-label">{s.diagnostics}</span>
+          {bytes != null ? (
+            <span className="pref-note log-size">{formatSize(bytes) ?? s.logEmpty}</span>
+          ) : null}
+        </span>
+        <span className="pref-actions">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={empty || busy}
+            onClick={() => {
+              setBusy(true)
+              void window.oneasr
+                .clearLog()
+                .then((info) => setBytes(info.bytes))
+                .finally(() => setBusy(false))
+            }}
+          >
+            {s.clearLog}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void window.oneasr.openLog()}>
+            {s.openLog}
+          </button>
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -100,6 +155,7 @@ export function SettingsDrawer({
   onDownloadStart,
   onDownloadCancel,
   dirty,
+  savedAck = false,
   hotwordDraft,
   initialTab = 'general',
   onChange,
@@ -122,6 +178,8 @@ export function SettingsDrawer({
   onDownloadStart: (id: string) => void
   onDownloadCancel: () => void
   dirty: boolean
+  /** 刚保存成功：主按钮短暂保持主色并显示「已保存」 */
+  savedAck?: boolean
   hotwordDraft: HotwordStore | null
   initialTab?: SettingsTab
   onChange: (next: Settings) => void
@@ -138,6 +196,8 @@ export function SettingsDrawer({
   onRefreshModels: () => void
 }) {
   const s = t(lang)
+  const surface = useSurfaceMotion()
+  const pane = usePaneMotion()
   /** 没装的模型；下载中的那条也在里面（它本来就是缺的） */
   // 缺哪些模型由 CLI 的 catalog 说（目录名也来自 Rust，壳不再硬编码）
   const missingModels = (status?.catalog ?? []).filter((m) => !m.ready)
@@ -152,8 +212,18 @@ export function SettingsDrawer({
 
   /** 有未保存改动时先确认，别让人手一滑丢掉刚调的参数 */
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  /** 删词组：和放弃更改同一条确认条，不再走浏览器 confirm */
+  const [deleteGroup, setDeleteGroup] = useState<(() => void) | null>(null)
   const tryClose = () => {
-    if (dirty && !confirmDiscard) {
+    if (deleteGroup) {
+      setDeleteGroup(null)
+      return
+    }
+    if (confirmDiscard) {
+      setConfirmDiscard(false)
+      return
+    }
+    if (dirty) {
       setConfirmDiscard(true)
       return
     }
@@ -205,7 +275,7 @@ export function SettingsDrawer({
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        {...panelMotion}
+        {...surface}
       >
         <div className="modal-header">
           <h3>{s.settings}</h3>
@@ -232,25 +302,31 @@ export function SettingsDrawer({
           </nav>
 
           <div className={`settings-pane${activeTab === 'hotwords' ? ' is-hotwords' : ''}`} data-shot={`settings-pane-${activeTab}`}>
+            <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={activeTab} className="settings-pane-inner" {...pane}>
             {activeTab === 'general' && (
               <>
                 <div className="field">
                   <label>{s.uiLanguage}</label>
-                  <select value={draft.ui_language} onChange={(e) => set('ui_language', e.target.value)}>
-                    <option value="system">{s.system}</option>
-                    <option value="zh">中文</option>
-                    <option value="en">English</option>
-                  </select>
+                  <Seg
+                    value={draft.ui_language}
+                    onChange={(id) => set('ui_language', id)}
+                    options={[
+                      { id: 'system', label: s.system },
+                      { id: 'zh', label: s.uiLanguageZh },
+                      { id: 'en', label: s.uiLanguageEn }
+                    ]}
+                  />
                 </div>
                 <div className="field">
                   <label>{s.recognitionLanguage}</label>
-                  <select value={draft.language} onChange={(e) => set('language', e.target.value)}>
-                    {LANG_OPTIONS.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                  <SelectMenu
+                    className="select-menu"
+                    value={draft.language}
+                    options={LANG_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+                    ariaLabel={s.recognitionLanguage}
+                    onChange={(id) => set('language', id)}
+                  />
                 </div>
                 <div className="field">
                   <label>{s.subtitleLength}</label>
@@ -266,16 +342,11 @@ export function SettingsDrawer({
                 </div>
                 <div className="field">
                   <label>{s.chunkDuration}</label>
-                  <select
+                  <Seg
                     value={String(draft.chunk_target_seconds)}
-                    onChange={(e) => set('chunk_target_seconds', Number(e.target.value))}
-                  >
-                    {[30, 60, 90, 120, 180].map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(id) => set('chunk_target_seconds', Number(id))}
+                    options={[30, 60, 90, 120, 180].map((n) => ({ id: String(n), label: String(n) }))}
+                  />
                 </div>
               </>
             )}
@@ -285,11 +356,36 @@ export function SettingsDrawer({
                 <div className="field">
                   <label>{s.outputs}</label>
                   <div className="check-chip-row">
-                    <CheckChip checked={draft.output_srt} label="SRT" onChange={(v) => set('output_srt', v)} />
-                    <CheckChip checked={draft.output_txt} label="TXT" onChange={(v) => set('output_txt', v)} />
-                    <CheckChip checked={draft.output_ass} label="ASS" onChange={(v) => set('output_ass', v)} />
+                    {(
+                      [
+                        ['output_srt', 'SRT'],
+                        ['output_txt', 'TXT'],
+                        ['output_ass', 'ASS']
+                      ] as const
+                    ).map(([key, label]) => {
+                      const on = draft[key]
+                      const alone = on && [draft.output_srt, draft.output_txt, draft.output_ass].filter(Boolean).length === 1
+                      return (
+                        <CheckChip
+                          key={key}
+                          checked={on}
+                          label={label}
+                          disabled={alone}
+                          title={alone ? s.outputKeepOne : undefined}
+                          onChange={(v) => {
+                            if (!v && alone) return
+                            set(key, v)
+                          }}
+                        />
+                      )
+                    })}
                   </div>
                 </div>
+                {/* 三种全关时，CLI 仍会保留 SRT（--no-srt 必须配合 --txt/--ass）。
+                    界面不说这一句，用户就会以为「什么都不产出」。 */}
+                {![draft.output_srt, draft.output_txt, draft.output_ass].some(Boolean) && (
+                  <p className="field-hint warn">{s.outputNoneOn}</p>
+                )}
                 <div className="field">
                   <label>{s.chineseScript}</label>
                   <Seg
@@ -519,6 +615,7 @@ export function SettingsDrawer({
                     lang={lang}
                     value={hotwordDraft}
                     onChange={onHotwordsChange}
+                    onAskDeleteGroup={setDeleteGroup}
                     compact
                   />
                 ) : (
@@ -552,18 +649,11 @@ export function SettingsDrawer({
                     onChange={(v) => set('close_to_tray', v)}
                   />
                 </div>
-                <div className="pref-row">
-                  <span className="pref-label">{s.diagnostics}</span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void window.oneasr.openLog()}
-                  >
-                    {s.openLog}
-                  </button>
-                </div>
+                <DiagnosticsLog s={s} />
               </>
             )}
+            </motion.div>
+            </AnimatePresence>
           </div>
         </div>
 
@@ -595,33 +685,45 @@ export function SettingsDrawer({
           <button type="button" className="btn btn-ghost" onClick={onRestoreDefaults}>
             {s.restoreDefaults}
           </button>
-          <button type="button" className="btn btn-primary" disabled={!dirty} onClick={onSave}>
-            {s.save}
+          <button
+            type="button"
+            className={`btn btn-primary ${savedAck ? 'is-acked' : ''}`}
+            disabled={!dirty}
+            onClick={onSave}
+          >
+            {savedAck ? s.saved : s.save}
           </button>
         </div>
 
-        {confirmDiscard && (
-          <div className="confirm-strip">
-            <span>{s.confirmDiscard}</span>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => setConfirmDiscard(false)}
-            >
-              {s.cancel}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => {
+        <AnimatePresence>
+          {deleteGroup && (
+            <ConfirmStrip
+              key="delete-group"
+              danger
+              message={s.confirmDeleteGroup}
+              cancelLabel={s.cancel}
+              confirmLabel={s.deleteGroup}
+              onCancel={() => setDeleteGroup(null)}
+              onConfirm={() => {
+                deleteGroup()
+                setDeleteGroup(null)
+              }}
+            />
+          )}
+          {confirmDiscard && !deleteGroup && (
+            <ConfirmStrip
+              key="discard"
+              message={s.confirmDiscard}
+              cancelLabel={s.cancel}
+              confirmLabel={s.discardChanges}
+              onCancel={() => setConfirmDiscard(false)}
+              onConfirm={() => {
                 setConfirmDiscard(false)
                 onClose()
               }}
-            >
-              {s.discardChanges}
-            </button>
-          </div>
-        )}
+            />
+          )}
+        </AnimatePresence>
       </motion.div>
     </div>
   )

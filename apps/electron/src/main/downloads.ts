@@ -8,13 +8,13 @@ import { logError } from './log'
  * 模型下载：spawn `oneasr-cli download --model <id>`，解析它写在 **stdout** 的机器行。
  *
  * 为什么走 CLI 而不是在 Node 里自己拉：Range 续传、重试退避、revision 校验、
- * 逐文件 SHA-256 全在 oneasr-core 里（GPUI 壳用了很久），没有理由再写第二份。
+ * 逐文件 SHA-256 全在 oneasr-core 里（旧版界面用了很久），没有理由再写第二份。
  *
  * 契约（见 `oneasr-cli --help` 的 download 段落）：
  *   [download] state=<downloading|verifying|done|error> model=<id> done=<n> total=<n> pct=<n> [speed=<n>] [dir="<path>"]
  * 人类可读的双语行在 stderr，不参与解析。
  *
- * 一次只跑一个（GPUI 的 start_model_download 也是这个门禁）；取消 = kill 子进程，
+ * 一次只跑一个（旧版的 start_model_download 也是这个门禁）；取消 = kill 子进程，
  * 下载器写的是临时文件 + Range 续传，下次重跑会接着下。
  */
 export class DownloadManager extends EventEmitter {

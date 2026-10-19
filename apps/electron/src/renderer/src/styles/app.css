@@ -24,6 +24,10 @@
   --radius: 14px;
   --radius-sm: 10px;
   --font: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 120ms;
+  --dur-layer: 160ms;
+  --dur-surface: 220ms;
   color-scheme: light;
 }
 
@@ -40,6 +44,10 @@ body {
 button, input, select, textarea { font: inherit; color: inherit; }
 button { border: none; background: transparent; cursor: pointer; }
 button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .app { display: flex; flex-direction: column; height: 100%; }
 
@@ -66,7 +74,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   display: grid; place-items: center;
 }
 /* 品牌标记：波形来自 assets/icons/logo.svg（与 app-icon 同一份），
-   用 mask 上色 → 白色波形 + 青绿底，跟 GPUI 版一致。 */
+   用 mask 上色 → 白色波形 + 青绿底，跟旧版一致。 */
 .titlebar .brand .logo-mark {
   width: 13px; height: 13px; background: #fff;
   -webkit-mask: url('@assets/icons/logo.svg') center / contain no-repeat;
@@ -78,15 +86,50 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   display: flex; align-items: center; gap: 8px;
   padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
 }
+.clear-anchor { position: relative; }
+.clear-pop {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30;
+  width: 232px; padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+.clear-pop p {
+  margin: 0; white-space: pre-line;
+  color: var(--text); font-size: 0.84rem; font-weight: 650; line-height: 1.45;
+}
+.clear-pop-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.clear-pop-actions .btn { height: 30px; padding: 0 12px; }
+.btn-danger-ghost.open {
+  border-color: var(--danger); background: var(--danger-soft); color: var(--danger);
+}
 .toolbar .grow { flex: 1; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 34px; padding: 0 14px; border-radius: 10px;
   border: 1px solid transparent;
-  transition: background .15s, border-color .15s, transform .12s, box-shadow .15s, color .15s;
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
 .btn:active:not(:disabled) { transform: translateY(1px); }
+.btn-primary:disabled {
+  opacity: 1;
+  background: #e2e8f0;
+  color: var(--muted);
+  box-shadow: none;
+}
+/* 刚保存成功的一瞬间：按钮仍是主色，文案换成「已保存」，人还看着刚才点的地方 */
+.btn-primary.is-acked:disabled {
+  background: linear-gradient(135deg, #14b8a6, var(--accent));
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.28);
+}
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  font-weight: 650;
+}
+.btn-danger:hover:not(:disabled) { filter: brightness(1.06); }
 .btn-primary {
   background: linear-gradient(135deg, #14b8a6, var(--accent));
   color: #fff; font-weight: 650;
@@ -106,22 +149,34 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border: 2px dashed var(--accent); border-radius: calc(var(--radius) + 6px);
   background: var(--accent-mist); opacity: 0.5; pointer-events: none;
 }
+/* 空态时落点区自己就是提示框（它会亮出虚线+变底色），别再叠一层窗口级的虚线框——
+   两个框套在一起很吵。有任务时那层还得留着：那时没有落点区，列表区也得给提示。 */
+.main.dragging:has(.dropzone.active)::after { display: none; }
 
 .dropzone {
   height: 100%;
-  border: 1.5px dashed var(--divider);
+  /* 空态不画可见边框：没有任务时，那一大圈虚线框纯属噪声——
+     背景渐变加居中的提示已经说清「往这儿放」。
+     边框位留着（透明），真把文件拖进来时再亮出虚线（见 .dropzone.active），
+     这样既不占地方、拖放时又不缺提示。 */
+  border: 1.5px dashed transparent;
   border-radius: calc(var(--radius) + 6px);
-  background: linear-gradient(180deg, #fff, var(--accent-mist));
+  /* 底色一路淡到窗口底（--bg），跟下面的状态栏接得上，看不出接缝 */
+  background: linear-gradient(180deg, #fff 0%, var(--accent-mist) 58%, var(--bg) 100%);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; color: var(--muted);
-  transition: border-color .2s, background .2s, box-shadow .2s, transform .2s;
+  transition: border-color var(--dur-layer) var(--ease-out), background var(--dur-layer) var(--ease-out), box-shadow var(--dur-layer) var(--ease-out);
 }
+/* 空态时落点区铺满整个内容区：不要四周留一圈边，也不要圆角——
+   否则它像一张浮在灰底上的卡片（用户 2026-10-19 指出「不要周围留白」）。
+   有任务时 .main 的内边距照旧：任务行四周那圈呼吸位还是要留的。 */
+.main:has(.dropzone) { padding: 0; }
+.main:has(.dropzone) .dropzone { border-radius: 0; }
 .dropzone.active {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px rgba(13,148,136,0.2), var(--shadow);
   color: var(--logo);
-  transform: scale(1.005);
 }
 .dropzone .icon {
   width: 56px; height: 56px; border-radius: 16px;
@@ -141,7 +196,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .task-list { height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
 
-/* ── 任务行内能力（对齐 GPUI：媒体图标、尺寸·时长、排队位次、每行语言/热词组/人声分离、耗时明细）── */
+/* ── 任务行内能力（对齐旧版：媒体图标、尺寸·时长、排队位次、每行语言/热词组/人声分离、耗时明细）── */
 .task-card .media-icon { width: 15px; height: 15px; flex: none; background: var(--muted-soft); }
 /* 未知/未探到：只占位、不画图形（底色透明，否则会是一块灰方块） */
 .task-card .media-icon.unknown { background: transparent; }
@@ -162,7 +217,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   height: 24px; padding: 0 8px; border-radius: 7px;
   border: 1px solid var(--line); background: #fff; color: var(--text);
   font-size: 0.76rem; max-width: 170px;
-  transition: border-color .12s, background .12s, color .12s;
+  transition: border-color var(--dur-micro) var(--ease-out), background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
 .row-chip.muted { color: var(--muted); }
 .row-chip:hover:not(:disabled), .row-chip.open { border-color: var(--accent); background: var(--accent-mist); color: var(--logo); }
@@ -171,17 +226,35 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    左右晃；居中是因为靠左会在右边留一大块空（而且 caret 顶到最右也不好看）。
    宽度按"完整装下默认文案"取：语言装得下 English、词库装得下「热词：无」。
    更长的词库名会被截断（title 里有全名）——定宽与"永不截断"本来就只能二选一。 */
-/* 两个**下拉**用同一个宽度（94px，装得下 English 与「热词：无」）：这样 caret 也
-   竖直对齐，看起来像一张表格；开关 chip 不定宽（英文 Vocal separation 会被截断）。 */
-.row-chip.lang-chip { width: 94px; justify-content: center; }
-.row-chip.hw-chip { width: 94px; justify-content: center; }
+/* 语言、术语、人声分离、文稿同一宽度，四个胶囊对齐成一排。
+   装得下 English、人声分离、「+ 文稿」。更长的词库名和英文 Vocal separation / + Transcript 截断，全称在 title。
+   不要用 .hw-chip：那是设置页里的词条胶囊（32px 圆角），套到行上会比旁边高一圈。 */
+.row-chip.lang-chip,
+.row-chip.group-chip,
+.row-chip.sep-chip,
+.row-chip.transcript-chip {
+  width: 94px;
+  max-width: 94px;
+  flex: none;
+  justify-content: center;
+}
+/* 英文的词更长，94px 不够用：实测槽里可用 63px，而 "Vocal separation" 要 88px
+   （被截成 "Vocal sep…"），"+ Transcript" 也差 4px。中文按「人声分离」4 字定 94px
+   就够，所以**只给英文放宽**：122px = 88 + 5 gap + 6 圆点 + 5 gap + 16 padding。
+   四个一起加宽，整簇仍然对齐。 */
+html[lang='en'] .row-chip.lang-chip,
+html[lang='en'] .row-chip.group-chip,
+html[lang='en'] .row-chip.sep-chip,
+html[lang='en'] .row-chip.transcript-chip {
+  width: 122px;
+  max-width: 122px;
+}
 .row-chip .caret { color: var(--muted); font-size: 0.6rem; line-height: 1; }
 .row-chip .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 人声分离是个开关：关着要看得出来"没开"（灰虚线），开着要一眼看到（主题色 + ✓） */
-.row-chip.sep-chip { border-style: dashed; color: var(--muted); }
+/* 行内胶囊同一套：白底、实线、同高。开着用强调色字和边，不用另一块实心填充。 */
+.row-chip.sep-chip { color: var(--muted); overflow: hidden; }
 .row-chip.sep-chip.is-on {
-  border-style: solid; border-color: var(--accent);
-  background: var(--accent-soft); color: var(--logo); font-weight: 650;
+  border-color: var(--accent); color: var(--logo); font-weight: 650;
 }
 /* 「耗时」是悬停明细的入口，但它看起来只是普通灰字 —— 用虚线下划线说明"这里有东西" */
 .timing-chip {
@@ -198,6 +271,22 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .timing-line { display: flex; justify-content: space-between; gap: 12px; font-size: 0.76rem; color: var(--muted); }
 .timing-line b { color: var(--text); font-weight: 600; }
+/* 弹卡头部：左边「处理耗时」，右边倍速读数 + 总耗时。
+   倍速与总耗时互为倒数（音视频时长 ÷ 本次处理耗时），跟 master 同一口径。 */
+.timing-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 0.76rem; color: var(--text); font-weight: 600;
+}
+.timing-head i { font-style: normal; }
+.timing-head-right { display: inline-flex; align-items: center; gap: 6px; }
+/* 倍速读数用中性底：app 里带强调色的胶囊都是能点的，这个只是读数，不该像按钮 */
+.timing-rtfx {
+  padding: 1px 6px; border-radius: 6px; background: var(--row-hover);
+  color: var(--muted); font-weight: 500; white-space: nowrap;
+}
+.timing-head b { color: var(--accent); font-weight: 600; }
+/* 头部与阶段列表之间的分隔线（负边距抵掉卡片的行间距） */
+.timing-sep { height: 1px; background: var(--line-soft); margin: -2px 0; }
 /* 行内 chip 的下拉：portal 到 body + fixed 定位（不被 .task-list 裁剪），位置由 JS 给 */
 .chip-menu {
   z-index: 70;
@@ -221,7 +310,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   /* 底色更淡：主要语义交给左侧红条 + 红字，一批任务全失败时不会"半屏红"；
      悬停再加深一档，作为"可点击复制"的反馈 */
   background: #fff5f5; cursor: pointer;
-  transition: background .12s;
+  transition: background var(--dur-micro) var(--ease-out);
 }
 .task-card .row-error:hover { background: var(--danger-soft); }
 /* 复制按钮**钉在最右侧**（margin-left:auto，不随文字长短浮动），垂直居中，
@@ -248,16 +337,19 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-mini:hover { border-color: var(--danger); color: var(--danger); }
 .task-card {
   position: relative;
-  /* 左：文件名 + 大小·时长·耗时；右：术语 chips + 状态 + 动作；错误另起一行（grid-column 拉通）。
-     右侧是 auto 列，所以术语多长都不会影响文件名那一列。 */
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px;
+  /* 左：文件名 + 大小·时长·耗时·状态；右：术语 chips + 动作（错误另起一行，grid-column 拉通）。
+     右侧是 auto 列，所以术语多长都不会影响文件名那一列。
+     左列保底 240px：右列那四个 chip 加三个动作要 508px，窗口一窄就先把左列压扁，
+     状态那几个字会被裁掉半个（实测 700px 宽时状态只剩 17px、600px 时整条没了）。
+     左列留够，右列的 chip 自己换行（.row-chips 有 wrap），状态永远完整。 */
+  display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, auto); gap: 6px 14px;
   align-items: center;
   padding: 11px 14px 11px 18px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--line);
   box-shadow: 0 4px 16px rgba(15,23,42,0.04);
-  transition: border-color .15s, box-shadow .15s, transform .15s;
+  transition: border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
 }
-/* 左侧状态色条：扫列表时状态一眼可见，不用去读药丸上的字（GPUI 也是这个做法） */
+/* 左侧状态色条：扫列表时状态一眼可见，不用去读药丸上的字（旧版也是这个做法） */
 .task-card::before {
   content: ''; position: absolute; left: 6px; top: 11px; bottom: 11px; width: 3px;
   border-radius: 999px; background: var(--line);
@@ -267,7 +359,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .task-card.status-error::before { background: var(--danger); }
 .task-card.status-cancelled::before { background: var(--warn); }
 .task-card:hover { border-color: var(--divider); box-shadow: var(--shadow); }
-/* 左列：文件名一行，下面一行是 大小 · 时长 · 耗时（跟 GPUI 一样） */
+/* 左列：文件名一行，下面一行是 大小 · 时长 · 耗时（跟旧版一样） */
 .task-card .card-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .task-card .name { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 650; }
 .task-card .name .task-name {
@@ -276,28 +368,54 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .task-card .meta-line {
   display: flex; align-items: center; gap: 10px; min-height: 18px;
   color: var(--muted); font-size: 0.75rem; font-weight: 500;
+  min-width: 0;
 }
-.task-card .name-meta { font-variant-numeric: tabular-nums; }
-/* 右列：术语 + 状态 + 动作；状态药丸定宽并居中（「或者说居中」） */
-.task-card .controls { display: flex; align-items: center; gap: 8px; flex: none; }
-/* 状态药丸：**定宽槽 + 自适应药丸**。
-   槽定宽 110px 是为了"状态列不动"（列表对齐）；药丸本身按内容收紧、在槽里居中，
-   所以「失败」两个字不会孤零零地摊在一个宽胶囊里。
-   底色和边框全部去掉 —— 只有色点 + 彩字；"带边框/底色的胶囊"只属于可点的参数 chip。
-   （注意 border-color 也要覆盖：.badge.error 那条把边染成浅红，只清 background 的话
-     在白卡上仍会显出一圈浅红，看起来就像个"像按钮"的胶囊。） */
-.badge-slot { width: 110px; display: grid; place-items: center; min-height: 30px; }
-.task-card .controls .badge {
-  max-width: 100%; min-height: 30px; overflow: hidden;
+/* 元信息（大小 · 时长、耗时）可以被挤：挤不下时先省略它们，
+   状态那一句必须完整（它才是这一行要看的东西）。 */
+.task-card .name-meta {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.task-card .meta-line > .timing-chip {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 状态（跑=阶段名 / 完成 / 失败 / 取消 / 排队）就排在文件名下面这一行，
+   跟「大小·时长」「耗时」连成一句：大小 · 时长 · 耗时 · 状态。
+   之前状态占着右列一个 88px 的定宽槽（按最长的「排队第 2 位」留的），
+   右边于是空一大块，四个参数 chip 还得整体往左让。
+   挪到左列之后右列只剩参数 chip 和动作按钮，四个 chip 整体右移，右边不再有洞
+   （用户 2026-10-19 指出：状态该在文件名下面，右边别再空一块）。 */
+.task-card .meta-line .badge {
+  /* 不参与收缩：窗口再窄也是先省略元信息，状态那一句保持完整。
+     max-width 兜住特别长的阶段名（它最多占这行四成，超出部分自己省略）。 */
+  flex: 0 0 auto; min-width: 0; max-width: 40%;
+  min-height: 0; padding: 0; overflow: hidden;
+  /* 跟旁边的灰字元信息排成一行：不要一块灰底药丸（药丸底色留给真正的胶囊） */
   background: transparent; border-color: transparent;
 }
+.task-card .meta-line .badge > span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 右留 2px 裁切余量：中日韩字形（尤其粗体）的墨迹会画到字宽之外一点，
+     overflow:hidden 正好切在字宽边界上，最后一个字就被削掉一竖
+     （实测「待处理」的「理」右竖被切掉 0.5px，6 倍放大才看得出来，
+      但放大看截图就会发现「没显示全」）。
+     药丸底色是透明的，多出来这 2px 看不出来，字却不会再被切。 */
+  padding-right: 2px;
+}
+/* 右列：参数 chip 和动作按钮贴在一起，间距跟芯片之间同一档。
+   状态已经挪到左列（见上面的 .meta-line .badge），这里不再留状态槽。 */
+.task-card .controls { display: flex; align-items: center; gap: 6px; flex: none; }
+/* .badge-slot 现在只有指南面板在用（那里放的是「待处理」提示） */
+.badge-slot {
+  display: flex; align-items: center; justify-content: flex-start;
+  flex: none; width: 88px; min-height: 24px; overflow: hidden;
+}
+html[lang='en'] .badge-slot { width: 100px; }
 .task-card .badge.running { color: var(--logo); }
 .task-card .badge.done { color: #047857; }
 .task-card .badge.error { color: var(--danger); }
 .task-card .badge.cancelled { color: var(--warn); }
-.task-card .controls .badge > span {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .task-card .controls .badge.rank { width: auto; }
 .task-card .name .task-name {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -330,17 +448,19 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   content: ''; width: 6px; height: 6px; border-radius: 50%;
   background: currentColor; opacity: .75; flex: none;
 }
-/* 进行中：药丸轻微呼吸，一眼能看出"还在跑"（尊重用户的减少动效设置） */
-.task-card .badge.running { animation: badgePulse 1.6s ease-in-out infinite; }
-@keyframes badgePulse { 0%, 100% { opacity: 1; } 50% { opacity: .68; } }
+/* 进行中只让色点呼吸，阶段名保持可读 */
+.task-card .badge.running::before { animation: dotPulse 1.6s ease-in-out infinite; }
+@keyframes dotPulse { 0%, 100% { opacity: .35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .task-card .badge.running { animation: none; }
+  :root { --dur-micro: 1ms; --dur-layer: 1ms; --dur-surface: 1ms; }
+  .task-card .badge.running::before { animation: none; }
+  .hover-card, .main.dragging::after { animation: none; }
 }
 /* 图标按钮：等宽 32，hover 才出底色；危险动作 hover 才转红 */
 .icon-btn {
   width: 32px; height: 32px; flex: none; display: grid; place-items: center;
   border-radius: 9px; border: 1px solid transparent; background: transparent;
-  color: var(--muted); transition: background .12s, color .12s, border-color .12s;
+  color: var(--muted); transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
 }
 .icon-btn:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
 /* 行内主操作**不用实心填充**：实心青绿是"页面级 CTA"的权重（工具栏那个「＋添加」），
@@ -351,7 +471,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .icon-btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .icon-btn:disabled { opacity: .38; cursor: default; }
 .icon-btn:disabled:hover { background: transparent; color: var(--muted); }
-/* 图标 = 资产（仓库 assets/icons，与 GPUI 版同一份）+ mask 上色：尺寸类与图形类解耦，
+/* 图标 = 资产（仓库 assets/icons，与旧版同一份）+ mask 上色：尺寸类与图形类解耦，
    同一个图形能用在 15px 的动作按钮上，也能用在工具栏文字按钮里 */
 .icon-glyph { width: 15px; height: 15px; background: currentColor; flex: none; }
 .btn-glyph { width: 14px; height: 14px; background: currentColor; flex: none; }
@@ -385,6 +505,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .statusbar .status-link:hover { text-decoration: underline; }
 /* 状态栏的「最近一条提示」：可点击复制，toast 消失后还能回看 */
+.status-chip-slot {
+  display: inline-flex; align-items: center; gap: 12px; min-width: 0;
+}
 .statusbar .status-chip {
   max-width: 44ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   height: 20px; padding: 0 9px; border-radius: 999px;
@@ -444,27 +567,58 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .modal-footer .hint { flex: 1; color: var(--warn); font-size: 0.82rem; font-weight: 600; }
 /* 有未保存改动时的关闭确认：贴在面板底部，不另开一层模态 */
+.confirm-clip { overflow: hidden; flex-shrink: 0; }
 .confirm-strip {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; border-top: 1px solid var(--line);
   background: var(--warn-soft); color: var(--warn); font-size: 0.84rem; font-weight: 600;
   flex-shrink: 0;
 }
+.confirm-strip.is-danger { background: #fff5f5; color: var(--danger); }
 .confirm-strip > span { flex: 1; }
 
-/* 使用指南：步骤卡在浮窗里垂直居中，避免固定高度下大片留白 */
-.guide-body { justify-content: center; gap: 12px; overflow: hidden; }
-.guide-step {
-  display: flex; align-items: flex-start; gap: 12px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 12px; padding: 13px 16px;
+/* 使用指南：三块实物示意，而不是一串编号说明。示意行不可点。 */
+.guide-body { justify-content: flex-start; gap: 12px; overflow: auto; }
+.guide-scene {
+  background: #fff; border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
 }
-.guide-index {
-  flex: none; width: 22px; height: 22px; border-radius: 50%;
-  background: var(--accent-soft); color: var(--logo);
-  display: grid; place-items: center; font-size: 0.76rem; font-weight: 750;
+.guide-scene h4 { margin: 0; font-size: 0.95rem; font-weight: 750; color: var(--text); }
+.guide-scene > p { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.5; }
+.guide-ready {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 12px; border-radius: 999px; background: var(--bg);
+  color: var(--logo); font-weight: 700; font-size: 0.84rem;
 }
-.guide-step p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
+.guide-drop-row { display: flex; align-items: center; gap: 10px; }
+.guide-drop {
+  flex: 1; height: 56px; border-radius: 12px;
+  border: 1.5px dashed var(--accent); background: var(--accent-mist);
+  display: grid; place-items: center; color: var(--logo); font-weight: 650; font-size: 0.88rem;
+}
+/* 指南里的示意行：照抄真实卡片的排布（状态在文件名下面那一行、四个 chip 一排、
+   动作按钮在最右）。但左列不守真实卡片的 240px 保底——指南面板窄，守 240 的话
+   四个 chip 会被挤到换行，跟真实界面对不上（用户 2026-10-19 指出）。 */
+.guide-demo {
+  pointer-events: none; box-shadow: none;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, auto);
+}
+.guide-legend {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 14px;
+}
+.guide-legend p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
+.guide-legend b { display: block; color: var(--text); font-weight: 700; font-size: 0.8rem; }
+.guide-shell .settings-pane { background: var(--bg); }
+.guide-pane { overflow: auto; padding-right: 2px; }
+.guide-use { display: flex; flex-direction: column; gap: 12px; }
+.guide-copy {
+  background: #fff; border: 1px solid var(--line); border-radius: 14px;
+  padding: 2px 16px;
+}
+.guide-entry { padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.guide-entry:last-child { border-bottom: none; }
+.guide-entry h4 { margin: 0 0 4px; font-size: 0.88rem; font-weight: 750; color: var(--text); }
+.guide-entry p { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.55; }
 
 /* legacy aliases */
 
@@ -521,14 +675,14 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 .toggle {
   position: relative; width: 42px; height: 24px; border-radius: 999px;
-  background: var(--switch-off); transition: background .15s; flex-shrink: 0;
+  background: var(--switch-off); transition: background var(--dur-micro) var(--ease-out); flex-shrink: 0;
 }
 .toggle.on { background: var(--accent); }
 .toggle::after {
   content: ""; position: absolute; top: 3px; left: 3px;
   width: 18px; height: 18px; border-radius: 50%; background: #fff;
   box-shadow: 0 1px 3px rgba(15,23,42,0.2);
-  transition: transform .15s;
+  transition: transform var(--dur-micro) var(--ease-out);
 }
 .toggle.on::after { transform: translateX(18px); }
 
@@ -536,26 +690,24 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .chip {
   height: 26px; padding: 0 10px; border-radius: 999px; font-size: 0.82rem;
   border: 1px solid var(--line); background: #fff; color: var(--muted);
-  transition: all .15s;
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
 .chip:hover { border-color: var(--accent); color: var(--logo); }
 .chip.active {
   border-color: var(--accent); background: var(--accent-soft); color: var(--logo); font-weight: 700;
 }
 
-.modal, .panel {
+.panel {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 20px; box-shadow: var(--shadow-lg);
-}
-.modal { width: min(480px, 100%); padding: 8px 0 16px; }
-.modal .body, .panel .body { padding: 8px 22px 18px; color: var(--muted); line-height: 1.55; }
-.modal .actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 22px; }
-.panel {
   width: min(720px, 100%);
   max-height: min(86vh, 780px); overflow: auto;
   display: flex; flex-direction: column;
 }
-.panel .body { white-space: pre-wrap; overflow: auto; }
+.panel .body {
+  padding: 8px 22px 18px; color: var(--muted); line-height: 1.55;
+  white-space: pre-wrap; overflow: auto;
+}
 .panel.wide { width: min(880px, 100%); }
 
 /* 统计面板的尺寸纪律：所有卡片都收紧到「最小窗口也放得下」，
@@ -674,7 +826,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .hw-group-item {
   text-align: left; padding: 10px 12px; border-radius: 10px;
   border: 1px solid transparent; color: var(--text);
-  transition: background .15s, border-color .15s;
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
 }
 .hw-group-item:hover { background: var(--row-hover); }
 .hw-group-item.active {
@@ -721,7 +873,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   border: 1px solid var(--line);
   color: var(--text); font-size: 0.84rem; font-weight: 600;
   box-shadow: none;
-  transition: border-color .12s, color .12s, background .12s;
+  transition: border-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), background var(--dur-micro) var(--ease-out);
 }
 .hw-chip:hover {
   border-color: var(--accent);
@@ -813,7 +965,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-weight: 600;
   border: 1px solid transparent;
   border-left: 3px solid transparent;
-  transition: background .14s, color .14s, border-color .14s;
+  transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
 }
 .settings-nav-item:hover {
   background: #fff;
@@ -866,7 +1018,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   background: transparent;
   border: none;
   border-right: 1px solid var(--line);
-  transition: background .14s, color .14s;
+  transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
   white-space: nowrap;
 }
 .seg-item:last-child { border-right: none; }
@@ -879,6 +1031,11 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 /* Multi-select check chips (formats) */
 .check-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 字段下面那行小字说明（当前只有输出格式全关时那一条）。 */
+.field-hint {
+  margin: 6px 0 0; font-size: 0.78rem; color: var(--muted);
+}
+.field-hint.warn { color: var(--warn); }
 .check-chip {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 12px 0 8px;
@@ -888,7 +1045,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 600;
-  transition: all .14s;
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
 .check-chip .check-mark {
   width: 16px; height: 16px; border-radius: 4px;
@@ -906,6 +1063,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   color: var(--logo);
   font-weight: 750;
 }
+.check-chip:disabled { opacity: 1; cursor: default; }
 .check-chip.active .check-mark {
   background: var(--accent);
   border-color: var(--accent);
@@ -928,6 +1086,10 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-size: 0.86rem;
   font-weight: 550;
 }
+.pref-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pref-note { color: var(--muted); font-size: 0.75rem; font-weight: 500; line-height: 1.3; }
+.pref-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.log-size { font-variant-numeric: tabular-nums; }
 
 /* 模型下载区（只列缺的；固定高度面板里要紧凑） */
 .dl-block { display: flex; flex-direction: column; gap: 6px; }
@@ -941,7 +1103,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .dl-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .dl-progress { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dl-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
-.dl-bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
+.dl-bar > i { display: block; height: 100%; background: var(--accent); transition: width var(--dur-layer) var(--ease-out); }
 .dl-meta { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Models toolbar */
@@ -1012,6 +1174,12 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   color: var(--muted);
   font-size: 0.7rem;
   flex-shrink: 0;
+}
+.hw-group-popover { min-width: 260px; max-width: 360px; padding: 4px; }
+.hw-group-popover .hw-group-listbox {
+  position: static; top: auto; left: auto;
+  min-width: 0; max-width: none; max-height: 240px;
+  margin: 0; box-shadow: none; border: none; padding: 0;
 }
 .hw-group-listbox {
   position: absolute;
@@ -1178,3 +1346,126 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-size: 0.82rem;
   font-weight: 600;
 }
+
+/* ── 文稿：行内入口 + 匹配面板 ─────────────────────────────────────── */
+/* 宽度跟语言、术语、人声分离同一档，见上面的 94px。没文稿是「+ 文稿」，挂上之后仍是「文稿」，只改颜色。 */
+.row-chip.transcript-chip.has {
+  border-color: var(--accent);
+  color: var(--logo);
+  font-weight: 650;
+}
+.row-chip.transcript-chip.has-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.transcript-glyph {
+  width: 12px; height: 12px; flex: none; background: currentColor;
+  -webkit-mask: url('@assets/icons/transcript.svg') center / contain no-repeat;
+  mask: url('@assets/icons/transcript.svg') center / contain no-repeat;
+}
+
+/* 拖文件到某一行：这一行是落点（文稿挂到这一行，媒体走窗口级添加）。
+   高亮只说「这一行会接住它」，不预先断言是哪种文件 —— dragover 阶段
+   拿不到文件名（见 TaskList.tsx 的 dropTargetId）。 */
+.task-card.row-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-mist);
+}
+
+/* 文稿面板比设置宽一点：左边摘要、右边是真正能打字的编辑器 */
+.transcript-shell {
+  width: min(960px, calc(100vw - 24px));
+  max-width: min(960px, calc(100vw - 24px));
+  height: min(700px, 92vh);
+  max-height: min(700px, 92vh);
+}
+.transcript-body {
+  flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr);
+  gap: 14px; padding: 14px 16px; background: var(--bg);
+}
+.transcript-summary {
+  min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 14px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.transcript-file { font-size: 0.95rem; font-weight: 750; color: var(--text); word-break: break-all; }
+.transcript-path { margin-top: 4px; font-size: 0.72rem; color: var(--muted); word-break: break-all; }
+.transcript-meta { font-size: 0.84rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.transcript-note { font-size: 0.78rem; line-height: 1.55; color: var(--muted); }
+.transcript-warn { font-size: 0.78rem; line-height: 1.55; color: var(--warn); font-weight: 650; }
+.transcript-error { font-size: 0.78rem; line-height: 1.55; color: var(--danger); word-break: break-word; }
+.transcript-rate { font-size: 0.78rem; line-height: 1.5; color: var(--muted); }
+.transcript-rate.bad { color: var(--danger); font-weight: 650; }
+.transcript-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.transcript-promise {
+  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line);
+  font-size: 0.74rem; line-height: 1.55; color: var(--muted);
+}
+.transcript-editor-wrap {
+  min-height: 0; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; overflow: hidden;
+}
+.transcript-editor {
+  flex: 1; width: 100%; min-height: 0; resize: none; border: 0; outline: none;
+  padding: 14px 16px; background: var(--panel); color: var(--text);
+  font: 0.84rem/1.65 ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+}
+.transcript-editor:read-only { color: var(--muted); background: var(--bg); }
+.transcript-editor-foot {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 8px 14px; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 0.76rem; font-variant-numeric: tabular-nums;
+}
+.transcript-editor-foot .is-dirty { color: var(--warn); font-weight: 650; }
+
+.pref-block {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 2px 8px; border-bottom: 1px solid var(--line-soft);
+}
+.pref-block .pref-row { border-bottom: none; min-height: 28px; padding: 0; }
+.pref-block:last-child { border-bottom: none; }
+
+.select-menu {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; height: 30px; padding: 0 8px;
+  border-radius: 8px; border: 1px solid var(--line); background: #fff;
+  font-size: 0.88rem; text-align: left;
+}
+.select-menu:hover:not(:disabled), .select-menu.open { border-color: var(--accent); }
+.select-menu .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-menu .caret { color: var(--muted); font-size: 0.7rem; }
+
+.settings-pane-inner {
+  display: flex; flex-direction: column; gap: 8px;
+  min-width: 0; min-height: 0; flex: 1;
+}
+.settings-pane.is-hotwords .settings-pane-inner { height: 100%; }
+
+/* 人声分离：关是空心点，开是实心点，颜色同时变 */
+.sep-mark {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  border: 1.5px solid currentColor; background: transparent;
+  transition: background var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
+}
+.row-chip.sep-chip.is-on .sep-mark {
+  background: currentColor;
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.18);
+}
+
+/* 需要重新打轴：同一颗胶囊，只把字和边换成警告色 */
+.row-chip.transcript-chip.needs-realign {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.hover-card { animation: layerIn var(--dur-layer) var(--ease-out); }
+@keyframes layerIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.main.dragging::after { animation: layerIn var(--dur-layer) var(--ease-out); }
+
+/* 窗口级确认条贴在状态栏上方，和浮窗里的是同一条 */
+

@@ -1,4 +1,6 @@
+import { AnimatePresence, motion } from 'framer-motion'
 import { t, UiLang } from '../i18n'
+import { useLayerMotion } from '../motion'
 
 import type { StatusSnapshot, TaskSnapshot } from '../../../shared/types'
 
@@ -21,9 +23,21 @@ export function StatusBar({
   onCopyMessage?: (text: string) => void
 }) {
   const s = t(lang)
+  const chipMotion = useLayerMotion()
   // 就绪与否 = Rust 的 can_start（含「只导 TXT 就不要求对齐」这类细则），失败时 title 给原因
   const ready = !!status?.can_start.ok
   const notReadyReason = status?.can_start.reason ?? undefined
+  // 模型短名不铺在状态栏上；悬停「模型就绪」能看到，设置 → 模型里也有
+  const detail = [
+    notReadyReason,
+    `${s.asr}: ${status?.models.asr.ready ? '✓' : '✗'} ${status?.models.asr.id ?? ''}`.trim(),
+    `${s.aligner}: ${status?.models.aligner.ready ? '✓' : '✗'} ${status?.models.aligner.id ?? ''}`.trim(),
+    `${s.demucs}: ${status?.models.demucs.ready ? '✓' : '—'}`,
+    `${s.sensevoice}: ${status?.models.sensevoice.ready ? '✓' : '—'}`,
+    `${s.backend}: ${status?.backend || '—'}`
+  ]
+    .filter((line): line is string => !!line)
+    .join('\n')
   const running = tasks.filter((x) => x.status === 'running').length
   // 「排队」只算真正进了运行队列的（有 queueRank）；刚添加还没点开始的是「待处理」，行内有徽章
   const queued = tasks.filter((x) => x.status === 'queued' && x.queueRank != null).length
@@ -35,33 +49,11 @@ export function StatusBar({
         type="button"
         className="status-link"
         style={{ color: ready ? 'var(--logo)' : 'var(--warn)' }}
-        title={notReadyReason ?? s.modelsReady}
+        title={detail}
         onClick={onOpenModels}
       >
         {ready ? s.modelsReady : s.modelsNotReady}
       </button>
-      <span className="sep" />
-      {/* 显示模型**短名**（catalog id）而不是目录名：完整路径放 title ——
-          Qwen3-ASR-0.6B-hf 这种目录名对普通用户太重，也容易把状态栏挤到折行 */}
-      <span title={status?.models.asr.dir}>
-        {s.asr}: {status?.models.asr.ready ? '✓' : '✗'} {status?.models.asr.id ?? ''}
-      </span>
-      <span className="sep" />
-      <span title={status?.models.aligner.dir}>
-        {s.aligner}: {status?.models.aligner.ready ? '✓' : '✗'} {status?.models.aligner.id ?? ''}
-      </span>
-      <span className="sep" />
-      <span title={status?.models.demucs.dir}>
-        {s.demucs}: {status?.models.demucs.ready ? '✓' : '—'}
-      </span>
-      <span className="sep" />
-      <span title={status?.models.sensevoice.dir}>
-        {s.sensevoice}: {status?.models.sensevoice.ready ? '✓' : '—'}
-      </span>
-      <span className="sep" />
-      <span>
-        {s.backend}: {status?.backend || '—'}
-      </span>
       {(running > 0 || queued > 0) && (
         <>
           <span className="sep" />
@@ -73,19 +65,21 @@ export function StatusBar({
       )}
       {/* 提示贴着右下角：左侧是"环境信息"，右侧是"最近发生的事" */}
       <span className="grow" />
-      {message && (
-        <>
-          <span className="sep" />
-          <button
-            type="button"
-            className={`status-chip ${message.kind}`}
-            title={message.text}
-            onClick={() => onCopyMessage?.(message.text)}
-          >
-            {message.text}
-          </button>
-        </>
-      )}
+      <AnimatePresence>
+        {message && (
+          <motion.span key={message.text} className="status-chip-slot" {...chipMotion}>
+            <span className="sep" />
+            <button
+              type="button"
+              className={`status-chip ${message.kind}`}
+              title={message.text}
+              onClick={() => onCopyMessage?.(message.text)}
+            >
+              {message.text}
+            </button>
+          </motion.span>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

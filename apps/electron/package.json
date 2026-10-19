@@ -1,7 +1,7 @@
 {
   "name": "oneasr-electron",
   "version": "0.2.0",
-  "description": "OneAsr modern Electron UI (replaces GPUI shell; reuses oneasr-cli)",
+  "description": "OneAsr modern Electron UI (reuses oneasr-cli)",
   "main": "./out/main/index.js",
   "private": true,
   "scripts": {
@@ -26,14 +26,14 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.3.1",
+    "electron": "44.9.0",
     "electron-vite": "^2.3.0",
     "typescript": "^5.7.3",
     "vite": "^5.4.11",
     "vitest": "^2.1.9"
   },
   "allowScripts": {
-    "electron@33.4.11": true,
+    "electron@44.9.0": true,
     "esbuild@0.21.5": true
   }
 }

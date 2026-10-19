@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 import { formatDuration, moreItems, t, UiLang } from '../i18n'
 import { useEscClose } from '../esc'
-import { panelMotion } from '../motion'
+import { useSurfaceMotion } from '../motion'
 import type { StatsSnapshot } from '../../../shared/types'
 
 /**
@@ -51,6 +51,7 @@ export function StatsPanel({
   const recent = stats.recentSession.slice(0, RECENT_MAX)
   const hasRecent = recent.length > 0 || !!stats.lastOutput
 
+  const surface = useSurfaceMotion()
   useEscClose(onClose)
 
   return (
@@ -60,7 +61,7 @@ export function StatsPanel({
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        {...panelMotion}
+        {...surface}
       >
         <div className="modal-header">
           <h3>{s.statsTitle}</h3>

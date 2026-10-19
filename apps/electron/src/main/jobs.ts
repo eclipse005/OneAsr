@@ -3,19 +3,34 @@ import fs from 'fs'
 import path from 'path'
 import { EventEmitter } from 'events'
 import type {
+  AddTaskInput,
   ProbeResult,
   Settings,
   StartResult,
   StatsSnapshot,
   StatusSnapshot,
-  TaskSnapshot
+  TaskSnapshot,
+  TranscriptEditResult,
+  TranscriptInfo
 } from '../shared/types'
-import { DEFAULT_APP_ROOT, loadSettings, resolveCli } from './settings'
+import { DEFAULT_APP_ROOT, loadSettings, outputFlags, resolveCli } from './settings'
 import { runCliJson } from './cli'
 import { parseCliEvent } from './cli-events'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
 import { logError, logWarn, writeTaskLog } from './log'
+import { m } from './i18n'
 import { loadHotwords, wordsCsv } from './hotword'
+import { resolveRunOutcome } from '../shared/run-result'
+import {
+  CTC_ALIGNER_ID,
+  failedTranscriptInfo,
+  inspectTranscriptFile,
+  inspectTranscriptText,
+  removeTempTranscript,
+  splitTranscriptText,
+  writeTempTranscript
+} from './transcript'
+import type { TranscriptReadResult } from './transcript'
 import {
   JobQueue,
   type KillCommand,
@@ -24,11 +39,23 @@ import {
   type SpawnCommand
 } from './queue'
 import { killProcessTree } from './kill-tree'
+import { isBulkStartCandidate } from '../shared/start-policy'
 
 let seq = 0
 function nextId(): string {
   seq += 1
   return `t-${Date.now()}-${seq}`
+}
+
+/** 任务挂着的文稿正文只留在主进程；快照里只放摘要。 */
+interface StagedTranscript {
+  /** 当前（可能被编辑）的规范化纯文本 */
+  text: string
+  /** 从源文件读进来的样子；用来判断要不要给 align 写临时文件 */
+  originalText: string
+  /** 上一次成功打轴用的文本；没跑过就是 undefined */
+  alignedText?: string
+  info: TranscriptInfo
 }
 
 /** 时长 / 尺寸 / 媒体类型都问 CLI（判据在 core），壳不再自己 spawn ffmpeg 正则 Duration。 */
@@ -46,6 +73,8 @@ export class JobManager extends EventEmitter {
    */
   private readonly queue = new JobQueue<TaskSnapshot>()
   private readonly children = new Map<RunId, ChildProcess>()
+  /** task id → 文稿正文；任务移除 / 清空时同步删除 */
+  private readonly transcripts = new Map<string, StagedTranscript>()
   private sessionRecent: StatsSnapshot['recentSession'] = []
   private lastOutput?: string
   private lastDurationMs?: number
@@ -73,7 +102,7 @@ export class JobManager extends EventEmitter {
     this.queue.shutdown()
   }
 
-  /** 行内改一项（运行中锁定，与 GPUI 的 locks_row_actions 一致）。 */
+  /** 行内改一项（运行中锁定，与旧版一致）。 */
   private patch(id: string, fn: (t: TaskSnapshot) => void): TaskSnapshot[] {
     const t = this.tasks.find((x) => x.id === id)
     if (t && t.status !== 'running') {
@@ -111,14 +140,16 @@ export class JobManager extends EventEmitter {
     })
   }
 
-  add(paths: string[]): TaskSnapshot[] {
+  async add(items: Array<string | AddTaskInput>): Promise<TaskSnapshot[]> {
     const settings = loadSettings()
     const hw = loadHotwords()
     const defaultGroup =
       hw.default_group_enabled && hw.default_group
         ? hw.default_group
         : null
-    for (const p of paths) {
+    for (const raw of items) {
+      const item: AddTaskInput = typeof raw === 'string' ? { media: raw } : raw
+      const p = item.media
       if (!p || !fs.existsSync(p)) continue
       if (this.tasks.some((t) => t.input === p && t.status !== 'done' && t.status !== 'error' && t.status !== 'cancelled'))
         continue
@@ -133,6 +164,25 @@ export class JobManager extends EventEmitter {
         language: settings.language || 'zh',
         vocalSeparation: !!settings.vocal_separation
       }
+      if (item.transcript) {
+        // 先读完再放进行列表：这一行从出现的第一刻起就是「可开始」的，
+        // 不会出现点了开始才发现文稿还在读的竞态。
+        const r = await inspectTranscriptFile(item.transcript)
+        if (r.ok && r.text != null && r.info) {
+          const info: TranscriptInfo = { ...r.info, needsRealign: false }
+          task.transcript = info
+          this.transcripts.set(task.id, {
+            text: r.text,
+            originalText: r.text,
+            info
+          })
+        } else {
+          task.transcript = failedTranscriptInfo(
+            item.transcript,
+            r.error ?? 'transcript read failed'
+          )
+        }
+      }
       this.tasks.push(task)
       // 尺寸/时长/类型后台问 CLI，拿到再刷新那一行（不阻塞加入）
       void probeInput(p).then((probe) => {
@@ -140,6 +190,9 @@ export class JobManager extends EventEmitter {
         task.sizeBytes = probe.size_bytes
         task.durationSec = probe.duration_sec ?? undefined
         task.mediaKind = probe.kind
+        if (task.transcript && !task.transcript.error) {
+          void this.refreshTranscriptMeta(task)
+        }
         this.emitUpdate()
       })
     }
@@ -147,21 +200,193 @@ export class JobManager extends EventEmitter {
     return this.list()
   }
 
+  /** 时长探到后补一次语速 / 行数；用当前暂存文本，编辑过的稿子也算得对。 */
+  private async refreshTranscriptMeta(task: TaskSnapshot): Promise<void> {
+    const staged = this.transcripts.get(task.id)
+    if (!staged || !task.durationSec) return
+    const r = await inspectTranscriptText(staged.text, staged.info.name, task.durationSec)
+    if (!r.ok || !r.info) return
+    staged.info = {
+      ...staged.info,
+      lines: r.info.lines,
+      chars: r.info.chars,
+      rate: r.info.rate
+    }
+    task.transcript = staged.info
+    this.emitUpdate()
+  }
+
+  private transcriptLocked(task: TaskSnapshot): boolean {
+    // 新加入的行也是 status=queued，但 queueRank 还是 undefined（待处理）；
+    // 只有真的进了运行队列（或正在跑）才把这次输入钉死。
+    return (
+      task.status === 'running' ||
+      (task.status === 'queued' && this.queue.queueRank(task.id) !== undefined)
+    )
+  }
+
+  private transcriptNeedsRealign(
+    task: TaskSnapshot,
+    staged: StagedTranscript,
+    text: string
+  ): boolean {
+    if (staged.alignedText != null) return text !== staged.alignedText
+    return !!task.outputPath
+  }
+
+  getTranscript(id: string): TranscriptEditResult {
+    const staged = this.transcripts.get(id)
+    if (!staged) return { ok: false, error: 'no transcript' }
+    return { ok: true, text: staged.text, info: staged.info }
+  }
+
+  /** 挂上 / 替换 / 移除一份文稿。path=null 表示移除。 */
+  async setTranscript(id: string, file: string | null): Promise<TaskSnapshot[]> {
+    const task = this.tasks.find((t) => t.id === id)
+    if (!task || this.transcriptLocked(task)) return this.list()
+    if (!file) {
+      this.transcripts.delete(id)
+      task.transcript = undefined
+      this.emitUpdate()
+      return this.list()
+    }
+    const r = await inspectTranscriptFile(file)
+    if (!r.ok || r.text == null || !r.info) {
+      this.transcripts.delete(id)
+      task.transcript = failedTranscriptInfo(file, r.error ?? 'transcript read failed')
+      this.emitUpdate()
+      return this.list()
+    }
+    const info: TranscriptInfo = {
+      ...r.info,
+      edited: false,
+      needsRealign: !!task.outputPath
+    }
+    this.transcripts.set(id, {
+      text: r.text,
+      originalText: r.text,
+      info
+    })
+    task.transcript = info
+    this.emitUpdate()
+    return this.list()
+  }
+
+  /** 保存面板里的编辑；只改暂存，不写回原文件。 */
+  async saveTranscript(id: string, text: string): Promise<TranscriptEditResult> {
+    const task = this.tasks.find((t) => t.id === id)
+    const staged = this.transcripts.get(id)
+    if (!task || !staged || this.transcriptLocked(task)) {
+      return { ok: false, error: 'transcript unavailable', tasks: this.list() }
+    }
+    const r = await inspectTranscriptText(text, staged.info.name, task.durationSec)
+    if (!r.ok || r.text == null || !r.info) {
+      return { ok: false, error: r.error, tasks: this.list() }
+    }
+    const info: TranscriptInfo = {
+      ...staged.info,
+      lines: r.info.lines,
+      chars: r.info.chars,
+      rate: r.info.rate,
+      edited: r.text !== staged.originalText,
+      needsRealign: this.transcriptNeedsRealign(task, staged, r.text)
+    }
+    staged.text = r.text
+    staged.info = info
+    task.transcript = info
+    this.emitUpdate()
+    return { ok: true, text: r.text, info, tasks: this.list() }
+  }
+
+  /** 智能断句：作用于当前暂存文本，结果仍只留在应用里。 */
+  async splitTranscript(id: string): Promise<TranscriptEditResult> {
+    const task = this.tasks.find((t) => t.id === id)
+    const staged = this.transcripts.get(id)
+    if (!task || !staged || this.transcriptLocked(task)) {
+      return { ok: false, error: 'transcript unavailable', tasks: this.list() }
+    }
+    const settings = loadSettings()
+    const r = await splitTranscriptText(
+      staged.text,
+      task.language || settings.language || 'zh',
+      settings.subtitle_length_preset || 'standard',
+      staged.info.name,
+      task.durationSec
+    )
+    if (!r.ok || r.text == null || !r.info) {
+      return { ok: false, error: r.error, tasks: this.list() }
+    }
+    const info: TranscriptInfo = {
+      ...staged.info,
+      lines: r.info.lines,
+      chars: r.info.chars,
+      rate: r.info.rate,
+      edited: r.text !== staged.originalText,
+      needsRealign: this.transcriptNeedsRealign(task, staged, r.text)
+    }
+    staged.text = r.text
+    staged.info = info
+    task.transcript = info
+    this.emitUpdate()
+    return { ok: true, text: r.text, info, tasks: this.list() }
+  }
+
+  /** 丢掉编辑，重新读源文件。 */
+  async rereadTranscript(id: string): Promise<TranscriptEditResult> {
+    const task = this.tasks.find((t) => t.id === id)
+    const staged = this.transcripts.get(id)
+    if (!task || !staged || this.transcriptLocked(task)) {
+      return { ok: false, error: 'transcript unavailable', tasks: this.list() }
+    }
+    if (!staged.info.path) {
+      return { ok: false, error: 'transcript has no source file', tasks: this.list() }
+    }
+    const r = await inspectTranscriptFile(staged.info.path, task.durationSec)
+    if (!r.ok || r.text == null || !r.info) {
+      return { ok: false, error: r.error, tasks: this.list() }
+    }
+    const info: TranscriptInfo = {
+      ...r.info,
+      edited: false,
+      needsRealign: this.transcriptNeedsRealign(task, staged, r.text)
+    }
+    staged.text = r.text
+    staged.originalText = r.text
+    staged.info = info
+    task.transcript = info
+    this.emitUpdate()
+    return { ok: true, text: r.text, info, tasks: this.list() }
+  }
+
+  removeTranscript(id: string): TaskSnapshot[] {
+    const task = this.tasks.find((t) => t.id === id)
+    if (!task || this.transcriptLocked(task)) return this.list()
+    this.transcripts.delete(id)
+    task.transcript = undefined
+    this.emitUpdate()
+    return this.list()
+  }
+
   remove(id: string): TaskSnapshot[] {
     if (this.queue.isRunning(id)) this.cancel(id)
     this.tasks = this.tasks.filter((t) => t.id !== id)
+    this.transcripts.delete(id)
     this.queue.removeQueued(id)
     this.emitUpdate()
     return this.list()
   }
 
   /**
-   * 清空列表——**正在跑的那条留下**（GPUI 的行为）。
+   * 清空列表——**正在跑的那条留下**（旧版的行为）。
    * 以前这里会顺手 cancel 掉运行中的任务，等于「清空」= 杀掉正在干的活。
    */
   clear(): TaskSnapshot[] {
     this.queue.clearQueued()
     this.tasks = this.tasks.filter((t) => t.status === 'running')
+    const keep = new Set(this.tasks.map((t) => t.id))
+    for (const id of Array.from(this.transcripts.keys())) {
+      if (!keep.has(id)) this.transcripts.delete(id)
+    }
     this.emitUpdate()
     return this.list()
   }
@@ -174,9 +399,21 @@ export class JobManager extends EventEmitter {
    */
   private async canStart(task: TaskSnapshot): Promise<{ ok: boolean; reason?: string }> {
     const settings = loadSettings()
+    const isTranscript = !!task.transcript
+    if (isTranscript && task.transcript?.error) {
+      return { ok: false, reason: task.transcript.error }
+    }
+    if (isTranscript && !this.transcripts.has(task.id)) {
+      return { ok: false, reason: 'transcript unavailable' }
+    }
     const args = ['status', '--json', '--language', task.language || settings.language || 'zh']
+    if (isTranscript) {
+      // 文稿任务固定 CTC；--transcript 让 status 提前检查「至少 SRT 或 ASS」。
+      args.push('--transcript', '--aligner', CTC_ALIGNER_ID)
+    } else if (task.hotwordGroupId) {
+      args.push('--hotword-group', task.hotwordGroupId)
+    }
     if (task.vocalSeparation) args.push('--vocal-separation')
-    if (task.hotwordGroupId) args.push('--hotword-group', task.hotwordGroupId)
     if (settings.output_txt) args.push('--txt')
     if (settings.output_ass) args.push('--ass')
     if (!settings.output_srt) args.push('--no-srt')
@@ -243,6 +480,9 @@ export class JobManager extends EventEmitter {
     t.status = 'queued'
     t.progress = ''
     t.stage = undefined
+    t.stageKey = undefined
+    t.stageChunk = undefined
+    t.stageChunkTotal = undefined
     t.progressPct = 0
     t.error = undefined
     t.outputPath = undefined
@@ -263,7 +503,10 @@ export class JobManager extends EventEmitter {
   }
 
   async startAll(): Promise<StartResult> {
-    const candidates = this.tasks.filter((t) => t.status !== 'running')
+    // 完成和取消的行留在原地；已经在跑或已经排队的不再入队一次。
+    const candidates = this.tasks.filter((t) =>
+      isBulkStartCandidate(t.status, this.queue.queueRank(t.id) !== undefined)
+    )
     // 每行可能带着不同的语言/人声分离/热词组，门禁逐个问（并发，N 很小）
     const gates = await Promise.all(candidates.map((t) => this.canStart(t)))
     let firstReason: string | undefined
@@ -329,23 +572,30 @@ export class JobManager extends EventEmitter {
     const settings = loadSettings()
     const appRoot = DEFAULT_APP_ROOT
     const cli = resolveCli(appRoot)
-    // 模型目录的解析归 CLI（apply_app_root_paths / settings），壳不再自己拼候选
-    const outDir = settings.save_next_to_source
-      ? path.dirname(task.input)
-      : settings.output_dir || path.join(appRoot, 'output')
-    try {
-      fs.mkdirSync(outDir, { recursive: true })
-    } catch {
-      /* ignore */
+    const staged = this.transcripts.get(task.id)
+    const transcriptRun = !!staged && !staged.info.error
+    /**
+     * 文稿有编辑时，align 读一份临时纯文本；没编辑就直接读源文件（保留
+     * .srt 的来源信息）。临时文件在子进程收尾时删除。
+     */
+    let tempTranscript: string | undefined
+    let args: string[]
+    if (transcriptRun && staged) {
+      const useSource = staged.text === staged.originalText && !!staged.info.path
+      const textPath = useSource
+        ? staged.info.path!
+        : (tempTranscript = writeTempTranscript(staged.text))
+      args = this.buildAlignArgs(task, settings, appRoot, textPath)
+    } else {
+      args = this.buildArgs(task, settings, appRoot)
     }
-    const stem = path.basename(task.input, path.extname(task.input))
-    const primaryExt = settings.output_srt ? '.srt' : settings.output_txt ? '.txt' : '.ass'
-    const defaultOut = path.join(appRoot, 'output', `${stem}${primaryExt}`)
-    const desiredOut = path.join(outDir, `${stem}${primaryExt}`)
-    const outputPath =
-      path.resolve(desiredOut) === path.resolve(defaultOut) ? undefined : desiredOut
-
-    const args = this.buildArgs(task, outputPath, settings, appRoot)
+    const cleanupTempTranscript = (): void => {
+      if (!tempTranscript) return
+      removeTempTranscript(tempTranscript)
+      tempTranscript = undefined
+    }
+    // 输出目录的最终决定权在 Rust（srt_target_dir）：壳只把 GUI 的两个字段
+    // 原样转成旗标，不自己拼路径——否则 SRT 与 TXT/ASS 会落到两个目录。
 
     task.status = 'running'
     task.startedAt = Date.now()
@@ -392,6 +642,18 @@ export class JobManager extends EventEmitter {
               this.emit('progress', { id: task.id, line: ev.label })
             }
             if (typeof ev.pct === 'number') task.progressPct = ev.pct
+            // 没带分段（换阶段，或只有一段）就把上一阶段的 2/5 清掉。
+            if (
+              typeof ev.chunk === 'number' &&
+              typeof ev.chunkTotal === 'number' &&
+              ev.chunkTotal > 1
+            ) {
+              task.stageChunk = ev.chunk
+              task.stageChunkTotal = ev.chunkTotal
+            } else {
+              task.stageChunk = undefined
+              task.stageChunkTotal = undefined
+            }
             break
           case 'timing':
             if (ev.label && typeof ev.ms === 'number') {
@@ -423,6 +685,7 @@ export class JobManager extends EventEmitter {
       if (settled) return
       settled = true
       this.children.delete(runId)
+      cleanupTempTranscript()
       const wasCancel = task.status === 'cancelled'
       task.finishedAt = Date.now()
       const durationMs = (task.finishedAt || 0) - (task.startedAt || 0)
@@ -441,10 +704,12 @@ export class JobManager extends EventEmitter {
         return
       }
 
-      const produced =
-        [desiredOut, defaultOut, outputPath, path.join(outDir, `${stem}.srt`), path.join(appRoot, 'output', `${stem}.srt`)]
-          .filter((p): p is string => !!p)
-          .find((p) => fs.existsSync(p) && fs.statSync(p).size > 0) || undefined
+      // 产物路径只有一个出处：CLI 的 `done` 事件（core 决定文件名）。
+      // 壳**不猜**——文稿匹配写的是 `<stem>.aligned.srt`，猜出来的 `<stem>.srt`
+      // 既可能不存在，也可能命中上一轮遗留的同名文件（把旧结果当成本次的
+      // 产物报出去）。判据见 shared/run-result.ts。
+      const outcome = resolveRunOutcome(code, task.outputPath)
+      const produced = outcome.ok ? outcome.outputPath : undefined
 
       let cues = 0
       if (produced) {
@@ -463,22 +728,34 @@ export class JobManager extends EventEmitter {
 
       if (stageTimings.length) task.stageTimings = stageTimings
 
-      const ok = code === 0 && !!produced
+      const ok = outcome.ok
       if (ok) {
         task.status = 'done'
         task.outputPath = produced
         task.progress = 'done'
         task.progressPct = 100
         task.stage = 'Done'
+        task.stageChunk = undefined
+        task.stageChunkTotal = undefined
         this.lastOutput = produced
+        if (transcriptRun && staged) {
+          staged.alignedText = staged.text
+          staged.info = { ...staged.info, edited: false, needsRealign: false }
+          task.transcript = staged.info
+        }
       } else {
         task.status = 'error'
         // 摘要是 CLI 的 `error` 事件（Rust 的双语文案，结构化）；
         // 原始 stderr 只在没有事件时兜底，并且始终作为「详情」保留给展开/复制。
-        task.error = eventError ?? (stderr || `exit ${code}`).slice(-600)
+        task.error =
+          outcome.reason === 'no-output'
+            ? m().taskNoOutput
+            : eventError ?? (stderr || `exit ${code}`).slice(-600)
         task.errorDetail = stderr.trim() ? stderr.trim().slice(-8000) : undefined
         task.progress = 'error'
         task.progressPct = 100
+        task.stageChunk = undefined
+        task.stageChunkTotal = undefined
         // 失败的现场全部落盘：命令行、退出码、耗时、stderr 尾部（截 8 KB）
         logError(
           `task failed: ${task.name}\n  cmd: ${cmdline}\n  exit: ${code} · ${(durationMs / 1000).toFixed(1)}s · input=${task.input}\n  stderr:\n${stderr.slice(-8000)}`
@@ -495,7 +772,7 @@ export class JobManager extends EventEmitter {
           media_sec: task.durationSec,
           lang: task.language || settings.language || 'zh',
           sep: !!(task.vocalSeparation ?? settings.vocal_separation),
-          transcript: false,
+          transcript: transcriptRun,
           ok,
           cues
         })
@@ -509,6 +786,7 @@ export class JobManager extends EventEmitter {
         [
           `task: ${task.name}`,
           `input: ${task.input}`,
+          `transcript: ${task.transcript ? `${task.transcript.name} (${task.transcript.lines} lines)` : '(none)'}`,
           `cmd: ${cmdline}`,
           `exit: ${code} · ${(durationMs / 1000).toFixed(1)}s`,
           `output: ${task.outputPath ?? '(none)'}`,
@@ -534,6 +812,7 @@ export class JobManager extends EventEmitter {
       if (settled) return
       settled = true
       this.children.delete(runId)
+      cleanupTempTranscript()
       task.status = 'error'
       task.error = String(err)
       logError(`task spawn failed: ${task.name}\n  cmd: ${cmdline}`, err)
@@ -543,9 +822,48 @@ export class JobManager extends EventEmitter {
     })
   }
 
+  /**
+   * 文稿任务：`align` 跳过识别，文字来自文稿；对齐器固定 CTC（CLI 也固定）。
+   * 热词 / ASR 模型 / 语言模型一概不传——它们对这条路径没有消费者。
+   */
+  private buildAlignArgs(
+    task: TaskSnapshot,
+    settings: Settings,
+    appRoot: string,
+    textPath: string
+  ): string[] {
+    const args = [
+      'align',
+      '--events=json',
+      '--audio',
+      task.input,
+      '--text',
+      textPath,
+      '--app-root',
+      appRoot,
+      '--data-root',
+      appRoot,
+      '--language',
+      task.language || settings.language || 'zh',
+      '--backend',
+      settings.backend || 'auto',
+      '--chunk-seconds',
+      String(settings.chunk_target_seconds || 60)
+    ]
+    if (settings.output_txt) args.push('--txt')
+    if (settings.output_ass) args.push('--ass')
+    if (!settings.output_srt) args.push('--no-srt')
+    if (settings.subtitle_beautify) args.push('--beautify')
+    args.push(...outputFlags(settings))
+    if (task.vocalSeparation ?? settings.vocal_separation) {
+      args.push('--vocal-separation')
+      if (settings.demucs_model_dir) args.push('--demucs-model-dir', settings.demucs_model_dir)
+    }
+    return args
+  }
+
   private buildArgs(
     task: TaskSnapshot,
-    outputPath: string | undefined,
     settings: Settings,
     appRoot: string
   ): string[] {
@@ -565,7 +883,6 @@ export class JobManager extends EventEmitter {
       '--chunk-seconds',
       String(settings.chunk_target_seconds || 60)
     ]
-    if (outputPath) args.push('--output', outputPath)
 
     // 直接透传设置里的模型 id：CLI 的 parse_asr_arg / parse_aligner_arg 既认友好别名
     // 也认完整目录名（目录名只有 catalog 一处真源）。以前壳里自己按字符串猜
@@ -576,6 +893,7 @@ export class JobManager extends EventEmitter {
     if (settings.output_txt) args.push('--txt')
     if (settings.output_ass) args.push('--ass')
     if (!settings.output_srt) args.push('--no-srt')
+    args.push(...outputFlags(settings))
     if (settings.subtitle_beautify) args.push('--beautify')
     if (settings.text_script === 'simplified' || settings.text_script === 'traditional') {
       args.push('--script', settings.text_script)

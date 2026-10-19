@@ -6,8 +6,20 @@ import { StatsPanel } from './components/StatsPanel'
 import { StatusBar } from './components/StatusBar'
 import { TaskList } from './components/TaskList'
 import { TitleBar } from './components/TitleBar'
-import { WelcomeModal } from './components/WelcomeModal'
-import { resolveUiLang, t, unsupportedCount } from './i18n'
+import { TranscriptPanel } from './components/TranscriptPanel'
+import { useEscClose } from './esc'
+import {
+  confirmClearTasks,
+  resolveUiLang,
+  t,
+  transcriptsPaired,
+  transcriptsUnpaired,
+  unsupportedCount
+} from './i18n'
+import { useLayerMotion, useSurfaceMotion } from './motion'
+import { isBulkStartCandidate } from '../../shared/start-policy'
+import { closeOverlay, openOverlay, type OverlayKind } from '../../shared/overlay'
+import { fileName, pairPicked, pairingItems } from './lib/pairing'
 import type {
   HotwordStore,
   DownloadState,
@@ -16,6 +28,7 @@ import type {
   StartResult,
   StatsSnapshot,
   TaskSnapshot,
+  TranscriptInfo
 } from '../../shared/types'
 
 function deepEq(a: unknown, b: unknown): boolean {
@@ -34,12 +47,24 @@ export default function App() {
   const [hotwordDraft, setHotwordDraft] = useState<HotwordStore | null>(null)
   const [settingsBaseline, setSettingsBaseline] = useState<Settings | null>(null)
   const [hotwordsBaseline, setHotwordsBaseline] = useState<HotwordStore | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [statsOpen, setStatsOpen] = useState(false)
-  const [guideOpen, setGuideOpen] = useState(false)
+  /**
+   * 浮窗互斥：同一时刻只开一个（规则见 shared/overlay.ts）。
+   *
+   * 以前是三个独立布尔量，打开新的不会关掉旧的——统计与指南能同时开着，
+   * 两个浮窗叠在一起互相穿透。现在只留一个 kind，结构上就叠不起来了。
+   */
+  const [overlay, setOverlay] = useState<OverlayKind>('none')
+  const settingsOpen = overlay === 'settings'
+  const statsOpen = overlay === 'stats'
+  const guideOpen = overlay === 'guide'
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
-  const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  /** dragenter/leave 会从子元素冒泡：用计数判断指针是否真的离开了窗口。 */
+  const dragDepth = useRef(0)
+  /** 当前打开文稿面板的任务；正文只放在主进程，面板打开时再取。 */
+  const [transcriptId, setTranscriptId] = useState<string | null>(null)
+  const [transcriptText, setTranscriptText] = useState('')
+  const [transcriptInfo, setTranscriptInfo] = useState<TranscriptInfo | null>(null)
   /**
    * 提示只有**一条通道**：底部状态栏右侧那枚可点的消息片。
    *
@@ -49,8 +74,16 @@ export default function App() {
    */
   const [statusMsg, setStatusMsg] = useState<{ kind: string; text: string } | null>(null)
   const statusTimer = useRef<number | undefined>(undefined)
+  /** 正在飞的那次 status 查询：并发调用共享它（见 refreshModels） */
+  const statusQuery = useRef<Promise<StatusSnapshot | null> | null>(null)
   /** 正在开系统文件对话框（防重入） */
   const [picking, setPicking] = useState(false)
+  /** 清空会丢掉整表，先在按钮旁边确认。单行移除不确认。 */
+  const [clearOpen, setClearOpen] = useState(false)
+  const clearRef = useRef<HTMLDivElement>(null)
+  /** 设置刚保存成功：主按钮短暂显示「已保存」，反馈留在刚才点的地方 */
+  const [settingsAck, setSettingsAck] = useState(false)
+  const ackTimer = useRef<number | undefined>(undefined)
 
   const [download, setDownload] = useState<DownloadState | null>(null)
 
@@ -73,18 +106,43 @@ export default function App() {
     async (tab: SettingsTab = 'general') => {
       const savedSettings = settings || (await window.oneasr.getSettings())
       const savedHw = hotwords || (await window.oneasr.getHotwords())
-      setSettings(savedSettings)
+      /**
+       * 模型目录显示 **CLI 解出来的那个**，不是配置里存的原样。
+       *
+       * 配置里可能是相对写法（`"Qwen3-ForcedAligner-0.6B-hf"` 这样的选中目录），
+       * 跟旁边两个全路径的输入框摆在一起看着像坏值。壳**不自己拼路径**：
+       * 这里用的就是 `status --json` 里 CLI 已经算好的 `models.*.dir`，显示出来而已。
+       *
+       * 只改这四个「派生字段」，不动 `asr_dirs` / `aligner_dirs` 那两张按模型记
+       * 目录的表——表里存的是用户的「选中目录」，塞进布局默认路径等于把这台机器的
+       * 绝对路径钉死进配置（应用挪走就废）。副作用是好的：目录成了绝对路径之后，
+       * 切换对齐引擎时推出来的目录（`replace(/[^/]+$/, id)`）也仍然是绝对路径。
+       */
+      const st = status ?? (await window.oneasr.getStatus())
+      const shown: Settings = { ...savedSettings }
+      if (st) {
+        const resolved: Record<string, string | undefined> = {
+          asr_model_dir: st.models.asr.dir,
+          aligner_model_dir: st.models.aligner.dir,
+          demucs_model_dir: st.models.demucs.dir,
+          sensevoice_model_dir: st.models.sensevoice.dir
+        }
+        for (const [key, value] of Object.entries(resolved)) {
+          if (value) (shown as unknown as Record<string, unknown>)[key] = value
+        }
+      }
+      setSettings(shown)
       setHotwords(savedHw)
-      const sSnap = structuredClone(savedSettings)
+      const sSnap = structuredClone(shown)
       const hSnap = structuredClone(savedHw)
       setSettingsBaseline(sSnap)
       setHotwordsBaseline(hSnap)
       setDraft(structuredClone(sSnap))
       setHotwordDraft(structuredClone(hSnap))
       setSettingsTab(tab)
-      setSettingsOpen(true)
+      setOverlay((cur) => openOverlay(cur, 'settings'))
     },
-    [settings, hotwords]
+    [settings, hotwords, status]
   )
 
   useEffect(() => {
@@ -97,38 +155,42 @@ export default function App() {
         setDraft((d) => (d ? { ...d, ui_language: code } : d))
       },
       open: async (name: 'settings' | 'hotwords' | 'stats' | 'guide' | 'none') => {
-        setWelcomeOpen(false)
         if (name === 'stats') {
           setStats(await window.oneasr.getStats())
         }
         if (name === 'hotwords' || name === 'settings') {
-          const savedSettings = await window.oneasr.getSettings()
-          const savedHw = await window.oneasr.getHotwords()
-          setSettings(savedSettings)
-          setHotwords(savedHw)
-          const sSnap = structuredClone(savedSettings)
-          const hSnap = structuredClone(savedHw)
-          setSettingsBaseline(sSnap)
-          setHotwordsBaseline(hSnap)
-          setDraft(structuredClone(sSnap))
-          setHotwordDraft(structuredClone(hSnap))
-          setSettingsTab(name === 'hotwords' ? 'hotwords' : 'general')
-          setSettingsOpen(true)
-          setStatsOpen(false)
-          setGuideOpen(false)
+          // 走**和工具栏按钮同一条路**（openSettingsFn）。以前这里另抄了一份
+          // 加载逻辑，结果跟真实按钮脱节：按钮那边显示 CLI 解出来的模型全路径，
+          // 这个钩子显示配置里的裸名字，自动化脚本两头看到的不一样。
+          await openSettingsFn(name === 'hotwords' ? 'hotwords' : 'general')
           return
         }
-        setSettingsOpen(false)
-        setStatsOpen(name === 'stats')
-        setGuideOpen(name === 'guide')
-      },
-      dismissWelcome: () => setWelcomeOpen(false)
+        if (name === 'none') {
+          setOverlay((cur) => closeOverlay(cur))
+          return
+        }
+        setOverlay((cur) => openOverlay(cur, name))
+      }
     }
     ;(window as unknown as { __oneasrShotApi?: typeof api }).__oneasrShotApi = api
     return () => {
       delete (window as unknown as { __oneasrShotApi?: typeof api }).__oneasrShotApi
     }
-  }, [])
+  }, [openSettingsFn])
+
+  const dropzoneMotion = useSurfaceMotion()
+  const clearPopMotion = useLayerMotion()
+  useEscClose(() => setClearOpen(false), clearOpen)
+
+  useEffect(() => {
+    if (!clearOpen) return
+    const onDown = (event: MouseEvent): void => {
+      if (clearRef.current?.contains(event.target as Node)) return
+      setClearOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [clearOpen])
 
   const notify = useCallback((kind: 'info' | 'success' | 'warn' | 'error', message: string) => {
     setStatusMsg({ kind, text: message })
@@ -140,8 +202,29 @@ export default function App() {
     )
   }, [])
 
-  const refreshModels = useCallback(async () => {
-    setStatus(await window.oneasr.getStatus())
+  /**
+   * 拉一次 CLI 的 status 快照。
+   *
+   * **返回快照本身**（不只是塞进 state）：调用方常常要马上用那张表
+   * （比如把拖进来的文件按扩展名分流成媒体 / 文稿），等下一次渲染再读
+   * state 会读到旧值。
+   *
+   * 并发调用共享同一次查询：一次 status 要 spawn 一次 CLI 并去 stat 模型
+   * 目录，用户连着拖几个文件时不该并排跑好几个。
+   */
+  const refreshModels = useCallback(async (): Promise<StatusSnapshot | null> => {
+    if (!statusQuery.current) {
+      statusQuery.current = window.oneasr
+        .getStatus()
+        .catch(() => null)
+        .finally(() => {
+          statusQuery.current = null
+        })
+    }
+    const pending = statusQuery.current
+    const next = await pending
+    setStatus(next)
+    return next
   }, [])
 
   const refreshStats = useCallback(async () => {
@@ -153,7 +236,6 @@ export default function App() {
       const loaded = await window.oneasr.getSettings()
       setSettings(loaded)
       setDraft(loaded)
-      setWelcomeOpen(!loaded.welcome_done)
       setTasks(await window.oneasr.listTasks())
       setHotwords(await window.oneasr.getHotwords())
       await refreshModels()
@@ -186,7 +268,7 @@ export default function App() {
 
   /**
    * 启动被门禁挡下时把原因弹出来。**文案是 Rust 给的**（status --json 的
-   * can_start.reason，双语、与 GPUI 逐字一致），壳不再自己拼"模型未就绪/热词组为空"。
+   * can_start.reason，双语），壳不再自己拼"模型未就绪/热词组为空"。
    */
   const reportStart = useCallback(
     (r: StartResult) => {
@@ -195,6 +277,105 @@ export default function App() {
     },
     [s, notify]
   )
+
+  const openTranscript = async (id: string) => {
+    const r = await window.oneasr.getTranscript(id)
+    if (!r.ok || r.text == null || !r.info) {
+      notify('error', r.error || s.transcriptReadFailed)
+      return
+    }
+    // 文稿面板也是一层浮窗：开它之前把别的浮窗收掉，别再叠出两个。
+    setOverlay((cur) => closeOverlay(cur))
+    setTranscriptId(id)
+    setTranscriptText(r.text)
+    setTranscriptInfo(r.info)
+  }
+
+  const pickTranscriptFor = async (id: string) => {
+    const r = await window.oneasr.pickTranscript()
+    if (!r.ok) {
+      notify('error', `${s.dialogFailed}: ${r.error || ''}`)
+      return
+    }
+    if (!r.path) return
+    const next = await window.oneasr.setTaskTranscript(id, r.path)
+    setTasks(next)
+    const info = next.find((t) => t.id === id)?.transcript
+    if (info?.error) {
+      notify('error', info.error)
+      return
+    }
+    await openTranscript(id)
+  }
+
+  const attachTranscript = async (id: string, path: string) => {
+    const next = await window.oneasr.setTaskTranscript(id, path)
+    setTasks(next)
+    const info = next.find((t) => t.id === id)?.transcript
+    if (info?.error) {
+      notify('error', info.error)
+      return
+    }
+    await openTranscript(id)
+  }
+
+  const saveTranscript = async (text: string): Promise<boolean> => {
+    if (!transcriptId) return false
+    const r = await window.oneasr.saveTaskTranscript(transcriptId, text)
+    if (!r.ok) {
+      notify('error', r.error || s.transcriptSaveFailed)
+      return false
+    }
+    if (r.tasks) setTasks(r.tasks)
+    if (r.text != null) setTranscriptText(r.text)
+    if (r.info) setTranscriptInfo(r.info)
+    notify('success', s.transcriptSaved)
+    return true
+  }
+
+  const splitTranscript = async (text: string) => {
+    if (!transcriptId) return
+    const id = transcriptId
+    // 先把面板里的当前草稿落成暂存，再交给 core 断句；源文件一个字都不动。
+    const saved = await window.oneasr.saveTaskTranscript(id, text)
+    if (!saved.ok) {
+      notify('error', saved.error || s.transcriptSaveFailed)
+      return
+    }
+    if (saved.tasks) setTasks(saved.tasks)
+    const r = await window.oneasr.splitTaskTranscript(id)
+    if (!r.ok) {
+      notify('error', r.error || s.transcriptSplitFailed)
+      return
+    }
+    if (r.tasks) setTasks(r.tasks)
+    if (r.text != null) setTranscriptText(r.text)
+    if (r.info) setTranscriptInfo(r.info)
+    notify('success', s.transcriptSplitDone)
+  }
+
+  const rereadTranscript = async () => {
+    if (!transcriptId) return
+    const r = await window.oneasr.rereadTaskTranscript(transcriptId)
+    if (!r.ok) {
+      notify('error', r.error || s.transcriptReadFailed)
+      return
+    }
+    if (r.tasks) setTasks(r.tasks)
+    if (r.text != null) setTranscriptText(r.text)
+    if (r.info) setTranscriptInfo(r.info)
+    notify('success', s.transcriptRereadDone)
+  }
+
+  const removeTranscript = async () => {
+    if (!transcriptId) return
+    const id = transcriptId
+    const next = await window.oneasr.removeTaskTranscript(id)
+    setTasks(next)
+    setTranscriptId(null)
+    setTranscriptInfo(null)
+    notify('success', s.transcriptRemoved)
+  }
 
   const saveAllSettings = async () => {
     if (!draft || !hotwordDraft) return
@@ -207,19 +388,12 @@ export default function App() {
     setSettingsBaseline(structuredClone(saved))
     setHotwordsBaseline(structuredClone(savedHw))
     await refreshModels()
+    setSettingsAck(true)
+    if (ackTimer.current) window.clearTimeout(ackTimer.current)
+    ackTimer.current = window.setTimeout(() => setSettingsAck(false), 1400)
     notify('success', s.saved)
   }
 
-
-  const dismissWelcome = async (openSettings: boolean) => {
-    if (!draft) return
-    const next = { ...draft, welcome_done: true }
-    const saved = await window.oneasr.saveSettings(next)
-    setSettings(saved)
-    setDraft(saved)
-    setWelcomeOpen(false)
-    if (openSettings) void openSettingsFn('general')
-  }
 
   const addFiles = async (paths?: string[]) => {
     if (picking) return
@@ -242,25 +416,50 @@ export default function App() {
         return
       }
     }
-    // 拖进来的可能什么都有：只收后端认的媒体，其余报一次数——不静默吞掉
-    // （扩展名清单来自 `status --json`，壳不再自己维护正则；状态还没拿到时不拦，
-    //   免得刚启动那几百毫秒里把正常文件也当成不支持）
-    const exts = status?.media_exts ?? []
-    const isSupported = (p: string): boolean => {
-      const lower = p.toLowerCase()
-      return exts.some((e) => lower.endsWith(`.${e}`))
+    // 拖进来的可能什么都有：媒体建任务，文稿按同名配对；其余报一次数——不静默吞掉。
+    // 两张扩展名表都来自 CLI（core 是唯一真相）。
+    //
+    // 表还没到手就**等它**：一次状态查询慢几秒，不该把用户刚拖进来的文件丢掉。
+    // （旧实现在这里直接 return，只留一句「正在读取模型状态…」，选择整个没了。）
+    const st = status ?? (await refreshModels())
+    if (!st) {
+      notify('warn', s.modelsLoading)
+      return
     }
-    const media = exts.length ? list.filter(isSupported) : list
-    const skipped = list.length - media.length
-    if (skipped > 0) {
-      notify(media.length === 0 ? 'warn' : 'info', unsupportedCount(lang, skipped))
+    const pairing = pairPicked(list, st.media_exts ?? [], st.transcript_exts ?? [])
+    if (pairing.skipped.length) {
+      notify('info', unsupportedCount(lang, pairing.skipped.length))
     }
-    if (!media.length) return
-    setTasks(await window.oneasr.addTasks(media))
+    if (pairing.unpairedTranscripts.length) {
+      notify('warn', transcriptsUnpaired(lang, pairing.unpairedTranscripts.map(fileName)))
+    }
+    if (!pairing.media.length) return
+    setTasks(await window.oneasr.addTasks(pairingItems(pairing)))
+    if (pairing.pairs.length) {
+      notify('success', transcriptsPaired(lang, pairing.pairs.length))
+    }
+  }
+
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    dragDepth.current += 1
+    setDragging(true)
+  }
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    // 不让 Windows 画「禁止」光标：这是接受文件，不是移动/链接
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragging(false)
   }
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
+    dragDepth.current = 0
     setDragging(false)
     // 过滤与提示都在 addFiles 里统一做（对话框与拖放走同一条路）
     const files = Array.from(e.dataTransfer.files || [])
@@ -296,8 +495,28 @@ export default function App() {
     recentSession: []
   }
 
+  const activeTranscriptTask = transcriptId
+    ? tasks.find((t) => t.id === transcriptId)
+    : undefined
+  const canStartAll = tasks.some((task) =>
+    isBulkStartCandidate(task.status, task.queueRank != null)
+  )
+
+  const confirmClear = async (): Promise<void> => {
+    setClearOpen(false)
+    const next = await window.oneasr.clearTasks()
+    setTasks(next)
+    if (next.some((task) => task.status === 'running')) notify('info', s.clearedKeptRunning)
+  }
+
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <TitleBar lang={lang} />
       <div className="toolbar">
         <button className="btn btn-primary" disabled={picking} onClick={() => void addFiles()}>
@@ -306,28 +525,45 @@ export default function App() {
         </button>
         <button
           className="btn btn-ghost"
-          disabled={!tasks.length || tasks.every((x) => x.status === 'running')}
+          disabled={!canStartAll}
           onClick={() => void window.oneasr.startAll().then(reportStart)}
         >
           <span className="btn-glyph i-play" aria-hidden />
           {s.startAll}
         </button>
-        <button
-          className="btn btn-ghost btn-danger-ghost"
-          disabled={!tasks.length}
-          onClick={() =>
-            void window.oneasr.clearTasks().then((next) => {
-              setTasks(next)
-              // 正在跑的那条不再被一起清掉；说一声，免得以为没生效
-              if (next.some((t) => t.status === 'running')) notify('info', s.clearedKeptRunning)
-            })
-          }
-        >
-          <span className="btn-glyph i-trash" aria-hidden />
-          {s.clear}
-        </button>
+        <div className="clear-anchor" ref={clearRef}>
+          <button
+            type="button"
+            className={`btn btn-ghost btn-danger-ghost ${clearOpen ? 'open' : ''}`}
+            disabled={!tasks.length}
+            aria-expanded={clearOpen}
+            onClick={() => setClearOpen((open) => !open)}
+          >
+            <span className="btn-glyph i-trash" aria-hidden />
+            {s.clear}
+          </button>
+          <AnimatePresence>
+            {clearOpen && (
+              <motion.div className="clear-pop" role="group" aria-label={s.clear} {...clearPopMotion}>
+                <p>{confirmClearTasks(lang, tasks.length)}</p>
+                <div className="clear-pop-actions">
+                  <button type="button" className="btn btn-ghost" onClick={() => setClearOpen(false)}>
+                    {s.cancel}
+                  </button>
+                  <button type="button" className="btn btn-danger" onClick={() => void confirmClear()}>
+                    {s.clear}
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
         <div className="grow" />
-        <button className="btn btn-ghost" data-shot="guide" onClick={() => setGuideOpen(true)}>
+        <button
+          className="btn btn-ghost"
+          data-shot="guide"
+          onClick={() => setOverlay((cur) => openOverlay(cur, 'guide'))}
+        >
           <span className="btn-glyph i-help" aria-hidden />
           {s.guide}
         </button>
@@ -336,7 +572,7 @@ export default function App() {
           data-shot="stats"
           onClick={() => {
             void refreshStats()
-            setStatsOpen(true)
+            setOverlay((cur) => openOverlay(cur, 'stats'))
           }}
         >
           <span className="btn-glyph i-chart" aria-hidden />
@@ -352,20 +588,11 @@ export default function App() {
         </button>
       </div>
 
-      <div
-        className={`main ${dragging ? 'dragging' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
+      <div className={`main ${dragging ? 'dragging' : ''}`}>
         {tasks.length === 0 ? (
           <motion.div
             className={`dropzone ${dragging ? 'active' : ''}`}
-            initial={{ opacity: 0.6 }}
-            animate={{ opacity: 1 }}
+            {...dropzoneMotion}
           >
             <div className="icon">
               <span className="audio-glyph" />
@@ -387,6 +614,8 @@ export default function App() {
             tasks={tasks}
             hotwordGroups={hotwords?.groups ?? []}
             defaultLanguage={settings?.language ?? 'zh'}
+            transcriptExts={status?.transcript_exts ?? []}
+            timedOutputEnabled={!!settings && (settings.output_srt || settings.output_ass)}
             onStart={(id) => void window.oneasr.startTask(id).then(reportStart)}
             onCancel={(id) => void window.oneasr.cancelTask(id)}
             onRemove={(id) => void window.oneasr.removeTask(id).then(setTasks)}
@@ -401,6 +630,9 @@ export default function App() {
             onSetHotwordGroup={(id, groupId) =>
               void window.oneasr.setTaskHotwordGroup(id, groupId).then(setTasks)
             }
+            onPickTranscript={(id) => void pickTranscriptFor(id)}
+            onOpenTranscript={(id) => void openTranscript(id)}
+            onAttachTranscript={(id, path) => void attachTranscript(id, path)}
             onCopyError={(text) =>
               void window.oneasr.copyText(text).then(() => notify('success', s.copied))
             }
@@ -418,16 +650,6 @@ export default function App() {
       />
 
       <AnimatePresence>
-        {welcomeOpen && (
-          <WelcomeModal
-            lang={lang}
-            onGotIt={() => void dismissWelcome(false)}
-            onOpenSettings={() => void dismissWelcome(true)}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
         {settingsOpen && draft && hotwordDraft && (
           <SettingsDrawer
             lang={lang}
@@ -441,6 +663,7 @@ export default function App() {
             initialTab={settingsTab}
             onChange={setDraft}
             onHotwordsChange={setHotwordDraft}
+            savedAck={settingsAck}
             onSave={() => void saveAllSettings()}
             onReset={() => {
               if (settingsBaseline) setDraft(structuredClone(settingsBaseline))
@@ -460,7 +683,7 @@ export default function App() {
             onClose={() => {
               if (settings) setDraft(structuredClone(settings))
               if (hotwords) setHotwordDraft(structuredClone(hotwords))
-              setSettingsOpen(false)
+              setOverlay((cur) => closeOverlay(cur, 'settings'))
               setSettingsTab('general')
             }}
             onPickDir={() =>
@@ -489,12 +712,42 @@ export default function App() {
 
       <AnimatePresence>
         {statsOpen && (
-          <StatsPanel lang={lang} stats={stats || emptyStats} onClose={() => setStatsOpen(false)} />
+          <StatsPanel
+            lang={lang}
+            stats={stats || emptyStats}
+            onClose={() => setOverlay((cur) => closeOverlay(cur, 'stats'))}
+          />
         )}
       </AnimatePresence>
 
       <AnimatePresence>
-        {guideOpen && <GuidePanel lang={lang} onClose={() => setGuideOpen(false)} />}
+        {guideOpen && (
+          <GuidePanel lang={lang} onClose={() => setOverlay((cur) => closeOverlay(cur, 'guide'))} />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {activeTranscriptTask && transcriptInfo && (
+          <TranscriptPanel
+            key={activeTranscriptTask.id}
+            lang={lang}
+            info={activeTranscriptTask.transcript ?? transcriptInfo}
+            text={transcriptText}
+            locked={
+              activeTranscriptTask.status === 'running' ||
+              (activeTranscriptTask.status === 'queued' &&
+                activeTranscriptTask.queueRank != null)
+            }
+            onClose={() => {
+              setTranscriptId(null)
+              setTranscriptInfo(null)
+            }}
+            onSave={saveTranscript}
+            onSplit={splitTranscript}
+            onReread={rereadTranscript}
+            onRemove={removeTranscript}
+          />
+        )}
       </AnimatePresence>
 
     </div>

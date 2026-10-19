@@ -1,65 +1,26 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { LANG_OPTIONS, formatDuration, queueRank, stageLabel, t, UiLang } from '../i18n'
-import { useEscClose } from '../esc'
-import { rowMotion } from '../motion'
+import {
+  LANG_OPTIONS,
+  formatDuration,
+  queueRank,
+  realtimeFactorLabel,
+  stageLabel,
+  stageWithChunk,
+  t,
+  UiLang
+} from '../i18n'
+import { useRowMotion } from '../motion'
+import { SelectMenu } from './Popover'
 import { formatSize } from '../lib/format'
+import { isTranscriptPath } from '../lib/pairing'
+import { rowChipState, rowStartIcon, rowStartKind, type RowStartKind } from '../../../shared/task-row'
 import type { HotwordGroup, TaskSnapshot } from '../../../shared/types'
 
 /**
- * 行内 chip 的下拉菜单：**渲染到 body**（portal），不用行内绝对定位。
- * 理由：`.task-list` 是滚动容器，行内菜单会被它裁掉——列表最后几行点开就只剩半截。
- * 固定在触发按钮下方；下面放不下就翻到上方；滚动/缩放/点外部/Esc 都关掉。
- */
-function ChipMenu({
-  anchor,
-  onClose,
-  children
-}: {
-  anchor: DOMRect
-  onClose: () => void
-  children: React.ReactNode
-}) {
-  useEscClose(onClose)
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent): void => {
-      if ((e.target as HTMLElement).closest('.chip-menu')) return
-      onClose()
-    }
-    // 菜单自己滚动（词组多时 max-height 260 + overflow:auto）不该把自己关掉：
-    // 捕获阶段的 scroll 事件 target 就是那个可滚动的菜单本体，排除它
-    const onMove = (e: Event): void => {
-      if ((e.target as HTMLElement | null)?.closest?.('.chip-menu')) return
-      onClose()
-    }
-    window.addEventListener('mousedown', onDown, true)
-    window.addEventListener('scroll', onMove, true)
-    window.addEventListener('resize', onMove)
-    return () => {
-      window.removeEventListener('mousedown', onDown, true)
-      window.removeEventListener('scroll', onMove, true)
-      window.removeEventListener('resize', onMove)
-    }
-  }, [onClose])
-
-  const flipUp = anchor.bottom + 264 > window.innerHeight
-  const style: React.CSSProperties = flipUp
-    ? { position: 'fixed', left: anchor.left, bottom: window.innerHeight - anchor.top + 6 }
-    : { position: 'fixed', left: anchor.left, top: anchor.bottom + 6 }
-
-  return createPortal(
-    <div className="chip-menu" style={style} onClick={(e) => e.stopPropagation()}>
-      {children}
-    </div>,
-    document.body
-  )
-}
-
-/**
  * 行内图标按钮：32×32 等宽，所以「开始 / 打开输出 / 重新转录」怎么变，右侧都是齐的。
- * 图标来自仓库 assets/icons（与 GPUI 版同一份资产），用 CSS mask 上色 → 跟随主题。
+ * 图标来自仓库 assets/icons（与旧版同一份资产），用 CSS mask 上色 → 跟随主题。
  * 纯图标必须配 title + aria-label，否则就成了猜谜。
  */
 function IconButton({
@@ -123,11 +84,32 @@ function HoverCard({ trigger, children }: { trigger: React.ReactNode; children: 
   )
 }
 
+function startKindLabel(s: ReturnType<typeof t>, kind: RowStartKind): string {
+  switch (kind) {
+    case 'blocked':
+      return s.transcriptRequiresTimedOutput
+    case 'align':
+      return s.transcriptStart
+    case 'realign':
+      return s.transcriptRealign
+    case 'retry-align':
+      return s.transcriptRetryAlign
+    case 'retry':
+      return s.retry
+    case 'retranscribe':
+      return s.retranscribe
+    case 'start':
+      return s.start
+  }
+}
+
 export function TaskList({
   lang,
   tasks,
   hotwordGroups,
   defaultLanguage,
+  transcriptExts,
+  timedOutputEnabled,
   onStart,
   onCancel,
   onRemove,
@@ -136,6 +118,9 @@ export function TaskList({
   onSetVocalSeparation,
   onApplyToAll,
   onSetHotwordGroup,
+  onPickTranscript,
+  onOpenTranscript,
+  onAttachTranscript,
   onCopyError
 }: {
   lang: UiLang
@@ -143,6 +128,10 @@ export function TaskList({
   hotwordGroups: HotwordGroup[]
   /** 设置里的识别语言：行内没单独选过时用它 */
   defaultLanguage: string
+  /** CLI 的文稿扩展名表；行内拖放只在命中它时才接管 */
+  transcriptExts: string[]
+  /** 文稿匹配需要 SRT 或 ASS；没有时禁用开始并说明原因 */
+  timedOutputEnabled: boolean
   onStart: (id: string) => void
   onCancel: (id: string) => void
   onRemove: (id: string) => void
@@ -152,16 +141,22 @@ export function TaskList({
   /** 把这一行的语言/词库/人声分离推给其它行 */
   onApplyToAll: (id: string) => void
   onSetHotwordGroup: (id: string, groupId: string | null) => void
+  onPickTranscript: (id: string) => void
+  onOpenTranscript: (id: string) => void
+  onAttachTranscript: (id: string, path: string) => void
   onCopyError: (text: string) => void
 }) {
   const s = t(lang)
-  /** 同时只开一个菜单：记 key 与触发按钮的位置（菜单用 fixed 定位） */
-  const [menu, setMenu] = useState<{ key: string; rect: DOMRect } | null>(null)
-
-  const toggleMenu = (key: string, el: HTMLElement): void => {
-    setMenu((cur) => (cur?.key === key ? null : { key, rect: el.getBoundingClientRect() }))
-  }
-  const closeMenu = (): void => setMenu(null)
+  const rowMotion = useRowMotion()
+  /**
+   * 正被拖拽经过的任务行。
+   *
+   * dragover 阶段拿不到文件名（Chromium 里 `getAsFile()` 返回 null），
+   * 所以这一行**不知道**拖的是文稿还是媒体 —— 高亮只说「这一行是落点」，
+   * 到底挂文稿还是加媒体，松手时按扩展名定。文稿那一条写在文稿 chip 的
+   * 提示里（`transcriptDropHint`），不靠这个高亮说。
+   */
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
 
   const label = (st: string): string =>
     st === 'running'
@@ -178,30 +173,82 @@ export function TaskList({
     <div className="task-list">
       <AnimatePresence initial={false}>
         {tasks.map((task) => {
-          // 运行中锁定行内操作（与 GPUI 的 locks_row_actions 一致）
+          // 运行中锁定行内操作（与旧版一致）
           const locked = task.status === 'running'
           const doneWithOutput = task.status === 'done' && !!task.outputPath
           const language = task.language || defaultLanguage
-          const langLabel = LANG_OPTIONS.find((o) => o.id === language)?.label ?? language
           const boundGroup = hotwordGroups.find((g) => g.id === task.hotwordGroupId)
           const size = formatSize(task.sizeBytes)
           const duration = task.durationSec != null ? formatDuration(task.durationSec) : undefined
           const meta = [size, duration].filter(Boolean).join('  ·  ')
           const timingMs =
             task.totalMs ?? (task.stageTimings?.reduce((a, b) => a + b.ms, 0) || undefined)
-          // 阶段文案按 CLI 的稳定 key 出（label 只是兜底），药丸与耗时明细共用
-          const stageText = stageLabel(lang, task.stageKey, task.stage)
+          // 实时倍速：音视频时长 ÷ 本次处理耗时。算不出来就不显示（绝不显示 ∞ / NaN）。
+          const rtfx = realtimeFactorLabel(lang, task.durationSec, timingMs)
+          // 阶段文案按 CLI 的稳定 key 出（label 只是兜底）。分段计数接在后面（转写 2/5）。
+          const stageText = stageWithChunk(
+            stageLabel(lang, task.stageKey, task.stage),
+            task.stageChunk,
+            task.stageChunkTotal
+          )
           const duplicateName = tasks.some((x) => x.id !== task.id && x.name === task.name)
-          const langKey = `${task.id}:lang`
-          const hwKey = `${task.id}:hw`
-
+          const hasTranscript = !!task.transcript
+          const needsRealign = !!task.transcript?.needsRealign
+          // 只有**真的进了队列**（有排队位次）或正在跑才锁；刚添加的待处理行还允许改稿
+          const transcriptLocked =
+            task.status === 'running' || (task.status === 'queued' && task.queueRank != null)
+          const chips = rowChipState(hasTranscript)
+          const startKind = rowStartKind({
+            hasTranscript,
+            status: task.status,
+            hasOutput: !!task.outputPath,
+            needsRealign,
+            timedOutputEnabled
+          })
+          const startLabel = startKindLabel(s, startKind)
+          // 文案固定，宽度才不会跟着行数变。有没有文稿、要不要重打，靠颜色区分。
+          const transcriptChipText = hasTranscript ? s.transcript : s.transcriptAdd
+          // 还没挂文稿时，把「可以拖文稿到这一行」说清楚 —— 这个功能靠拖，
+          // 不说出来没人知道。挂上之后提示改成状态（打开 / 要重打 / 锁定）。
+          const transcriptChipTitle = transcriptLocked
+            ? s.transcriptLocked
+            : task.transcript?.error
+              ? s.transcriptReadFailed
+              : needsRealign
+                ? s.transcriptNeedsRealign
+                : hasTranscript
+                  ? s.transcriptOpen
+                  : `${s.transcriptAdd} — ${s.transcriptDropHint}`
           return (
             <motion.div
-              className={`task-card status-${task.status}`}
+              className={`task-card status-${task.status} ${
+                dropTargetId === task.id ? 'row-drop' : ''
+              }`}
               key={task.id}
+              onDragOver={(e) => {
+                if (!transcriptExts.length) return
+                e.preventDefault()
+                setDropTargetId(task.id)
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setDropTargetId((cur) => (cur === task.id ? null : cur))
+                }
+              }}
+              onDrop={(e) => {
+                const paths = Array.from(e.dataTransfer.files || [])
+                  .map((f) => window.oneasr.getPathForFile?.(f) || '')
+                  .filter((p): p is string => !!p)
+                const transcript = paths.find((p) => isTranscriptPath(p, transcriptExts))
+                if (!transcript) return // 媒体：让窗口级 drop 走正常添加
+                e.preventDefault()
+                e.stopPropagation()
+                setDropTargetId(null)
+                onAttachTranscript(task.id, transcript)
+              }}
               {...rowMotion}
             >
-              {/* 左：文件名一行，下面是 大小 · 时长 · 耗时（GPUI 版就是这个形状） */}
+              {/* 左：文件名一行，下面是 大小 · 时长 · 耗时（旧版就是这个形状） */}
               <div className="card-info">
                 <div className="name">
                   {/* 媒体类型由 CLI 的 probe 判定（壳不按扩展名猜）；还没探到就先留空位 */}
@@ -228,6 +275,17 @@ export function TaskList({
                         </>
                       }
                     >
+                      {/* 头部：处理耗时 + 倍速读数 + 总耗时。
+                          倍速 = 音视频时长 ÷ 本次处理耗时，跟右边的总耗时互为倒数
+                          （master 的耗时弹卡就是这么写的，见 e56299b）。 */}
+                      <span className="timing-head">
+                        <i>{s.timingTitle}</i>
+                        <span className="timing-head-right">
+                          {rtfx && <span className="timing-rtfx">{rtfx}</span>}
+                          {timingMs != null && <b>{formatDuration(timingMs / 1000)}</b>}
+                        </span>
+                      </span>
+                      <span className="timing-sep" />
                       {task.stageTimings.map((t2, i) => (
                         <span className="timing-line" key={`${t2.key ?? t2.stage}-${i}`}>
                           <i>{stageLabel(lang, t2.key, t2.stage)}</i>
@@ -236,59 +294,13 @@ export function TaskList({
                       ))}
                     </HoverCard>
                   )}
-                </div>
-                {/* 路径默认不占行（文件名已经在上面）；同名不同目录时才显示 */}
-                {duplicateName && <div className="meta">{task.input}</div>}
-              </div>
-              {/* 右：术语 chips + 状态 + 动作（与 GPUI 一致：术语贴着右侧，动作在最右） */}
-              <div className="controls">
-                <div className="row-chips">
-                  <button
-                    type="button"
-                    className={`row-chip lang-chip ${menu?.key === langKey ? 'open' : ''}`}
-                    disabled={locked}
-                    title={s.recognitionLanguage}
-                    onClick={(e) => toggleMenu(langKey, e.currentTarget)}
-                  >
-                    {langLabel}
-                    <span className="caret">▾</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className={`row-chip hw-chip ${menu?.key === hwKey ? 'open' : ''} ${
-                      boundGroup ? '' : 'muted'
-                    }`}
-                    disabled={locked}
-                    // 定宽会把长词库名截断，所以 title 给完整名字
-                    title={boundGroup ? boundGroup.name : s.hotwordNone}
-                    onClick={(e) => toggleMenu(hwKey, e.currentTarget)}
-                  >
-                    <span className="ellipsis">{boundGroup ? boundGroup.name : s.hotwordNone}</span>
-                    <span className="caret">▾</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    // 类名别叫 toggle：全局 .toggle 是开关组件的样式（带 ::after 旋钮），会撞车
-                    className={`row-chip sep-chip ${task.vocalSeparation ? 'is-on' : ''}`}
-                    disabled={locked}
-                    title={s.vocalSep}
-                    // 开关状态**只靠颜色**表达（开=主题色底+粗体）：加个 ✓ 的话，
-                    // 关的时候那块位置空着更难看；而且文案不变成等宽本来就不需要占位。
-                    // 无障碍层面用 aria-pressed 说清楚，不依赖视觉。
-                    aria-pressed={!!task.vocalSeparation}
-                    onClick={() => onSetVocalSeparation(task.id, !task.vocalSeparation)}
-                  >
-                    {s.vocalSep}
-                  </button>
-                </div>
-
-                {/* 状态就一个药丸：排队位次并进它（原来是「排队第 1 位」+「排队」两个胶囊）。
-                    外面套一个定宽槽 —— 列不动（列表对齐），药丸自己按内容收紧、在槽里居中 */}
-                <span className="badge-slot">
+                  {/* 状态就在文件名下面这一行（跟「大小·时长」「耗时」排在一起）：
+                      跑着的时候显示阶段名，跑完/失败/取消显示对应状态。
+                      之前它占着右列一个 88px 的定宽槽，右边空一大块；
+                      挪到左列之后右列只剩参数 chip 和动作按钮，四个 chip 整体右移
+                      （用户 2026-10-19 指出：状态该在文件名下面，右边别再空一块）。 */}
                   {task.status === 'running' ? (
-                    <span className="badge running" title={stageText}>
+                    <span className="badge running" title={stageText || undefined}>
                       <span>{stageText || s.running}</span>
                     </span>
                   ) : task.status === 'queued' && task.queueRank != null ? (
@@ -300,14 +312,111 @@ export function TaskList({
                       <span>{task.status === 'queued' ? s.pending : label(task.status)}</span>
                     </span>
                   )}
-                </span>
+                </div>
+                {/* 路径默认不占行（文件名已经在上面）；同名不同目录时才显示 */}
+                {duplicateName && <div className="meta">{task.input}</div>}
+              </div>
+              {/* 右：术语 chips + 状态 + 动作（与旧版一致：术语贴着右侧，动作在最右） */}
+              <div className="controls">
+                <div className="row-chips">
+                  {chips.showLanguage && (
+                    <SelectMenu
+                      className="row-chip lang-chip"
+                      value={language}
+                      options={LANG_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+                      ariaLabel={s.recognitionLanguage}
+                      disabled={locked || !chips.languageEnabled}
+                      onChange={(id) => onSetLanguage(task.id, id)}
+                      footer={(close) => (
+                        <>
+                          <div className="chip-menu-sep" />
+                          <button
+                            type="button"
+                            className="chip-menu-item"
+                            onClick={() => {
+                              onApplyToAll(task.id)
+                              close()
+                            }}
+                          >
+                            {s.applyToAll}
+                          </button>
+                        </>
+                      )}
+                    />
+                  )}
+
+                  {chips.showHotwords && (
+                    <SelectMenu
+                      className={`row-chip group-chip ${chips.hotwordsEnabled && !boundGroup ? 'muted' : ''}`}
+                      value={task.hotwordGroupId ?? ''}
+                      options={[
+                        { id: '', label: s.hotwordNone },
+                        ...hotwordGroups.map((g) => ({ id: g.id, label: g.name }))
+                      ]}
+                      ariaLabel={boundGroup ? boundGroup.name : s.hotwordNone}
+                      title={chips.hotwordsEnabled ? undefined : s.hotwordIgnoredOnAlign}
+                      disabled={locked || !chips.hotwordsEnabled}
+                      onChange={(id) => onSetHotwordGroup(task.id, id || null)}
+                      footer={(close) => (
+                        <>
+                          <div className="chip-menu-sep" />
+                          <button
+                            type="button"
+                            className="chip-menu-item"
+                            onClick={() => {
+                              onApplyToAll(task.id)
+                              close()
+                            }}
+                          >
+                            {s.applyToAll}
+                          </button>
+                        </>
+                      )}
+                    />
+                  )}
+
+                  <button
+                    type="button"
+                    // 类名别叫 toggle：全局 .toggle 是开关组件的样式（带 ::after 旋钮），会撞车
+                    className={`row-chip sep-chip ${task.vocalSeparation ? 'is-on' : ''}`}
+                    disabled={locked}
+                    title={s.vocalSep}
+                    // 开/关同时靠颜色和圆点形状：空心是关，实心是开。aria-pressed 再给读屏。
+                    aria-pressed={!!task.vocalSeparation}
+                    onClick={() => onSetVocalSeparation(task.id, !task.vocalSeparation)}
+                  >
+                    <span className="sep-mark" aria-hidden />
+                    <span className="ellipsis">{s.vocalSep}</span>
+                  </button>
+
+                  {/* 文稿：一个入口两种状态。没挂时点它选文件；挂了点它开面板。
+                      拖一份文稿到这一行也会走同一条 setTranscript 路径。 */}
+                  <button
+                    type="button"
+                    className={`row-chip transcript-chip ${hasTranscript ? 'has' : ''} ${
+                      task.transcript?.needsRealign ? 'needs-realign' : ''
+                    } ${task.transcript?.error ? 'has-error' : ''}`}
+                    disabled={transcriptLocked}
+                    title={transcriptChipTitle}
+                    onClick={() => {
+                      if (task.transcript?.error) {
+                        onPickTranscript(task.id)
+                      } else if (hasTranscript) {
+                        onOpenTranscript(task.id)
+                      } else {
+                        onPickTranscript(task.id)
+                      }
+                    }}
+                  >
+                    <span className="transcript-glyph" aria-hidden />
+                    <span className="ellipsis">{transcriptChipText}</span>
+                  </button>
+                </div>
 
               {/* 动作区用图标按钮：等宽 → 各行控件严格对齐；文字说明交给 title / aria-label
-                  （图标是仓库里那 5 个 SVG，GPUI 版同一份资产，mask 上色跟着主题走） */}
-              {/* 固定三槽位，**永远都是满的**（没有"为了对齐留空位"那种掉牙感）：
-                    槽位1 生命周期控制（开始/取消/重试/重新转录）、槽位2 查看结果、
-                    槽位3 移除。完成后高光从槽位1 转到槽位2（打开输出点亮、重跑退成灰），
-                    所以"下一步该点哪个"一眼可见，而不是靠多出一个按钮来暗示。 */}
+                  （图标是仓库里那 5 个 SVG，与旧版共享，mask 上色跟着主题走） */}
+              {/* 三槽位始终都在：开始（按这一行自己的流程跑）、打开输出、移除。
+                  用不上就禁用，不把按钮拿掉。 */}
               <div className="actions">
                 {task.status === 'running' || (task.status === 'queued' && task.queueRank != null) ? (
                   <IconButton
@@ -316,21 +425,21 @@ export function TaskList({
                     tone="danger"
                     onClick={() => onCancel(task.id)}
                   />
-                ) : doneWithOutput ? (
-                  <IconButton icon="retry" label={s.retranscribe} onClick={() => onStart(task.id)} />
                 ) : (
                   <IconButton
-                    icon={task.status === 'error' ? 'retry' : 'play'}
-                    label={task.status === 'error' ? s.retry : s.start}
+                    // 「再来一次」这一族用圆圈箭头（重新转录/重试/重新打轴），
+                    // 「从零开始」才用播放三角——图形自己把区别说清楚
+                    icon={rowStartIcon(startKind)}
+                    label={startLabel}
                     tone="primary"
+                    disabled={startKind === 'blocked'}
                     onClick={() => onStart(task.id)}
                   />
                 )}
                 <IconButton
                   icon="folder"
-                  // 禁用时别还写着"打开输出"：如实说"尚未生成输出"
+                  // 没有输出就禁用，按钮还在。禁用时别写「打开输出」。
                   label={doneWithOutput ? s.openOutput : s.noOutputYet}
-                  tone="primary"
                   disabled={!doneWithOutput}
                   onClick={() => onOpen(task.outputPath!)}
                 />
@@ -372,73 +481,6 @@ export function TaskList({
                 </div>
               )}
 
-              {menu?.key === langKey && (
-                <ChipMenu anchor={menu.rect} onClose={closeMenu}>
-                  {LANG_OPTIONS.map((o) => (
-                    <button
-                      type="button"
-                      key={o.id}
-                      className={`chip-menu-item ${o.id === language ? 'active' : ''}`}
-                      onClick={() => {
-                        onSetLanguage(task.id, o.id)
-                        closeMenu()
-                      }}
-                    >
-                      {o.label}
-                    </button>
-                  ))}
-                  <div className="chip-menu-sep" />
-                  <button
-                    type="button"
-                    className="chip-menu-item"
-                    onClick={() => {
-                      onApplyToAll(task.id)
-                      closeMenu()
-                    }}
-                  >
-                    {s.applyToAll}
-                  </button>
-                </ChipMenu>
-              )}
-
-              {menu?.key === hwKey && (
-                <ChipMenu anchor={menu.rect} onClose={closeMenu}>
-                  <button
-                    type="button"
-                    className={`chip-menu-item ${task.hotwordGroupId ? '' : 'active'}`}
-                    onClick={() => {
-                      onSetHotwordGroup(task.id, null)
-                      closeMenu()
-                    }}
-                  >
-                    {s.hotwordNone}
-                  </button>
-                  {hotwordGroups.map((g) => (
-                    <button
-                      type="button"
-                      key={g.id}
-                      className={`chip-menu-item ${g.id === task.hotwordGroupId ? 'active' : ''}`}
-                      onClick={() => {
-                        onSetHotwordGroup(task.id, g.id)
-                        closeMenu()
-                      }}
-                    >
-                      {g.name}
-                    </button>
-                  ))}
-                  <div className="chip-menu-sep" />
-                  <button
-                    type="button"
-                    className="chip-menu-item"
-                    onClick={() => {
-                      onApplyToAll(task.id)
-                      closeMenu()
-                    }}
-                  >
-                    {s.applyToAll}
-                  </button>
-                </ChipMenu>
-              )}
             </motion.div>
           )
         })}

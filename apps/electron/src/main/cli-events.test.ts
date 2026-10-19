@@ -13,6 +13,8 @@ describe('parseCliEvent', () => {
       index: 6,
       total: 9,
       pct: 56,
+      chunk: undefined,
+      chunkTotal: undefined,
       ms: undefined,
       output: undefined,
       message: undefined
@@ -43,5 +45,21 @@ describe('parseCliEvent', () => {
     expect(ev?.pct).toBeUndefined()
     expect(ev?.label).toBeUndefined()
     expect(ev?.index).toBeUndefined()
+  })
+
+  it('分段进度是 chunk / chunkTotal，不占用阶段计划的 index / total', () => {
+    const ev = parseCliEvent(
+      '{"event":"stage","key":"aligning","label":"打轴","index":4,"total":7,"pct":57,"chunk":2,"chunkTotal":5}'
+    )
+    expect(ev?.index).toBe(4)
+    expect(ev?.total).toBe(7)
+    expect(ev?.chunk).toBe(2)
+    expect(ev?.chunkTotal).toBe(5)
+    // 断骨锚点：parseCliEvent 不读 chunk 时，上面两条是 undefined。
+    const bad = parseCliEvent(
+      '{"event":"stage","key":"transcribing","chunk":"2","chunkTotal":null}'
+    )
+    expect(bad?.chunk).toBeUndefined()
+    expect(bad?.chunkTotal).toBeUndefined()
   })
 })

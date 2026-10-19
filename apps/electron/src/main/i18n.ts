@@ -11,13 +11,22 @@ export type MainLang = 'zh' | 'en'
 const zh = {
   trayTooltip: 'OneAsr — 本地离线转字幕',
   trayOpen: '打开 OneAsr',
-  trayQuit: '退出 OneAsr'
+  trayQuit: '退出 OneAsr',
+  /**
+   * CLI 说跑成了（退出码 0），却没报产物路径。
+   *
+   * 这时壳**不去猜**文件名（core 的命名规则会变，猜了就可能把上一轮遗留的
+   * 同名文件当成本次的产物），于是这一次没有可说清的产物 —— 报失败，
+   * 不报假绿。
+   */
+  taskNoOutput: 'CLI 报告成功但没有给出产物路径，无法确认这次的结果'
 }
 
 const en: typeof zh = {
   trayTooltip: 'OneAsr — offline subtitles',
   trayOpen: 'Open OneAsr',
-  trayQuit: 'Quit OneAsr'
+  trayQuit: 'Quit OneAsr',
+  taskNoOutput: 'The CLI reported success but gave no output path, so this run cannot be confirmed'
 }
 
 function systemLooksChinese(): boolean {

@@ -75,8 +75,7 @@ export function defaultSettings(appRoot = DEFAULT_APP_ROOT): Settings {
     demucs_model_dir: path.join(models, 'htdemucs_ft'),
     sensevoice_model_dir: path.join(models, 'SenseVoiceSmall'),
     sound: true,
-    close_to_tray: false,
-    welcome_done: false
+    close_to_tray: false
   }
 }
 
@@ -125,4 +124,16 @@ export function resolveCli(appRoot = DEFAULT_APP_ROOT): string {
     ...names.map((n) => path.join(appRoot, 'target', 'debug', n))
   ]
   return candidates.find((p) => fs.existsSync(p)) ?? path.join(appRoot, 'oneasr-cli')
+}
+
+/**
+ * 把 GUI 的输出设置交给 CLI：最终目录由 Rust 的 `srt_target_dir` 决定
+ * （源文件旁优先，源目录不可写时回退到 `--output-dir`）。壳不自己拼路径，
+ * 否则 SRT 与 TXT/ASS 会落到两个地方。
+ */
+export function outputFlags(settings: Settings): string[] {
+  const flags: string[] = []
+  if (settings.save_next_to_source) flags.push('--save-next-to-source')
+  if (settings.output_dir) flags.push('--output-dir', settings.output_dir)
+  return flags
 }

@@ -1,6 +1,8 @@
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { t, UiLang } from '../i18n'
+import { useLayerMotion } from '../motion'
+import { Popover } from './Popover'
 import type { HotwordGroup, HotwordStore } from '../../../shared/types'
 
 function parseWords(raw: string): string[] {
@@ -26,30 +28,29 @@ export function HotwordEditor({
   lang,
   value,
   onChange,
+  onAskDeleteGroup,
   compact = false
 }: {
   lang: UiLang
   value: HotwordStore
   onChange: (next: HotwordStore) => void
+  /** 删组前先走统一的确认条，确认后才调用这里传出去的动作 */
+  onAskDeleteGroup: (apply: () => void) => void
   compact?: boolean
 }) {
   const s = t(lang)
+  const chipMotion = useLayerMotion()
+  const reduceMotion = useReducedMotion() === true
+  const valueRef = useRef(value)
+  const onChangeRef = useRef(onChange)
+  valueRef.current = value
+  onChangeRef.current = onChange
   const [sel, setSel] = useState(
     () => value.default_group || value.groups[0]?.id || 'default'
   )
   const [addRaw, setAddRaw] = useState('')
   const [lastAdded, setLastAdded] = useState<number | null>(null)
-  const [groupMenuOpen, setGroupMenuOpen] = useState(false)
-  const groupMenuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!groupMenuOpen) return
-    const onDoc = (e: MouseEvent) => {
-      if (!groupMenuRef.current?.contains(e.target as Node)) setGroupMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [groupMenuOpen])
+  const [groupAnchor, setGroupAnchor] = useState<DOMRect | null>(null)
 
   useEffect(() => {
     if (!value.groups.some((g) => g.id === sel)) {
@@ -103,14 +104,16 @@ export function HotwordEditor({
   return (
     <div className={`hw-embed vertical ${compact ? 'compact' : ''}`}>
       <div className="hw-group-bar">
-        <div className={`hw-group-menu${groupMenuOpen ? ' open' : ''}`} ref={groupMenuRef}>
+        <div className={`hw-group-menu${groupAnchor ? ' open' : ''}`}>
           <button
             type="button"
             className="hw-group-trigger"
             aria-haspopup="listbox"
-            aria-expanded={groupMenuOpen}
+            aria-expanded={groupAnchor != null}
             aria-label={s.groups}
-            onClick={() => setGroupMenuOpen((o) => !o)}
+            onClick={(e) =>
+              setGroupAnchor((cur) => (cur ? null : e.currentTarget.getBoundingClientRect()))
+            }
           >
             <span className="hw-group-trigger-label">
               {group?.name.trim() || s.emptyGroup}
@@ -120,7 +123,13 @@ export function HotwordEditor({
               ▾
             </span>
           </button>
-          {groupMenuOpen && (
+          <Popover
+            open={groupAnchor != null}
+            anchor={groupAnchor}
+            onClose={() => setGroupAnchor(null)}
+            className="chip-menu hw-group-popover"
+            label={s.groups}
+          >
             <ul className="hw-group-listbox" role="listbox">
               {value.groups.map((g) => {
                 const isDef = value.default_group === g.id
@@ -138,7 +147,7 @@ export function HotwordEditor({
                       className="hw-group-option-main"
                       onClick={() => {
                         setSel(g.id)
-                        setGroupMenuOpen(false)
+                        setGroupAnchor(null)
                       }}
                     >
                       <span className="hw-group-option-name">{label}</span>
@@ -165,7 +174,7 @@ export function HotwordEditor({
                 )
               })}
             </ul>
-          )}
+          </Popover>
         </div>
         <input
           className="text-input hw-name"
@@ -198,12 +207,14 @@ export function HotwordEditor({
           disabled={!group || value.groups.length <= 1}
           onClick={() => {
             if (!group) return
-            if (!confirm(s.confirmDeleteGroup)) return
-            const next = value.groups.filter((g) => g.id !== group.id)
-            const nextDef =
-              value.default_group === group.id ? next[0]?.id || null : value.default_group
-            touch({ ...value, groups: next, default_group: nextDef })
-            setSel(next[0]?.id || 'default')
+            const id = group.id
+            onAskDeleteGroup(() => {
+              const latest = valueRef.current
+              const next = latest.groups.filter((g) => g.id !== id)
+              const nextDef = latest.default_group === id ? next[0]?.id || null : latest.default_group
+              onChangeRef.current({ ...latest, groups: next, default_group: nextDef })
+              setSel(next[0]?.id || 'default')
+            })
           }}
         >
           {s.deleteGroup}
@@ -221,11 +232,8 @@ export function HotwordEditor({
               <motion.span
                 key={w}
                 className="hw-chip"
-                layout
-                initial={{ opacity: 0, scale: 0.88 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.88 }}
-                transition={{ duration: 0.15 }}
+                layout={!reduceMotion}
+                {...chipMotion}
               >
                 {w}
                 <button type="button" aria-label={s.removeWord} onClick={() => removeWord(w)}>

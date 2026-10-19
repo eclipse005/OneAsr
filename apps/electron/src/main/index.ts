@@ -15,17 +15,24 @@ import { DEFAULT_APP_ROOT, defaultSettings, loadSettings, resolveCli, saveSettin
 import { runCliJson } from './cli'
 import { JobManager } from './jobs'
 import { DownloadManager } from './downloads'
-import { addSessionContext, initLog, installProcessHandlers, logPathname } from './log'
+import {
+  addSessionContext,
+  clearDiagnosticLog,
+  initLog,
+  installProcessHandlers,
+  logFileToOpen,
+  logInfo
+} from './log'
 import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
-import type { HotwordStore, Settings, StatusSnapshot } from '../shared/types'
+import type { AddTaskInput, HotwordStore, Settings, StatusSnapshot } from '../shared/types'
 
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
 app.commandLine.appendSwitch('no-sandbox')
 
-// 任务栏 / 窗口图标：与 GPUI 版同一份 assets/icons/app-icon.ico。
-// GPUI 是用 winresource 把图标嵌进 exe，Electron 必须在运行时显式交给窗口。
+// 任务栏 / 窗口图标：与旧版共享 assets/icons/app-icon.ico。
+// 旧版用 winresource 把图标嵌进 exe，Electron 必须在运行时显式交给窗口。
 // AppUserModelID 让任务栏把窗口归到 OneAsr 名下，而不是并进 electron.exe。
 app.setAppUserModelId('com.eclipse005.oneasr')
 
@@ -106,7 +113,6 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
     console.log('SHOT', file)
   }
   await waitApi()
-  await win.webContents.executeJavaScript('window.__oneasrShotApi.dismissWelcome()')
   for (const lang of ['zh', 'en'] as const) {
     await win.webContents.executeJavaScript(
       `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
@@ -285,15 +291,19 @@ function registerIpc(): void {
 
   ipcMain.handle('dialog:pickFiles', async () => {
     try {
-      // 过滤器也问 CLI 要扩展名：这里曾经硬编码 11 个，比 core 少 opus/wma/flv/ts/m4v/
-      // mpeg/mpg/wmv/3gp（拖放能进、对话框却选不到）。拿不到就退回"全部"，不猜一份表。
+      // 过滤器也问 CLI 要扩展名：媒体与文稿两份表都在 core，壳不复制。
       const status = await runCliJson<StatusSnapshot>(['status', '--json'], 20000)
-      const exts = status.ok ? (status.data?.media_exts ?? []) : []
+      const media = status.ok ? (status.data?.media_exts ?? []) : []
+      const transcripts = status.ok ? (status.data?.transcript_exts ?? []) : []
+      const all = [...media, ...transcripts]
       const filters =
-        exts.length > 0
+        all.length > 0
           ? [
-              { name: 'Media', extensions: exts },
-              { name: 'All', extensions: ['*'] }
+              { name: 'All supported', extensions: all },
+              ...(media.length > 0 ? [{ name: 'Media', extensions: media }] : []),
+              ...(transcripts.length > 0
+                ? [{ name: 'Transcript', extensions: transcripts }]
+                : [])
             ]
           : [{ name: 'All', extensions: ['*'] }]
       const r = await dialog.showOpenDialog(mainWindow!, {
@@ -303,6 +313,27 @@ function registerIpc(): void {
       return { ok: true as const, paths: r.canceled ? [] : r.filePaths }
     } catch (e) {
       return { ok: false as const, paths: [] as string[], error: String(e) }
+    }
+  })
+
+  ipcMain.handle('dialog:pickTranscript', async () => {
+    try {
+      const status = await runCliJson<StatusSnapshot>(['status', '--json'], 20000)
+      const exts = status.ok ? (status.data?.transcript_exts ?? []) : []
+      const filters =
+        exts.length > 0
+          ? [
+              { name: 'Transcript', extensions: exts },
+              { name: 'All', extensions: ['*'] }
+            ]
+          : [{ name: 'All', extensions: ['*'] }]
+      const r = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openFile'],
+        filters
+      })
+      return { ok: true as const, path: r.canceled ? null : r.filePaths[0] ?? null }
+    } catch (e) {
+      return { ok: false as const, path: null, error: String(e) }
     }
   })
 
@@ -337,10 +368,14 @@ function registerIpc(): void {
   ipcMain.handle('shell:copyText', (_e, text: string) => {
     clipboard.writeText(String(text ?? ''))
   })
+  /** 设置页：当前日志和上一份轮转加在一起的字节数。 */
+  ipcMain.handle('shell:logInfo', () => logInfo())
+  /** 删掉这两份。下一笔错误会重新建文件并写会话头。 */
+  ipcMain.handle('shell:clearLog', () => clearDiagnosticLog())
   /** 出问题时一键把日志拿出来（还没写过就只打开所在目录）。 */
   ipcMain.handle('shell:openLog', async () => {
-    const file = logPathname()
-    if (file && fs.existsSync(file)) await shell.openPath(file)
+    const file = logFileToOpen()
+    if (file) await shell.openPath(file)
     else await shell.openPath(DEFAULT_APP_ROOT)
   })
   ipcMain.handle('shell:openOutputFolder', async (_e, filePath: string) => {
@@ -348,7 +383,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('tasks:list', () => jobs.list())
-  ipcMain.handle('tasks:add', (_e, paths: string[]) => jobs.add(paths))
+  ipcMain.handle('tasks:add', (_e, items: Array<string | AddTaskInput>) => jobs.add(items))
   ipcMain.handle('tasks:remove', (_e, id: string) => jobs.remove(id))
   ipcMain.handle('tasks:clear', () => jobs.clear())
   // 门禁结果要回给渲染层（翻文案 / 翻设置页），所以这里必须把值传回去
@@ -357,6 +392,16 @@ function registerIpc(): void {
   ipcMain.handle('tasks:cancel', (_e, id: string) => {
     jobs.cancel(id)
   })
+  ipcMain.handle('transcript:get', (_e, id: string) => jobs.getTranscript(id))
+  ipcMain.handle('transcript:set', async (_e, id: string, p: string | null) =>
+    jobs.setTranscript(id, p)
+  )
+  ipcMain.handle('transcript:save', async (_e, id: string, text: string) =>
+    jobs.saveTranscript(id, text)
+  )
+  ipcMain.handle('transcript:split', async (_e, id: string) => jobs.splitTranscript(id))
+  ipcMain.handle('transcript:reread', async (_e, id: string) => jobs.rereadTranscript(id))
+  ipcMain.handle('transcript:remove', (_e, id: string) => jobs.removeTranscript(id))
   // 行内改（运行中会被 JobManager.patch 挡掉）
   ipcMain.handle('tasks:setLanguage', (_e, id: string, language: string) =>
     jobs.setLanguage(id, language)
@@ -391,7 +436,7 @@ app.whenReady().then(() => {
   }
   createWindow()
   createTray(resolveAppIcon())
-  // 托盘 tooltip 跟着当前阶段走（GPUI 的 tray.rs 同款）：长任务挂着的时候一眼能看到进展
+  // 托盘 tooltip 跟着当前阶段走（旧版托盘同款）：长任务挂着的时候一眼能看到进展
   // 下载进度转发给渲染层（设置 → 模型 里的下载区）
   downloads.on('updated', (state) => mainWindow?.webContents.send('download:updated', state))
   jobs.on('tasks', (list: { status: string; stage?: string }[]) => {

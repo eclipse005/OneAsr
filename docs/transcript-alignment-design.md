@@ -1,5 +1,8 @@
 # 「文稿匹配」功能设计 —— issues #2 / #14
 
+> 2026-10-19 注：本文写于 GPUI 版。Electron 分支保留引擎、对齐与字幕设计；
+> 文中涉及 gpui 编辑器与控件的段落仅作历史参考。
+>
 > 2026-10-06 · 输入：issue #2「希望增加文稿匹配功能」（已关，指向 CTC 对齐）、
 > issue #14「希望增加 两个功能」（开放，ASS 部分已落地）。
 > 引擎侧：`docs/ctc-aligner-adoption-analysis.md`（CTC 对齐器已并入）。
@@ -252,6 +255,23 @@ oneasr-cli align --audio meeting.wav --text meeting.txt `
 
 与 GUI 同管线，先落地它——core 的两半（文稿解析 / 分行）可以脱离界面单测。
 
+### 5.1 产物必须带时间轴
+
+文稿匹配的产物里，**SRT / ASS 至少要有一个**：文稿匹配的全部意义就是那串
+时间戳，纯 TXT 的匹配没有时间轴可言（管线的 TXT-only 文稿匹配同样被拒）。
+
+这条判据只有一处：`settings::timed_output_selected(output_srt, output_ass)`。
+
+| 问的人 | 答的是 | 什么形式 |
+|---|---|---|
+| `Settings::can_start` | 要不要对齐器 | 带时间轴才要（TXT 走纯文本路） |
+| `Settings::can_start_transcript` | 这条文稿任务能不能开跑 | 必须有带时间轴的产物 |
+| `oneasr-cli align` | 这是不是用法错 | `--no-srt` 只能与 `--ass` 同用 |
+
+CLI 那一格是**用法错**（退出码 2），不是「模型没就绪」（退出码 1）：纯 TXT 的
+文稿匹配根本用不上对齐器，让人去装权重是白跑一趟。所以它要在碰 ffmpeg 与
+模型之前就拒掉。
+
 ## 6. 明确不做
 
 波形、音频播放、时间轴上的字幕编辑、翻译。功能边界就是**转录** 和 **文稿匹配**，
@@ -262,7 +282,7 @@ oneasr-cli align --audio meeting.wav --text meeting.txt `
 
 | 项 | 说明 |
 |---|---|
-| 文稿解析 | 纯函数：`(路径, 字节) → (纯文本, 来源元信息)`。txt/md 原样取行；srt 按 cue 合行 |
+| 文稿解析 | 纯函数：`(路径, 字节) → (纯文本, 来源元信息)`。txt 原样取行；srt 按 cue 合行 |
 | 配对 | 纯函数：`(选中的路径[]) → (媒体[], 配对结果[])`。对话框与拖拽共用 |
 | 行断 | `break_long_lines(text, limit)`：无时间的贪心切分，与排版 DP 共用预算 |
 | 文稿分行 | 纯函数：`(词序列, 文稿行) → (行区间, token 归属)` |
