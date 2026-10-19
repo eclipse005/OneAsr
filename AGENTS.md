@@ -1,59 +1,78 @@
 # AGENTS.md
 
-OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rust + gpui/wgpu），
+OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rust 引擎 + Electron/React 界面），
 支持 Windows / Linux / macOS（Apple Silicon）。转写全程在本机跑，不依赖在线 API。
 对齐默认走 CTC（omniASR-CTC-300M-v2），Qwen3-ForcedAligner 仅作兼容老档保留。
 
+> **分支约定**：`master` 是 GPUI 线；`feat/electron-ui` 是 Electron 线，已删掉
+> gpui 壳（`crates/oneasr` 与 `vendor/gpui`）。两条线不要互相合并，除非明确要
+> 让 Electron 取代 GPUI。
+
 ## 常用命令
 
-- 开发编译：`cargo build -p oneasr`
-- 发版编译：`cargo build -p oneasr --release`
+- 引擎 / CLI 开发编译：`cargo build -p oneasr-core --bin oneasr-cli`
+- 引擎 / CLI 发版编译：`cargo build -p oneasr-core --release --bin oneasr-cli`
+- Electron 开发：`cd apps/electron && npm install && npm run dev`（Node 24；Electron 44 要求 >=22.12）
+- Electron 构建：`cd apps/electron && npm run build`
+- Electron 全量门禁：`cd apps/electron && npm run verify`（typecheck + vitest + build）
+- 文稿匹配：GUI 把同名 `.txt` / `.srt` 与媒体一起拖入，或把文稿拖到某一行；
+  CLI 用 `align --audio <媒体> --text <文稿>`，摘要 / 智能断句用
+  `transcript inspect|split --input <文稿> --json`（都走 core，壳不复制规则）
 - 检查（三条都要干净，CI 会拦）：`cargo check --locked --workspace --all-targets` 目标 **0 警告**、
   `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`
-  （两条 cargo 命令都必须带 `--workspace --all-targets`：只写 `-p oneasr` 时，
-  `oneasr-core` 的 tests / examples 根本进不了 lint 视野——那正是 ci.yml 里留着的教训）
-- 测试：`cargo test --locked -p oneasr-core -p oneasr`（改动引擎或设置模型时必跑）
+  （两条 cargo 命令都必须带 `--workspace --all-targets`：只写 `-p oneasr-core` 时，
+  core 的 tests / examples 根本进不了 lint 视野）
+- 测试：`cargo test --locked -p oneasr-core`（改动引擎或设置模型时必跑）；
+  Electron 侧 `cd apps/electron && npm test`
 - 版本一致性：`python3 scripts/verify-version.py`（加 `--tag v<版本>` 可一并断言 tag）
-- 界面文案双语：`python3 scripts/verify-i18n.py`（改动 UI 文案后跑，CI 会拦）
+- Rust 管线文案双语：`python3 scripts/verify-i18n.py`（改 core 文案后跑，CI 会拦）
+- Electron 文案双语：`cd apps/electron && npm test`（`i18n/gate.test.ts`：
+  zh/en 键一致、值非空、占位符成对、渲染层无硬编码中文）
 - 双语门禁的自测：`python3 scripts/test_verify_i18n.py`（改了门禁或它的测试就跑；CI 也跑）
 - Windows 本机：商店的「应用执行别名」会抢走 `python3`（跑起来是 "Python was not found"、
   退出码 9009），而 Python 官方安装器与 conda 只装 `python`。仓库的文档、脚本提示与 CI
   都只有 `python3` 一种拼写，所以在本机补一个转发：`pwsh -File scripts/ensure-python3.ps1`
   —— 它挑一个 3.11+ 的解释器（`py -3` 可能还是 3.10，缺 tomllib），在它旁边写一个
   `python3.cmd` 按名字转发（conda 切环境也跟着走）；幂等，撤销就是删掉那个文件
-- 门禁的断骨验证：`python3 scripts/bonebreak-verify-i18n.py` —— 把 11 处检查逐个还原，
+- 门禁的断骨验证：`python3 scripts/bonebreak-verify-i18n.py` —— 把每处检查逐个还原，
   确认对应用例真的变红。**改过 `verify-i18n.py` 之后必跑**；它不进 CI（锚点是源码
   片段，实现一重构工具就会自己过期），是维护者手工用的
-- 打包（Windows）：`./scripts/pack-release.ps1` —— 版本号从 `Cargo.toml` 读，**没有 `-Version` 参数了**
-  （以前会写回 `Cargo.toml`，等于两处真相）；开关只有 `-SkipBuild` / `-SkipInstaller`
-- 打包（Linux / macOS）：`./scripts/pack-unix.sh --os macos --arch arm64` —— 同样没有 `--version`，可加 `--skip-build`
+- 打包（master / GPUI 线）：`./scripts/pack-release.ps1` / `./scripts/pack-unix.sh --os macos --arch arm64`
+  —— 版本号从 `Cargo.toml` 读，没有版本参数。**本分支尚未迁移 Electron 打包**：
+  两个脚本与 `release.yml` 的 preflight 会在缺 GPUI 壳时显式失败，不要在本分支打 tag
 - 漏洞检查（钉住的公告库快照，先铺缓存再跑）：`pwsh -File scripts/prepare-advisory-db.ps1` 然后
   `cargo deny check advisories sources` —— 首次还需要 `git submodule update --init vendor/advisory-db`；
   更新公告库是显式动作，没有定时任务（见「发版注意」）
 - 工具链：`rust-toolchain.toml` 钉死版本，本地与 CI 都以它为准，workflow 里不写第二个版本号
-- 跑起来看效果：`target/release/oneasr.exe`（app_root 会自动向上找含 `bin/ffmpeg` 的目录）
+- 跑起来看效果：先 `cargo build -p oneasr-core --bin oneasr-cli`，再
+  `cd apps/electron && npm run dev`（CLI 会从 app root / `target/release` / `target/debug` 查找）
 
 ## 项目结构
 
 - `crates/oneasr-core/` —— 引擎：模型目录解析、VAD、转写管线、字幕切分、设置模型、统计、
-  热词召回（`hotword/`：文本→音素、粗筛、`hotword.json` 存储；含短语词典资产）
-- `crates/oneasr/` —— GUI：gpui 界面、任务列表、设置抽屉、耗时弹卡与动画
-- `crates/oneasr-core/src/i18n.rs` —— 双语机制（`UiLang` / `Str` / `t` / 系统语言探测）
+  热词召回（`hotword/`：文本→音素、粗筛、`hotword.json` 存储；含短语词典资产）；
+  以及 `src/bin/oneasr-cli.rs`（Electron 与脚本共用的命令行入口）
+- `apps/electron/` —— Electron 界面：`src/main`（窗口、队列、CLI 子进程、下载）、
+  `src/preload`、`src/renderer`（React + Vite）、`src/shared`（IPC 类型）
+- `crates/oneasr-core/src/i18n.rs` —— Rust 侧双语机制（`UiLang` / `Str` / `t` / 系统语言探测）
   + 管线自产文案（错误、阶段名、下载进度）的双语表
-- `crates/oneasr/src/i18n.rs` —— GUI 界面标签的双语表（复用 core 机制）
-- `vendor/gpui/` —— 打过补丁的 gpui；每处改动都要登记进 `vendor/gpui/PATCHES.md`
+- `apps/electron/src/renderer/src/i18n/index.ts` —— 渲染层 zh/en 双语文案表
+  （`apps/electron/src/main/i18n.ts` 是主进程托盘等系统文案）
+- `vendor/gpu-allocator/` —— 钉住 `windows` 0.62 的 gpu-allocator 补丁（wgpu-hal 需要）；
+  改动登记在 `vendor/gpu-allocator/PATCHES.md`
 - `installer/` —— Windows Inno Setup 脚本；`installer/macos/` 是 macOS 的安装说明与安装脚本源文件
+  （两者目前仍属于 master 的 GPUI 打包链路）
 - `scripts/` —— 打包脚本与图标生成，外加四道校验与它们的自测：
-  `verify-version.py`（版本一致性）、`verify-i18n.py`（界面文案双语）、
+  `verify-version.py`（版本一致性）、`verify-i18n.py`（Rust 管线文案双语）、
   `verify-ffmpeg-manifest.py`（ffmpeg 哈希清单）、`ffmpeg-checksums.txt`（清单本体）；
-  以及 `test_verify_i18n.py`（双语门禁自己的单测）、
+  以及 `test_verify_i18n.py`（Rust 门禁自己的单测）、
   `bonebreak-verify-i18n.py`（门禁的断骨验证）、`_verify_common.py`
   （三个校验脚本共用的输出编码处理 —— 同一件事只写一份，改一次三处都跟着）、
   `export-phrases.py`（热词短语词典资产 `phrases.bin` 的生成器：要一份装了 pypinyin
   的 Python，不进 CI；`--check` 只核对不写盘。改了资产要连 manifest 一起提交，
   单测会拿 sha256 对账）
-- `.github/workflows/` —— `ci.yml`（每次提交的门禁：格式 / clippy+测试 / 版本+双语 / 供应链）
-  与 `release.yml`（tag 触发的打包发版）
+- `.github/workflows/` —— `ci.yml`（格式 / clippy+core 测试 / Electron 检查 / 版本+双语 / 供应链）
+  与 `release.yml`（tag 触发的 GPUI 打包发版；本分支的 preflight 会显式拒绝）
 - `rust-toolchain.toml` —— 工具链的唯一来源；`deny.toml` —— 依赖漏洞与来源规则
 - `docs/release-notes/` —— 每个版本的发布说明（见下）
 - `docs/lessons.md` —— 从已合并的改动里学到的规则：每条带**为什么**与**证据**
@@ -69,18 +88,21 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - 提交信息用 conventional commits + 中文描述，例如 `fix(settings): 每个 ASR 尺寸各记一个模型目录`
 - 提交正文写清"为什么"和用户能感知的影响，不写"优化代码"这类空话
 - 大的改动（新行为、跨模块）在正文里记一行**验证边界**：跑了哪些检查、
-  手动试了什么、什么没试（例：`验证：cargo test -p oneasr-core -p oneasr 全绿；
-  未验：macOS 打包路径（本地无环境）`）。事后 review 或 CI 红了，
-  一眼知道当时验到哪——没验的明说，别让"假绿"变成"没人知道"。跟
-  `#[ignore]` 比静默 early-return 好是同一条原则
+  手动试了什么、什么没试（例：`验证：cargo test -p oneasr-core 全绿、
+  apps/electron 的 npm run verify 全绿；未验：macOS 打包路径（本地无环境）`）。
+  事后 review 或 CI 红了，一眼知道当时验到哪——没验的明说，别让"假绿"变成
+  "没人知道"。跟 `#[ignore]` 比静默 early-return 好是同一条原则
 - 注释与文档用中文，术语跟 README 保持一致；`.rs` 在仓库里是 CRLF（Windows 检出）
-- 新增行为要带单测，`crates/oneasr-core/src/settings.rs`、`crates/oneasr/src/app/rows.rs` 有现成的纯函数单测可参照
+- 新增行为要带单测：Rust 侧可参照 `crates/oneasr-core/src/settings.rs` 的纯函数单测；
+  Electron 侧可参照 `apps/electron/src/main/queue.test.ts` 与
+  `apps/electron/src/renderer/src/i18n/gate.test.ts`
 - **测试要断骨验证**：新测试写完，把被测的修复还原（或手动破坏它守护的行为）跑一遍，
   **测试必须变红**才算有效；在旧代码上照样绿的测试等于没写。别只写"加了测试"，
   说清哪个测试在坏代码上失败、失败信息是什么
 - **修一类，不修一个**：改 bug 前先 grep 同构的兄弟位置，一次修完。本仓库的高发区：
-  `settings.rs` / `rows.rs` 的同构纯函数、两份 i18n.rs 的同款文案、
-  `crates/oneasr-core/src/asr/model_check.rs` 与 `crates/oneasr-core/src/model/download.rs`
+  `crates/oneasr-core/src/settings.rs` 的同构纯函数、core i18n 与 Electron zh/en
+  字典的同款文案、`crates/oneasr-core/src/asr/model_check.rs` 与
+  `crates/oneasr-core/src/model/download.rs`
   里按 ASR 尺寸×模型角色展开的逻辑——
   这些形状都是"修一个漏一串"。只修报告里那一个，用户下一个场景就会带着同一个 bug 回来
 - **单测必须跨平台**（CI 只在 ubuntu 上跑，本地是 Windows，两边不一致时以 CI 为准）：
@@ -93,11 +115,13 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
     吃参数的纯函数、用临时目录树测；`#[ignore]` 比静默 early-return 好——
     读不到文件就 return 的测试在 CI 上是**假绿**
   - 改完只在 Windows 上跑过不算数，`git push` 后看 CI 结果
-- **界面文案必须双语**：新增用户可见文案一律成对写入双语表——GUI 标签进
-  `crates/oneasr/src/i18n.rs` 的 `L` 表（`t(L::X)`），管线自产消息用
+- **界面文案必须双语**：新增用户可见文案一律成对写入双语表——Electron 渲染层进
+  `apps/electron/src/renderer/src/i18n/index.ts` 的 zh/en 字典（主进程系统文案进
+  `apps/electron/src/main/i18n.ts`），Rust 管线自产消息用
   `crates/oneasr-core/src/i18n.rs` 的助手；**不许硬编码单语字符串**。
   带参数的句子写成按语言的 helper，两种语言的语序差异在 helper 内消化；
-  纯格式化函数显式接收 `UiLang` 参数（单测不读全局），渲染/动作边界才用 `ui_lang()`
+  纯格式化函数显式接收语言参数（Rust 单测不读全局，Electron helper 显式收 `UiLang`），
+  渲染/动作边界才读当前语言。Electron 的 vitest 门禁会扫描渲染层源码里的硬编码中文。
 - 术语表（zh → en）：任务 task · 队列 queue · 转写 transcribe · 断句 sentence segmentation ·
   打轴/对齐 alignment · 人声分离 vocal separation · 字幕 subtitle · 分段时长 segment length ·
   量化 quantization(int8) · 推理后端 inference backend
@@ -106,9 +130,15 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 
 主分支只有 `master` 一个，也是 GitHub 上的默认分支，直接提交，不走过 PR 流程。
 （历史上曾用 `wgpu` 作默认分支，两条线从未分叉，已快进合并并删除；
-远端与本地都只剩 `master`，CI 的 `on.push.branches` 也已改成 `[master]`。）
+远端与本地都只剩 `master`。另有长期并行的 `feat/electron-ui` 分支，CI 的
+`on.push.branches` 已包含它。）
 
-版本号只有一个出处：`Cargo.toml` 的 `[workspace.package] version`（应用标题栏与日志都读它）。
+> **feat/electron-ui 不发版**：gpui 壳已删除、Electron 打包尚未迁移。
+> `release.yml` 的 preflight 与两个打包脚本会在缺 `crates/oneasr` 时显式失败。
+> 下面的发布流程属于 `master`（GPUI 线）；Electron 线等打包迁移完成后再改写。
+
+版本号只有一个出处：`Cargo.toml` 的 `[workspace.package] version`（CLI 与日志都读它）。
+Electron 的 `package.json` 目前是壳自己的开发版本，打包迁移时再统一到这一处。
 打包脚本不再接收、也不再写回版本号；tag 与两份 README 必须跟它一致，CI 负责断言。
 
 1. 改 `Cargo.toml` 的 `[workspace.package] version`；若动了依赖，跑一次 `cargo check` 刷新 `Cargo.lock`
@@ -118,7 +148,9 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 4. 本地自检全绿再推（**与 ci.yml 的实际门禁逐条对齐**，少跑一条就等于给自己少一道）：
    `cargo fmt --all --check`、
    `cargo clippy --locked --workspace --all-targets -- -D warnings`、
-   `cargo test --locked -p oneasr-core -p oneasr`、
+   `cargo test --locked -p oneasr-core`、
+   `cd apps/electron && npm run verify`、
+   `python3 scripts/test_verify_i18n.py`、
    `python3 scripts/verify-version.py --tag v<版本>`、`python3 scripts/verify-i18n.py`
 5. `git commit` → `git push origin master` → `git tag v<版本>` → `git push origin v<版本>`
 6. tag 触发 `.github/workflows/release.yml`：三平台打包 + 自动建 release 并挂上全部产物
@@ -126,7 +158,7 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 7. 验证：`gh release view v<版本>`，确认 5 个产物都在、说明正文正确
 
 注意：`workflow_dispatch` 只出 artifact、**不建 release**；只有推 tag 才会发布。
-CI 只在 `push: master` 与 PR 上跑，直接提交到 `master` 同样会拿到门禁结果。
+CI 在 `push: master` / `push: feat/electron-ui` 与 PR 上跑，直接提交到主分支同样会拿到门禁结果。
 
 ### 发布说明要写成什么形式
 
@@ -178,7 +210,7 @@ CI 只在 `push: master` 与 PR 上跑，直接提交到 `master` 同样会拿�
   读文件，中文**字符串**会被误解码并可能凭空多出一个引号把脚本解析搞崩（`release.yml` 用 pwsh，
   所以这个坑只在本地显形）。`.gitattributes` 里已登记，别把 BOM 去掉
 - 依赖来源与漏洞由 `deny.toml` + CI 的 `cargo deny check advisories sources` 把关：
-  git 依赖只许来自白名单里的仓库、且必须带 tag/rev。已知的 6 条「已停维护」通告都是传递依赖，
+  git 依赖只许来自白名单里的仓库、且必须带 tag/rev。已知的 4 条「已停维护」通告都是传递依赖，
   记在配置注释里；真实漏洞仍然是硬错误
 - 门禁的**输入也钉死**：漏洞库是 `vendor/advisory-db` 这个 submodule（钉在某个 commit），
   CI 与本地读同一份快照，上游 main 新增通告不会再把无关提交弄红（2026-10-16 的 zip yank

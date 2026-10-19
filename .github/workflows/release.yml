@@ -13,6 +13,10 @@
 # 推上来的 tag 完全一致，不一致就直接失败（以前这里直接取 tag 名当版本号，
 # 从不核对 Cargo.toml，能构建出一个文件名与内容不符的产物）。
 #
+# feat/electron-ui 分支已经删掉 GPUI 壳，但 Electron 打包还没迁进来：
+# preflight job 会在 crates/oneasr 不存在时直接失败，避免打出一套空包。
+# 打包迁移完成后删掉 preflight，并把三个平台的 Pack 步骤换成 Electron 产物。
+#
 # 打包脚本不再接受版本号参数：它们自己从 Cargo.toml 读，无法被调用方改错。
 name: Release
 
@@ -61,8 +65,22 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "OneAsr $V"
 
+  # 这条分支的发布链路还没有 Electron 打包。缺 GPUI 壳时直接失败，比让三个
+  # 平台各自在 Pack 步骤报“找不到 oneasr”更早、更清楚。
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Refuse to build without a packaging target
+        run: |
+          if [[ ! -f crates/oneasr/Cargo.toml ]]; then
+            echo "::error::This branch has no GPUI shell and Electron packaging is not implemented yet. Refusing to build an incomplete release."
+            exit 1
+          fi
+
   windows:
-    needs: version
+    needs: [version, preflight]
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
@@ -96,7 +114,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: version
+    needs: [version, preflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -136,7 +154,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    needs: version
+    needs: [version, preflight]
     runs-on: macos-15
     timeout-minutes: 120
     steps:

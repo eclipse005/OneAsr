@@ -7,8 +7,9 @@
 （verify-version.py / verify-i18n.py / verify-ffmpeg-manifest.py）都要往
 stderr 打中文诊断，所以共用这一份；将来再加第四个脚本，从这里 import 即可。
 
-这与本仓库 GUI 复用 `oneasr-core` 的 i18n 机制是同一条做法：机制只有一处，
-调用方各自取用，不复制。
+这与本仓库 Rust 引擎与 Electron 壳共用同一套产物的做法是同一条原则：机制只有
+一处，调用方各自取用，不复制。Rust 侧的双语门禁在 verify-i18n.py，Electron
+渲染层的双语门禁在 apps/electron 的 vitest 里。
 """
 
 from __future__ import annotations

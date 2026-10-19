@@ -63,19 +63,16 @@ yanked = "warn"
 # unmaintained = "workspace"：只把「本仓库直接依赖」里的停维护 crate 当错误。
 #
 # 为什么不是默认的 "all"：2026-09-27 实测 `cargo deny check advisories` 在
-# 全量模式下报出 6 个**传递**依赖的「已停维护」通告，作者全都改不动 ——
+# 全量模式下报出 4 个**传递**依赖的「已停维护」通告，作者全都改不动 ——
 # 一个都修不了的门禁等于没有门禁，只会被无视：
 #   RUSTSEC-2025-0052 async-std（已停止开发）
 #   RUSTSEC-2024-0436 paste
 #   RUSTSEC-2026-0173 proc-macro-error2
 #   RUSTSEC-2025-0134 rustls-pemfile
-#   RUSTSEC-2026-0206 rustybuzz      ← usvg → gpui
-#   RUSTSEC-2026-0192 ttf-parser     ← usvg → fontdb → gpui（上游无安全升级路径）
-# 这 6 个都是「停维护」通告，**没有一个是真正的漏洞**（RustSec 里带
+# 这 4 个都是「停维护」通告，**没有一个是真正的漏洞**（RustSec 里带
 # vulnerability 的通告仍然是硬错误，无法被本配置降级）。
 # 想连传递依赖一起看时，本地跑：
 #   cargo deny check advisories --config 'advisories.unmaintained="all"'
-# 摘掉这个限制的条件：gpui/usvg 换掉 ttf-parser + rustybuzz 之后。
 unmaintained = "workspace"
 # 默认空：不靠 ignore 屏蔽通告，真正的漏洞如实暴露。
 # 例外只允许「已确认不可达、且图上暂时升不上去」的通告，必须写清理由与移除条件；

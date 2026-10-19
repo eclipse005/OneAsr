@@ -47,6 +47,12 @@ $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
+# feat/electron-ui 删掉了 GPUI 壳，但 Electron 打包还没迁进来。继续往下跑只会在
+# cargo build -p oneasr 处报一个「找不到包」，所以在这里把原因说清楚。
+if (-not (Test-Path (Join-Path $Root "crates\oneasr\Cargo.toml"))) {
+  throw "This branch has no GPUI shell and Electron packaging is not implemented yet. See apps/electron/README.md."
+}
+
 # 版本号的唯一来源：根 Cargo.toml 的 [workspace.package] version。
 # 读不到直接失败，不再回退到 "0.1.0" —— 那样产物名会和仓库版本悄悄脱节。
 function Get-WorkspaceVersion {

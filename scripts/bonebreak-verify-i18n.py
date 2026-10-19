@@ -4,7 +4,7 @@
 为什么需要这个工具
 ------------------
 AGENTS.md 的「测试要断骨验证」要求：新测试写完，把被测的修复还原跑一遍，
-测试必须变红；在原样代码上照样绿的测试等于没写。手做一次不难，但 11 处锚点
+测试必须变红；在原样代码上照样绿的测试等于没写。手做一次不难，但几处锚点
 逐个还原很容易漏，而且漏掉的正是「我以为测了」的那些。
 
 它做的事：把 scripts/ 复制到临时目录，在副本上逐条施加变异（把一处检查改坏），
@@ -42,47 +42,19 @@ FILES = ("verify-i18n.py", "test_verify_i18n.py", "_verify_common.py")
 
 # (变异名, 唯一锚点, 把它改成什么, 期望变红的用例名片段)
 MUTATIONS = [
-    ("M1 语言臂不分 Zh/En",
-     "            return True, m.group(1)",
-     '            return True, "Zh"',
-     "中文写进En臂"),
-    ("M2 不查英文侧空串",
+    ("M1 不查英文侧空串",
      '            if en_lit[1:-1].strip() == "":',
      "            if False:",
      "英文侧留空"),
-    ("M3 不比占位符",
+    ("M2 不比占位符",
      "            if zh != en:",
      "            if False:",
      "双语占位符不一致"),
-    ("M4 认不出测试块",
-     'TEST_MARK = re.compile(r"#\\[cfg\\(test\\)\\]|^\\s*(?:pub\\(crate\\)\\s+)?mod\\s+tests\\s*\\{")',
-     'TEST_MARK = re.compile(r"NEVER_MATCHES")',
-     "测试块里的中文夹具"),
-    ("M5 字符串里 // 被当注释",
-     "        if c == '\"':\n            j = i + 1",
-     "        if False:\n            j = i + 1",
-     "字符串里的双斜杠"),
-    ("M6 原始字符串不跳过",
-     '            m = re.match(r\'r(#*)"\', src[i:])',
-     "            m = None",
-     "strip_comments不把原始字符串里的双斜杠当成注释"),
-    ("M7 不跳过字体与双语表文件",
-     'COPY_CHECK_SKIP = {"i18n.rs", "main.rs", "ui_font.rs"}',
-     "COPY_CHECK_SKIP = set()",
-     "跳过清单里的文件"),
-    ("M8 不对齐 expand 的 key",
-     "            if keys != want:",
-     "            if False:",
-     "expand的key少传一个"),
-    ("M9 不查 expand 指向的条目存在",
-     "            if want is None:",
-     "            if False:",
-     "expand指向已改名的条目"),
-    ("M10 源码目录缺失不当失败",
-     "    if not base.is_dir():",
-     "    if False:",
-     "界面源码目录读不到"),
-    ("M11 读不到时不报人话",
+    ("M3 注释不涂白",
+     '        if c == "/" and nxt == "/":',
+     "        if False:",
+     "注释里的StrNew必须放行"),
+    ("M4 读不到时不报人话",
      "    except OSError as exc:",
      "    except ValueError as exc:",
      "双语表读不到"),

@@ -43,6 +43,13 @@ done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# feat/electron-ui 删掉了 GPUI 壳，但 Electron 打包还没迁进来。继续往下跑只会
+# 在 cargo build -p oneasr 处报一个「找不到包」，所以在这里把原因说清楚。
+if [[ ! -f crates/oneasr/Cargo.toml ]]; then
+  echo "This branch has no GPUI shell and Electron packaging is not implemented yet. See apps/electron/README.md." >&2
+  exit 1
+fi
 CHECKSUM_FILE="$ROOT/scripts/ffmpeg-checksums.txt"
 
 # ffmpeg 的来源 URL 只声明在清单文件里（`# base-url <URL>` 一行），

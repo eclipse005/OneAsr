@@ -12,8 +12,10 @@ name: CI
 on:
   # 主分支是 master，而且不走过 PR 直接提交 —— push 检查才是真正拦住坏代码的门。
   # PR 检查保留：外部贡献或任何以 PR 形式进来的改动同样要过同一道门禁。
+  # feat/electron-ui 是与 master 并行的 Electron 分支（gpui 壳不在这条线上）；
+  # 它合回 master 后可以把这一行删掉。
   push:
-    branches: [master]
+    branches: [master, feat/electron-ui]
   pull_request:
   workflow_dispatch:
 
@@ -81,13 +83,43 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # --workspace --all-targets：连 oneasr-core 的 tests / examples 一起 lint。
-      # （以前只写 -p oneasr，core 的测试代码因此长期没人 lint。）
+      # （只写 -p oneasr-core 时，core 的测试代码会漏出 lint 视野。）
       - name: clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: test
-        run: cargo test --locked -p oneasr-core -p oneasr
+        run: cargo test --locked -p oneasr-core
 
-  # ── 3. 静态断言：版本一致性 + 界面文案双语 ─────────────────────────────
+  # ── 3. Electron 壳：类型检查 + 单测 + 构建 ─────────────────────────────
+  # Rust 侧只负责引擎与 CLI；渲染层、主进程与 preload 全在 apps/electron。
+  # 这里不启动 Electron（CI 无显示），只验证它能编译、能通过 vitest。
+  # 双语门禁也在 vitest 里（apps/electron/src/renderer/src/i18n/gate.test.ts）：
+  # zh/en 键一致、值非空、占位符成对、渲染层无硬编码中文。
+  electron:
+    name: electron typecheck + test + build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/electron
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Electron 44 要求 Node >= 22.12；显式钉 Node 24，不依赖 runner 自带版本。
+      # cache 读 apps/electron/package-lock.json，npm ci 因此不必每次重下依赖。
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/electron/package-lock.json
+      # 跳过 Electron 二进制的 postinstall（typecheck/test/build 都不需要它），
+      # 省下每次 CI 下载 ~100 MB 的发布包。
+      - name: Install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci
+      - name: Verify
+        run: npm run verify
+
+  # ── 4. 静态断言：版本一致性 + 界面文案双语 ─────────────────────────────
   # 三样都只用 Python 标准库、不碰 Rust 工具链，所以这个 job 秒完。
   version:
     name: version + i18n consistency
@@ -98,10 +130,9 @@ jobs:
       # Cargo.toml 是唯一来源，两份 README 必须跟它一致。
       - name: Version consistency
         run: python3 scripts/verify-version.py
-      # 界面文案双语规则的机器化（AGENTS.md 的「代码风格」）：渲染层不许
-      # 绕过双语表硬编码单语字符串、中文不许落进 UiLang::En 臂、
-      # Str::new 两侧占位符必须成对且英文侧非空、expand 的 key 必须与条目
-      # 占位符对齐。五样编译器都看不见。
+      # 界面文案双语规则的机器化（AGENTS.md 的「代码风格」）：Rust 侧查
+      # `Str::new` 两侧占位符成对、英文侧非空；Electron 渲染层的键一致 /
+      # 非空 / 硬编码中文由上面 electron job 的 vitest 负责。
       #
       # 门禁自己也要有测试：改坏它的一条正则，它会**静默地永远放绿**，
       # 那比门禁本身的红更危险——连「被拦住过」都不是了。所以先证明校验
@@ -111,7 +142,7 @@ jobs:
       - name: i18n consistency
         run: python3 scripts/verify-i18n.py
 
-  # ── 4. 供应链：外部二进制的哈希 + 依赖漏洞与来源 ───────────────────────
+  # ── 5. 供应链：外部二进制的哈希 + 依赖漏洞与来源 ───────────────────────
   supply-chain:
     name: supply chain
     runs-on: ubuntu-24.04
@@ -168,7 +199,7 @@ jobs:
           # 锁文件的一致性由上面的 clippy / test（都带 --locked）负责把关。
           "/tmp/cargo-deny-${VER}-${TRIPLE}/cargo-deny" check advisories sources
 
-  # ── 5. 跨平台编译：lint 与测试只在 ubuntu 跑，Windows 靠本地开发覆盖，
+  # ── 6. 跨平台编译：lint 与测试只在 ubuntu 跑，Windows 靠本地开发覆盖，
   #      macOS 得等到发版打包才第一次编译 —— v1.2.0 的 GPU/CTC 依赖雷正是
   #      从这个空档里过去的。这里一个 cargo check 把「发版才炸」提前到
   #      「提交即红」。不做 clippy、不跑测试：拦编译失败就够，那两样 ubuntu

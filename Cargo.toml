@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/oneasr-core",
-    "crates/oneasr",
 ]
 
 [workspace.package]
@@ -18,18 +17,13 @@ thiserror = "2"
 anyhow = "1"
 
 # Shipped binaries are release-only; thin LTO + single codegen unit keep the
-# 40–56 MB GPU-enabled executables from growing and improve startup. Panics
-# stay unwinding because the GUI worker supervises tasks with `catch_unwind`.
+# GPU-enabled CLI from growing and improve startup. Panics stay unwinding
+# because the pipeline supervises runs with `catch_unwind`.
 [profile.release]
 lto = "thin"
 codegen-units = 1
 
-# Vendored gpui 0.2.2 with the Windows NC-button fix (upstream Zed PR #48330:
-# `default_prevented` must not make GPUI swallow WM_NCLBUTTONDOWN — otherwise
-# custom-titlebar drag / min / max / close are all dead). Revert to crates.io
-# once a released gpui includes the fix. Local patch details: vendor/gpui/PATCHES.md.
+# Pin gpu-allocator's windows dependency to 0.62 so its DX12 types match
+# wgpu-hal 30. Details: vendor/gpu-allocator/PATCHES.md.
 [patch.crates-io]
-gpui = { path = "vendor/gpui" }
-# Force windows 0.62 so gpu-allocator matches wgpu-hal 30 DX12 types (sysinfo
-# 0.31 via optional zed-scap would otherwise unify gpu-allocator onto 0.57).
 gpu-allocator = { path = "vendor/gpu-allocator" }
