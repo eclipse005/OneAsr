@@ -264,5 +264,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: OneAsr ${{ needs.version.outputs.version }}
           body_path: RELEASE_BODY.md
+          # v2.0.0 是 Electron 线的第一个预览版：标成 prerelease，且不让它抢走
+          # master 的 "Latest" 标记（GitHub 首页仍指向稳定的 GPUI 版本）。
+          # 其余 tag 自动回到正式版，合并到 master 后无需改这里。
+          prerelease: ${{ github.ref_name == 'v2.0.0' }}
+          make_latest: ${{ github.ref_name == 'v2.0.0' && 'false' || 'true' }}
           fail_on_unmatched_files: true
           files: out/*

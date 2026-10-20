@@ -145,6 +145,10 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 > `feat/electron-ui` 的 `release.yml` 打 Electron 包（`pack-electron.*`）。
 > 标签是全局的，不要用同一个版本号在两条线各发一次；Electron 线发版时先升
 > `Cargo.toml` 与两份 README，再打一个只属于 Electron 版本的 tag。
+>
+> **v2.0.0 是 Electron 线的预览版**：`release.yml` 把它标成 prerelease，并且
+> 不更新仓库的 "Latest" 标记（GitHub 首页仍指向稳定的 GPUI 版本）。其余 tag
+> 自动按正式版发布。验证通过后可以在 GitHub 上手动取消 pre-release 标记转正。
 
 版本号只有一个出处：`Cargo.toml` 的 `[workspace.package] version`（CLI 与日志都读它）。
 `apps/electron/package.json` 的版本必须与它一致（`verify-version.py` 会断言；
