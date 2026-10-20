@@ -95,7 +95,8 @@ else
   [[ -x "$APP/Contents/Resources/runtime/bin/ffmpeg" ]] || {
     echo "runtime/bin/ffmpeg missing from $APP" >&2; exit 1
   }
-  chmod +x "$APP/Contents/Resources/runtime/oneasr-cli" \n    "$APP/Contents/Resources/runtime/bin/ffmpeg"
+  chmod +x "$APP/Contents/Resources/runtime/oneasr-cli"
+  chmod +x "$APP/Contents/Resources/runtime/bin/ffmpeg"
   MACOS_ASSETS="$ROOT/installer/macos"
   [[ -f "$MACOS_ASSETS/install-notes.txt" && -f "$MACOS_ASSETS/fix-and-open.command" ]] || {
     echo "missing installer/macos assets" >&2; exit 1

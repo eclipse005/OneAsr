@@ -2,7 +2,12 @@
   "name": "oneasr-electron",
   "version": "2.0.0",
   "description": "OneAsr modern Electron UI (reuses oneasr-cli)",
-  "author": "OneAsr",
+  "homepage": "https://github.com/eclipse005/OneAsr",
+  "author": {
+    "name": "OneAsr",
+    "email": "eclipse005@users.noreply.github.com"
+  },
+  "license": "MIT",
   "main": "./out/main/index.js",
   "private": true,
   "scripts": {
