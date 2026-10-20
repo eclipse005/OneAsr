@@ -253,7 +253,6 @@ export default function App() {
     })()
     const offTasks = window.oneasr.onTasksUpdated((next) => {
       setTasks(next)
-      void refreshStats()
     })
     const offStats = window.oneasr.onStatsUpdated((next) => setStats(next))
     const offDownload = window.oneasr.onDownloadUpdated((state) => setDownload(state))
@@ -667,7 +666,7 @@ export default function App() {
             draft={draft}
             status={status}
             download={download}
-            onDownloadStart={(id) => void window.oneasr.startDownload(id)}
+            onDownloadStart={(id, dir) => void window.oneasr.startDownload(id, dir)}
             onDownloadCancel={() => void window.oneasr.cancelDownload()}
             dirty={dirty}
             hotwordDraft={hotwordDraft}
@@ -706,13 +705,27 @@ export default function App() {
                 if (r.path) setDraft({ ...draft, output_dir: r.path })
               })
             }
-            onPickModel={(field) =>
+            onPickModel={(field, modelId) =>
               void window.oneasr.pickModelDir(draft[field] as string).then((r) => {
                 if (!r.ok) {
                   notify('error', `${s.dialogFailed}: ${r.error || ''}`)
                   return
                 }
-                if (r.path) setDraft({ ...draft, [field]: r.path })
+                if (!r.path) return
+                const path = r.path
+                setDraft((d) => {
+                  if (!d) return d
+                  const next = { ...d, [field]: path } as Settings
+                  // 浏览选的也是「这个模型的选择」，必须进 per-model 表；
+                  // 只改派生字段的话，切尺寸/引擎时会被推导覆盖。
+                  if (field === 'asr_model_dir' && modelId) {
+                    next.asr_dirs = { ...d.asr_dirs, [modelId]: path }
+                  }
+                  if (field === 'aligner_model_dir' && modelId) {
+                    next.aligner_dirs = { ...d.aligner_dirs, [modelId]: path }
+                  }
+                  return next
+                })
               })
             }
             onOpenModels={() => void window.oneasr.openModelsFolder()}

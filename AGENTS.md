@@ -15,6 +15,9 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - Electron 开发：`cd apps/electron && npm install && npm run dev`（Node 24；Electron 44 要求 >=22.12）
 - Electron 构建：`cd apps/electron && npm run build`
 - Electron 全量门禁：`cd apps/electron && npm run verify`（typecheck + vitest + build）
+- 模型选择与目录：以 `settings.json` 为唯一来源，**每个模型各记各的路径**（`asr_dirs` /
+  `aligner_dirs` / `demucs_model_dir` / `sensevoice_model_dir`）；CLI 的
+  `transcribe` / `align` / `status` / `download` 都读它，显式旗标（`--asr-model-dir` 等）可覆盖。
 - 文稿匹配：GUI 把同名 `.txt` / `.srt` 与媒体一起拖入，或把文稿拖到某一行；
   CLI 用 `align --audio <媒体> --text <文稿>`，摘要 / 智能断句用
   `transcript inspect|split --input <文稿> --json`（都走 core，壳不复制规则）

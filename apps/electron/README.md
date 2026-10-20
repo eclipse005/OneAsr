@@ -4,8 +4,6 @@ Modern **light** Electron + Vite + React + TypeScript shell that drives the Rust
 engine through `oneasr-cli`. The GPUI shell under `crates/oneasr` has been
 removed on this branch; `master` keeps it as the GPUI line.
 
-> **DO NOT PUSH** this branch for 大宝 until explicitly asked. Local commits only.
-
 ## Branch
 
 `feat/electron-ui`
@@ -56,7 +54,7 @@ Settings / Hotwords / Stats / Guide / Transcript matching 均为**居中弹窗**
 - Drop a media file with a same-stem `.txt` / `.srt` in one go, or drop a transcript onto an existing row. A single media + single transcript also pairs even when the names differ.
 - One transcript line = one subtitle line. An `.srt`'s own timings are ignored and re-aligned with CTC; ASR and hotwords are skipped entirely.
 - The row chip opens a panel with line/char counts, a speech-rate sanity check, the normalized text in an editor, smart sentence splitting, re-read from the source, and remove.
-- Edits stay in the app's staged copy. The source transcript is **never written**; output uses `<stem>.aligned.srt` (and `.aligned.timeline.json`) so a same-named transcript is not overwritten.
+- Edits stay in the app's staged copy. The source transcript is **never written**; output uses `<stem>.aligned.srt` so a same-named transcript is not overwritten. The GUI passes `--no-timeline`: the measured-timeline sidecar is a CLI feature and is not produced by the app.
 - After a completed alignment, editing and saving marks the row as needing a realign. The panel only saves; the row’s start button runs align or transcribe for that task.
 
 ## Smoke
@@ -70,7 +68,7 @@ DISPLAY=:4 node scripts/launch-smoke.mjs
 ## Known gaps vs the previous UI
 
 - **完成反馈不完整**：提示音开关会持久化，但没有任何播放实现；批量结束也没有汇总或提醒音。
-- **模型下载限制**：一次只能下一个，只列 catalog 里缺失的模型；没有重新下载与速度显示；「打开模型目录」固定打开 `appRoot/models`。
+- **模型下载限制**：一次只能下一个；下载落到当前显示的模型路径（保存后该路径用于转写），没有速度显示；「打开模型目录」固定打开 `appRoot/models`。
 - **Shell 健壮性**：没有单实例锁与版本号标签；渲染进程崩溃不进 `oneasr-error.log`；设置保存失败没有 UI 提示。
 - **设置护栏较弱**：UI 允许把 SRT/TXT/ASS 全部关掉（运行时 core 会强制恢复 SRT）；下载中仍可改 ASR 尺寸/对齐器；Demucs 可以在缺权重时打开；热词可以绑到不支持的语言。
 - **ASS 只生成不预览**：可以写 `.ass`，但没有内置播放器（旧版也没有）。

@@ -141,6 +141,9 @@ export function writeTaskLog(id: string, body: string): void {
 export function installProcessHandlers(): void {
   process.on('uncaughtException', (error) => {
     append('PANIC', `uncaughtException\n${describe(error)}`)
+    // 加了 handler 后 Node 不再按默认行为退出；继续跑只会在未知状态下
+    // 产生更多错误。留完现场就退出，交给用户重启。
+    app.exit(1)
   })
   process.on('unhandledRejection', (reason) => {
     append('ERROR', `unhandledRejection\n${describe(reason)}`)

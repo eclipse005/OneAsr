@@ -29,7 +29,8 @@ const api: OneAsrApi = {
   saveSettings: (settings: Settings) => ipcRenderer.invoke('settings:save', settings),
   resetSettings: () => ipcRenderer.invoke('settings:reset'),
   getStatus: () => ipcRenderer.invoke('models:status'),
-  startDownload: (model: string) => ipcRenderer.invoke('download:start', model),
+  startDownload: (model: string, targetDir?: string) =>
+    ipcRenderer.invoke('download:start', model, targetDir),
   cancelDownload: () => ipcRenderer.invoke('download:cancel'),
   getDownloadState: () => ipcRenderer.invoke('download:state'),
   onDownloadUpdated: (cb) => {
@@ -76,12 +77,6 @@ const api: OneAsrApi = {
     const listener = (_: Electron.IpcRendererEvent, tasks: TaskSnapshot[]): void => cb(tasks)
     ipcRenderer.on('tasks:updated', listener)
     return () => ipcRenderer.removeListener('tasks:updated', listener)
-  },
-  onTaskProgress: (cb) => {
-    const listener = (_: Electron.IpcRendererEvent, payload: { id: string; line: string }): void =>
-      cb(payload)
-    ipcRenderer.on('task:progress', listener)
-    return () => ipcRenderer.removeListener('task:progress', listener)
   },
   onStatsUpdated: (cb) => {
     const listener = (_: Electron.IpcRendererEvent, stats: StatsSnapshot): void => cb(stats)

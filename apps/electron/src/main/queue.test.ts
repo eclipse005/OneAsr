@@ -259,4 +259,30 @@ describe('JobQueue（排队 / 取消 / 泵出的纯状态机）', () => {
     expect(h.queue.isRunning('A')).toBe(true)
     expect(h.queue.view().busy).toBe(true)
   })
+
+  it('isActive：当前 run 与已入队都算，撤下/待处理不算', () => {
+    const h = new Harness()
+    h.enqueue('A')
+    h.enqueue('B')
+    expect(h.queue.isActive('A')).toBe(true)
+    expect(h.queue.isActive('B')).toBe(true)
+    expect(h.queue.isActive('C')).toBe(false)
+    // B 还在排队区，撤下来就不算 active 了。
+    h.cancel('B')
+    expect(h.queue.isActive('B')).toBe(false)
+    expect(h.queue.isActive('A')).toBe(true)
+  })
+
+  it('isCancelling：只认当前 run，且取消后重开同一行也不影响旧 run', () => {
+    const h = new Harness()
+    h.enqueue('A')
+    h.enqueue('B')
+    h.cancel('A')
+    expect(h.queue.isCancelling(1)).toBe(true)
+    expect(h.queue.isCancelling(2)).toBe(false)
+    // 取消后马上重开 A：A 进队列（B 仍在前面），但旧 run 仍然是取消态。
+    h.enqueue('A')
+    expect(h.queue.isCancelling(1)).toBe(true)
+    expect(h.queue.queueRank('A')).toBe(2)
+  })
 })

@@ -14,8 +14,11 @@ import type {
   TranscriptInfo
 } from '../shared/types'
 import { DEFAULT_APP_ROOT, loadSettings, outputFlags, resolveCli } from './settings'
-import { runCliJson } from './cli'
+import { cliEnv, runCliJson } from './cli'
 import { parseCliEvent } from './cli-events'
+import { LineBuffer } from '../shared/line-buffer'
+import { createLimit } from '../shared/limit'
+import { countCues } from '../shared/cue-count'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
 import { logError, logWarn, writeTaskLog } from './log'
 import { m } from './i18n'
@@ -73,6 +76,14 @@ export class JobManager extends EventEmitter {
    */
   private readonly queue = new JobQueue<TaskSnapshot>()
   private readonly children = new Map<RunId, ChildProcess>()
+  /** 批量导入的探针闸门：每个探针都会 spawn CLI + ffmpeg，不能无界并发。 */
+  private readonly probeLimit = createLimit(2)
+  /**
+   * 正在等 `status` 门禁返回的启动。取消可能落在这个窗口里：此时任务既不在
+   * 队列里也没有 child，`queue.cancel` 只能返回 absent。把它记下来，取消时
+   * 直接把行标成 cancelled，门禁返回后 startOne/startAll 就不会再起进程。
+   */
+  private readonly starting = new Set<string>()
   /** task id → 文稿正文；任务移除 / 清空时同步删除 */
   private readonly transcripts = new Map<string, StagedTranscript>()
   private sessionRecent: StatsSnapshot['recentSession'] = []
@@ -184,8 +195,9 @@ export class JobManager extends EventEmitter {
         }
       }
       this.tasks.push(task)
-      // 尺寸/时长/类型后台问 CLI，拿到再刷新那一行（不阻塞加入）
-      void probeInput(p).then((probe) => {
+      // 尺寸/时长/类型后台问 CLI，拿到再刷新那一行（不阻塞加入）。
+      // 探针有上限：一次拖入几十个文件时不能同时起几十个 CLI + ffmpeg。
+      void this.probeLimit(() => probeInput(p)).then((probe) => {
         if (!probe) return
         task.sizeBytes = probe.size_bytes
         task.durationSec = probe.duration_sec ?? undefined
@@ -236,7 +248,7 @@ export class JobManager extends EventEmitter {
 
   getTranscript(id: string): TranscriptEditResult {
     const staged = this.transcripts.get(id)
-    if (!staged) return { ok: false, error: 'no transcript' }
+    if (!staged) return { ok: false, error: m().noTranscript }
     return { ok: true, text: staged.text, info: staged.info }
   }
 
@@ -277,7 +289,7 @@ export class JobManager extends EventEmitter {
     const task = this.tasks.find((t) => t.id === id)
     const staged = this.transcripts.get(id)
     if (!task || !staged || this.transcriptLocked(task)) {
-      return { ok: false, error: 'transcript unavailable', tasks: this.list() }
+      return { ok: false, error: m().transcriptUnavailable, tasks: this.list() }
     }
     const r = await inspectTranscriptText(text, staged.info.name, task.durationSec)
     if (!r.ok || r.text == null || !r.info) {
@@ -303,7 +315,7 @@ export class JobManager extends EventEmitter {
     const task = this.tasks.find((t) => t.id === id)
     const staged = this.transcripts.get(id)
     if (!task || !staged || this.transcriptLocked(task)) {
-      return { ok: false, error: 'transcript unavailable', tasks: this.list() }
+      return { ok: false, error: m().transcriptUnavailable, tasks: this.list() }
     }
     const settings = loadSettings()
     const r = await splitTranscriptText(
@@ -336,10 +348,10 @@ export class JobManager extends EventEmitter {
     const task = this.tasks.find((t) => t.id === id)
     const staged = this.transcripts.get(id)
     if (!task || !staged || this.transcriptLocked(task)) {
-      return { ok: false, error: 'transcript unavailable', tasks: this.list() }
+      return { ok: false, error: m().transcriptUnavailable, tasks: this.list() }
     }
     if (!staged.info.path) {
-      return { ok: false, error: 'transcript has no source file', tasks: this.list() }
+      return { ok: false, error: m().transcriptUnavailable, tasks: this.list() }
     }
     const r = await inspectTranscriptFile(staged.info.path, task.durationSec)
     if (!r.ok || r.text == null || !r.info) {
@@ -404,21 +416,25 @@ export class JobManager extends EventEmitter {
       return { ok: false, reason: task.transcript.error }
     }
     if (isTranscript && !this.transcripts.has(task.id)) {
-      return { ok: false, reason: 'transcript unavailable' }
+      return { ok: false, reason: m().transcriptUnavailable }
     }
     const args = ['status', '--json', '--language', task.language || settings.language || 'zh']
+    // 把这一趟真正会用的模型 id 显式告诉 CLI：没有 settings.json 时 status
+    // 与 transcribe 都按这个 id 解析，避免一边扫描、一边按精确 id 起跑。
+    if (settings.asr_model) args.push('--asr', settings.asr_model)
     if (isTranscript) {
       // 文稿任务固定 CTC；--transcript 让 status 提前检查「至少 SRT 或 ASS」。
       args.push('--transcript', '--aligner', CTC_ALIGNER_ID)
-    } else if (task.hotwordGroupId) {
-      args.push('--hotword-group', task.hotwordGroupId)
+    } else {
+      if (settings.aligner_model) args.push('--aligner', settings.aligner_model)
+      if (task.hotwordGroupId) args.push('--hotword-group', task.hotwordGroupId)
     }
     if (task.vocalSeparation) args.push('--vocal-separation')
     if (settings.output_txt) args.push('--txt')
     if (settings.output_ass) args.push('--ass')
     if (!settings.output_srt) args.push('--no-srt')
     const r = await runCliJson<StatusSnapshot>(args, 20000)
-    if (!r.ok || !r.data) return { ok: false, reason: r.error ?? 'cli status failed' }
+    if (!r.ok || !r.data) return { ok: false, reason: r.error ?? m().cliStatusFailed }
     return r.data.can_start.ok
       ? { ok: true }
       : { ok: false, reason: r.data.can_start.reason ?? undefined }
@@ -459,7 +475,17 @@ export class JobManager extends EventEmitter {
       this.emitUpdate()
       return
     }
-    if (result.outcome !== 'running') return
+    if (result.outcome !== 'running') {
+      // 还在等启动门禁：没有队列项、没有 child，但这一行确实“正在开始”。
+      // 标记取消，门禁返回后的复查会放弃启动。
+      if (this.starting.has(id)) {
+        t.status = 'cancelled'
+        t.progress = 'cancelled'
+        t.finishedAt = Date.now()
+        this.emitUpdate()
+      }
+      return
+    }
 
     t.status = 'cancelled'
     t.progress = 'cancelled'
@@ -494,12 +520,22 @@ export class JobManager extends EventEmitter {
   async startOne(id: string): Promise<StartResult> {
     const t = this.tasks.find((x) => x.id === id)
     if (!t || t.status === 'running') return { ok: false, code: 'nothing-to-start' }
-    const gate = await this.canStart(t)
-    if (!gate.ok) return { ok: false, code: 'cli', reason: gate.reason }
-    this.prepareQueued(t)
-    this.runCommands(this.queue.enqueue(t))
-    this.emitUpdate()
-    return { ok: true }
+    this.starting.add(id)
+    try {
+      const gate = await this.canStart(t)
+      if (!gate.ok) return { ok: false, code: 'cli', reason: gate.reason }
+      // gate 是异步的（spawn CLI）。等待期间这一行可能已经被另一个启动调用
+      // 跑起来/排上队；此时不能再 prepareQueued，否则会把 running 重置成 queued。
+      if (!this.tasks.includes(t)) return { ok: false, code: 'nothing-to-start' }
+      if (this.queue.isActive(t.id)) return { ok: true }
+      if (t.status === 'cancelled') return { ok: false, code: 'nothing-to-start' }
+      this.prepareQueued(t)
+      this.runCommands(this.queue.enqueue(t))
+      this.emitUpdate()
+      return { ok: true }
+    } finally {
+      this.starting.delete(id)
+    }
   }
 
   async startAll(): Promise<StartResult> {
@@ -507,27 +543,41 @@ export class JobManager extends EventEmitter {
     const candidates = this.tasks.filter((t) =>
       isBulkStartCandidate(t.status, this.queue.queueRank(t.id) !== undefined)
     )
-    // 每行可能带着不同的语言/人声分离/热词组，门禁逐个问（并发，N 很小）
-    const gates = await Promise.all(candidates.map((t) => this.canStart(t)))
-    let firstReason: string | undefined
-    const accepted: TaskSnapshot[] = []
-    for (let i = 0; i < candidates.length; i++) {
-      const t = candidates[i]
-      if (!gates[i].ok) {
-        firstReason ??= gates[i].reason
-        continue
+    for (const t of candidates) this.starting.add(t.id)
+    try {
+      // 每行可能带着不同的语言/人声分离/热词组，门禁逐个问（并发，N 很小）
+      const gates = await Promise.all(candidates.map((t) => this.canStart(t)))
+      let firstReason: string | undefined
+      const accepted: TaskSnapshot[] = []
+      for (let i = 0; i < candidates.length; i++) {
+        const t = candidates[i]
+        if (!gates[i].ok) {
+          firstReason ??= gates[i].reason
+          continue
+        }
+        // 与 startOne 同一个复查：等待门禁期间被另一条路径启动/取消的行跳过，
+        // 不重置它的运行态。
+        if (
+          !this.tasks.includes(t) ||
+          t.status === 'cancelled' ||
+          this.queue.isActive(t.id)
+        ) {
+          continue
+        }
+        this.prepareQueued(t)
+        accepted.push(t)
       }
-      this.prepareQueued(t)
-      accepted.push(t)
+      if (accepted.length === 0) {
+        return firstReason != null
+          ? { ok: false, code: 'cli', reason: firstReason }
+          : { ok: false, code: 'nothing-to-start' }
+      }
+      for (const t of accepted) this.runCommands(this.queue.enqueue(t))
+      this.emitUpdate()
+      return { ok: true }
+    } finally {
+      for (const t of candidates) this.starting.delete(t.id)
     }
-    if (accepted.length === 0) {
-      return firstReason != null
-        ? { ok: false, code: 'cli', reason: firstReason }
-        : { ok: false, code: 'nothing-to-start' }
-    }
-    for (const t of accepted) this.runCommands(this.queue.enqueue(t))
-    this.emitUpdate()
-    return { ok: true }
   }
 
   private emitUpdate(): void {
@@ -606,7 +656,7 @@ export class JobManager extends EventEmitter {
     const cmdline = [cli, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
     const child = spawn(cli, args, {
       cwd: appRoot,
-      env: { ...process.env, ONEASR_DATA_DIR: appRoot },
+      env: cliEnv(appRoot),
       windowsHide: true,
       // POSIX：独立进程组，取消/退出时才能把 ffmpeg 这类后代一起收掉
       detached: process.platform !== 'win32'
@@ -618,75 +668,67 @@ export class JobManager extends EventEmitter {
     /** CLI 结构化报错（error 事件）；失败摘要优先用它，见下面的收尾处理 */
     let eventError: string | undefined
 
-    const onLine = (buf: Buffer, stream: 'out' | 'err'): void => {
-      const text = buf.toString('utf8')
-      if (stream === 'err') stderr += text
-      for (const line of text.split(/\r?\n/)) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        if (stream === 'err') {
-          // 人读行进 UI 的「原始输出」（阶段类噪音不会再出现：阶段走事件流）
-          task.progress = trimmed.slice(0, 220)
-          this.emit('progress', { id: task.id, line: trimmed })
-          this.emitUpdate()
-          continue
-        }
-        const ev = parseCliEvent(trimmed)
-        if (!ev) continue
-        switch (ev.event) {
-          case 'stage':
-            // key 是稳定标识（界面文案按它出），label 只是 CLI 那边的说法，留着兜底
-            if (ev.key) task.stageKey = ev.key
-            if (ev.label) {
-              task.stage = ev.label
-              this.emit('progress', { id: task.id, line: ev.label })
-            }
-            if (typeof ev.pct === 'number') task.progressPct = ev.pct
-            // 没带分段（换阶段，或只有一段）就把上一阶段的 2/5 清掉。
-            if (
-              typeof ev.chunk === 'number' &&
-              typeof ev.chunkTotal === 'number' &&
-              ev.chunkTotal > 1
-            ) {
-              task.stageChunk = ev.chunk
-              task.stageChunkTotal = ev.chunkTotal
-            } else {
-              task.stageChunk = undefined
-              task.stageChunkTotal = undefined
-            }
-            break
-          case 'timing':
-            if (ev.label && typeof ev.ms === 'number') {
-              stageTimings.push({ key: ev.key, stage: ev.label, ms: ev.ms })
-            }
-            break
-          case 'total':
-            if (typeof ev.ms === 'number') task.totalMs = ev.ms
-            break
-          case 'done':
-            // CLI 说的产物路径优先；字面量路径由 CLI 决定（它就是写盘的那个）
-            if (ev.output) task.outputPath = ev.output
-            break
-          case 'error':
-            if (ev.message) {
-              eventError = ev.message
-              task.error = ev.message
-            }
-            break
-        }
-        this.emitUpdate()
+    const stdoutLines = new LineBuffer()
+    const onStdoutLine = (line: string): void => {
+      const ev = parseCliEvent(line)
+      if (!ev) return
+      switch (ev.event) {
+        case 'stage':
+          // key 是稳定标识（界面文案按它出），label 只是 CLI 那边的说法，留着兜底
+          if (ev.key) task.stageKey = ev.key
+          if (ev.label) task.stage = ev.label
+          if (typeof ev.pct === 'number') task.progressPct = ev.pct
+          // 没带分段（换阶段，或只有一段）就把上一阶段的 2/5 清掉。
+          if (
+            typeof ev.chunk === 'number' &&
+            typeof ev.chunkTotal === 'number' &&
+            ev.chunkTotal > 1
+          ) {
+            task.stageChunk = ev.chunk
+            task.stageChunkTotal = ev.chunkTotal
+          } else {
+            task.stageChunk = undefined
+            task.stageChunkTotal = undefined
+          }
+          break
+        case 'timing':
+          if (ev.label && typeof ev.ms === 'number') {
+            stageTimings.push({ key: ev.key, stage: ev.label, ms: ev.ms })
+          }
+          break
+        case 'total':
+          if (typeof ev.ms === 'number') task.totalMs = ev.ms
+          break
+        case 'done':
+          // CLI 说的产物路径优先；字面量路径由 CLI 决定（它就是写盘的那个）
+          if (ev.output) task.outputPath = ev.output
+          break
+        case 'error':
+          if (ev.message) {
+            eventError = ev.message
+            task.error = ev.message
+          }
+          break
       }
+      // 只在事件行刷新 UI；stderr 的人读行不再逐行触发一次全量下发。
+      this.emitUpdate()
     }
 
-    child.stdout?.on('data', (b) => onLine(b, 'out'))
-    child.stderr?.on('data', (b) => onLine(b, 'err'))
+    child.stdout?.on('data', (b) => stdoutLines.push(b.toString('utf8'), onStdoutLine))
+    child.stderr?.on('data', (b) => {
+      stderr += b.toString('utf8')
+    })
 
     child.on('close', (code) => {
       if (settled) return
       settled = true
+      // 最后一行可能没有换行结尾（CLI 正常 println 会带，但不能依赖它）。
+      stdoutLines.flush(onStdoutLine)
       this.children.delete(runId)
       cleanupTempTranscript()
-      const wasCancel = task.status === 'cancelled'
+      // 取消意图属于**这次 run**，不属于会变的 task.status：取消后用户可能
+      // 马上重开同一行，状态那时候已经是 queued 了。
+      const wasCancel = this.queue.isCancelling(runId)
       task.finishedAt = Date.now()
       const durationMs = (task.finishedAt || 0) - (task.startedAt || 0)
       this.lastDurationMs = durationMs
@@ -700,6 +742,7 @@ export class JobManager extends EventEmitter {
         })
         this.sessionRecent = this.sessionRecent.slice(0, 20)
         this.emitUpdate()
+        this.emit('stats', this.getStats())
         this.runCommands(this.queue.childClosed(runId))
         return
       }
@@ -714,13 +757,7 @@ export class JobManager extends EventEmitter {
       let cues = 0
       if (produced) {
         try {
-          cues = fs
-            .readFileSync(produced, 'utf8')
-            .split(/\n/)
-            .filter((l) => /^\d+$/.test(l.trim()) || (/-->/.test(l) === false && l.trim() && !/^\d+$/.test(l.trim()))).length
-          // rough cue count for srt: count arrow lines
-          const arrows = fs.readFileSync(produced, 'utf8').split(/\n/).filter((l) => l.includes('-->')).length
-          if (arrows > 0) cues = arrows
+          cues = countCues(produced, fs.readFileSync(produced, 'utf8'))
         } catch {
           cues = 0
         }
@@ -848,8 +885,17 @@ export class JobManager extends EventEmitter {
       '--backend',
       settings.backend || 'auto',
       '--chunk-seconds',
-      String(settings.chunk_target_seconds || 60)
+      String(settings.chunk_target_seconds || 60),
+      // GUI 不消费 .timeline.json，align 也不需要边车文件。
+      '--no-timeline'
     ]
+    if (
+      settings.text_script === 'original' ||
+      settings.text_script === 'simplified' ||
+      settings.text_script === 'traditional'
+    ) {
+      args.push('--script', settings.text_script)
+    }
     if (settings.output_txt) args.push('--txt')
     if (settings.output_ass) args.push('--ass')
     if (!settings.output_srt) args.push('--no-srt')
@@ -881,8 +927,17 @@ export class JobManager extends EventEmitter {
       '--backend',
       settings.backend || 'auto',
       '--chunk-seconds',
-      String(settings.chunk_target_seconds || 60)
+      String(settings.chunk_target_seconds || 60),
+      // GUI 不消费 .timeline.json；TXT-only 时也不该因此被迫加载对齐器。
+      '--no-timeline'
     ]
+    if (
+      settings.subtitle_length_preset === 'short' ||
+      settings.subtitle_length_preset === 'standard' ||
+      settings.subtitle_length_preset === 'loose'
+    ) {
+      args.push('--preset', settings.subtitle_length_preset)
+    }
 
     // 直接透传设置里的模型 id：CLI 的 parse_asr_arg / parse_aligner_arg 既认友好别名
     // 也认完整目录名（目录名只有 catalog 一处真源）。以前壳里自己按字符串猜
@@ -895,7 +950,11 @@ export class JobManager extends EventEmitter {
     if (!settings.output_srt) args.push('--no-srt')
     args.push(...outputFlags(settings))
     if (settings.subtitle_beautify) args.push('--beautify')
-    if (settings.text_script === 'simplified' || settings.text_script === 'traditional') {
+    if (
+      settings.text_script === 'original' ||
+      settings.text_script === 'simplified' ||
+      settings.text_script === 'traditional'
+    ) {
       args.push('--script', settings.text_script)
     }
     if (task.vocalSeparation ?? settings.vocal_separation) {

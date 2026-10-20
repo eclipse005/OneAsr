@@ -645,9 +645,10 @@ Commands:
                pipeline (inspect); used by the GUI before alignment
   render       Re-present a measured timeline. No models, no ffmpeg, no audio:
                reads {stem}.timeline.json and writes a subtitle again
-  download     Download one model (ASR / aligner / Demucs / hotword) into
-               {data-root}/models/<install-layout name>; already complete files
-               are never downloaded twice
+  download     Download one model (ASR / aligner / Demucs / hotword) into its
+               per-model path from settings.json, or {data-root}/models/<name>
+               when no settings exist; already complete files are never
+               downloaded twice
   status       Machine-readable state of this install: roots, the selected
                models, readiness (the same check_*_model_dir the pipeline uses),
                all 8 catalog entries, the media extensions OneAsr accepts, and
@@ -679,7 +680,11 @@ status options:
                            Exits 0 even when can_start.ok is false: the verdict is
                            the field, not the exit code
   --language <code>        This row recognizes as <code>
+  --asr <0.6b|1.7b|dir>    Ask about this ASR model instead of the selected one
   --aligner <ctc|qwen>     Ask about this aligner instead of the selected one
+  --asr-model-dir <dir>    Ask about this ASR directory for the selected model
+  --aligner-model-dir <dir>
+                           Ask about this aligner directory for the selected model
   --transcript             This row matches a transcript: require SRT or ASS
                            and ask about the CTC aligner
   --vocal-separation       This row runs vocal separation (Demucs becomes required)
@@ -716,11 +721,19 @@ transcribe options:
   --language <code>        zh|en|yue|ja|ko|...  (default: zh)
   --chunk-seconds <30-180> VAD chunk target (default: 60)
   --backend <gpu|cpu|auto> Default: auto (GPU if a driver is present, else CPU)
-  --asr <0.6b|1.7b>         Recognition model. A size (0.6b / 1.7b) takes that
+  --asr <0.6b|1.7b|dir>    Recognition model. A size (0.6b / 1.7b) takes that
                            size's fp16 or int8 form, fp16 first; an exact
-                           directory name (e.g. Qwen3-ASR-1.7B-int8) takes only
-                           that one. Default: scan installed dirs, fp16 before int8
-  --aligner <ctc|qwen>     Forced-aligner engine (default: scan CTC first, then Qwen)
+                           directory name takes only that one. Without the flag,
+                           settings.json's selection wins; with no settings file,
+                           installed dirs are scanned (fp16 before int8)
+  --asr-model-dir <dir>    Override this run's ASR directory (per-model config
+                           from settings.json wins when the flag is absent)
+  --aligner <ctc|qwen>     Forced-aligner engine (settings.json selection when
+                           the flag is absent; no settings -> scan CTC first)
+  --aligner-model-dir <dir>
+                           Override this run's aligner directory
+  --preset <short|standard|loose>
+                           Subtitle length preset (default: standard)
   --max-new-tokens <n>     ASR decode ceiling (default: settings / 2048)
   --output <path>          Copy the primary result (SRT, else TXT) to this path
   --output-dir <dir>       Directory for all enabled outputs (default: {data-root}/output).
@@ -733,8 +746,8 @@ transcribe options:
   --no-timeline            Suppress the .timeline.json sidecar. With no timed output
                            left the aligner is not loaded at all
                            (--txt --no-srt --no-timeline = transcription only)
-  --script <simplified|traditional>
-                           Chinese output script for zh / yue (default: simplified)
+  --script <original|simplified|traditional>
+                           Chinese output script for zh / yue (default: original)
   --vocal-separation       Run HTDemucs vocal separation before ASR
   --demucs-model-dir <dir> Directory holding htdemucs_ft_vocals.safetensors
   --words-json <path>      Write ForcedAligner word/char tokens + timestamps (JSON)
@@ -775,6 +788,12 @@ align options:
   --ass                    Also write {stem}.ass (karaoke)
   --no-srt                 Suppress the .srt file. Transcript matching needs a
                            timestamped output, so this is only valid with --ass
+  --no-timeline            Suppress the .timeline.json sidecar
+  --script <original|simplified|traditional>
+                           Chinese output script for zh / yue (default: from
+                           settings.json when present, else original)
+  --aligner-model-dir <dir>
+                           Override this run's CTC aligner directory
   --output-dir <dir>       Directory for all enabled outputs (default: {data-root}/output)
   --save-next-to-source    Write outputs next to the source media (GUI default);
                            --output-dir is then only the fallback
@@ -801,7 +820,7 @@ render options:
                            the layout DP's. Reads a .txt / .srt, ignores its timings
   --preset <id>            Segment length: short|standard|loose
                            (default: the one the timeline was measured with)
-  --script <simplified|traditional>
+  --script <original|simplified|traditional>
                            Chinese output script, as in transcribe
   --txt                    Also write {stem}.txt (one sentence per line)
   --ass                    Also write {stem}.ass (karaoke)
@@ -821,6 +840,8 @@ download options:
                            as downloaded (default: this exe's install dir)
   --data-root <dir>        Data directory; new weights land in {data-root}/models/
                            (default: --app-root)
+  --model-dir <dir>        Download this model into this exact directory (wins
+                           over the per-model path in settings.json)
 
 download progress (all on one line each; wrapped here for width):
   stderr                   one human-readable line per update (bilingual)
@@ -828,9 +849,10 @@ download progress (all on one line each; wrapped here for width):
                            order:
                              [download] state=<downloading|verifying|done|error>
                              model=<id> done=<bytes> total=<bytes> pct=<0-100>
-                             [speed=<bytes/s>] [dir=\"<path>\"]
+                             [speed=<bytes/s>] [dir=\"<path>\"] [message=\"<reason>\"]
                            pct is omitted while total is unknown (0), speed while the
-                           core reported none, dir on terminal lines only.
+                           core reported none, dir on terminal lines only, message on
+                           error lines (newlines folded to spaces, quotes to ').
                            verifying  probing what is already installed
                            done       files passed verification; an already complete
                                       model goes straight from verifying to done
@@ -863,6 +885,8 @@ events (--events=json, transcribe / align):
 
 Env:
   ONEASR_DATA_DIR=<dir>    Override the data directory (same as --data-root)
+  ONEASR_UI_LANG=zh|en     Force UI language for CLI messages (the Electron shell
+                           sets this to the app's UI language)
   ONEASR_PIPELINE_TRACE=1  Per-chunk ASR/align logs
 
 Examples:
@@ -889,8 +913,9 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
                就是字幕的分行（一行 = 一条）。固定用 CTC 对齐器，它能整段一次
                对齐，长音频不必切块：
                读 {stem}.timeline.json，再写一遍字幕
-  download     下载一个模型（识别 / 对齐 / 人声分离 / 热词）到
-               {data-root}/models/<安装布局目录名>；已装好且校验通过的不重下
+  download     下载一个模型（识别 / 对齐 / 人声分离 / 热词）到 settings.json
+               里该模型自己的目录；没有配置时落到 {data-root}/models/<目录名>。
+               已装好且校验通过的不重下
   status       这份安装 + 这份设置的机器可读快照：根目录、选中的模型、就绪
                （与管线同一套 check_*_model_dir）、8 条可选模型、支持的音视频
                扩展名、能不能开跑
@@ -919,7 +944,11 @@ status 选项：
                            音视频扩展名表（音频在前、视频在后，已去重）：壳拿它
                            拼文件过滤器，别再养第二份
   --language <代码>        这一行按 <代码> 识别
+  --asr <0.6b|1.7b|目录名> 问这个识别模型，而不是设置里选中的那个
   --aligner <ctc|qwen>     问这个对齐器，而不是设置里选中的那个
+  --asr-model-dir <目录>   按这个目录问当前选中的识别模型
+  --aligner-model-dir <目录>
+                           按这个目录问当前选中的对齐模型
   --transcript             这一行挂文稿：要求 SRT 或 ASS，并按 CTC 对齐器问门禁
   --vocal-separation       这一行做人声分离（于是要求 Demucs 就位）
   --hotword-group <id|组名>
@@ -949,10 +978,17 @@ transcribe 选项：
   --language <代码>        zh|en|yue|ja|ko|...（默认 zh）
   --chunk-seconds <30-180> VAD 分段目标时长（默认 60）
   --backend <gpu|cpu|auto> 推理后端，默认 auto（有显卡驱动走 GPU，否则 CPU）
-  --asr <0.6b|1.7b>         识别模型。给尺寸（0.6b / 1.7b）就用该尺寸的 fp16 或 int8 变体，
-                           fp16 优先；给完整目录名（如 Qwen3-ASR-1.7B-int8）则只认它
-                           自己。默认按 0.6B→1.7B、fp16 优先的顺序扫描已装目录
-  --aligner <ctc|qwen>     对齐引擎（默认按 CTC→Qwen 顺序扫描已装目录）
+  --asr <0.6b|1.7b|目录名> 识别模型。给尺寸（0.6b / 1.7b）就用该尺寸的 fp16 或 int8 变体，
+                           fp16 优先；给完整目录名则只认它自己。不给这个旗标时，
+                           以 settings.json 的选择为准；完全没有配置文件才按安装
+                           布局扫描已装目录
+  --asr-model-dir <目录>   这一趟改用这个识别目录（不给时用 settings.json 里
+                           该模型自己的目录）
+  --aligner <ctc|qwen>     对齐引擎（不给时用 settings.json 的选择；没有配置才扫描）
+  --aligner-model-dir <目录>
+                           这一趟改用这个对齐目录
+  --preset <short|standard|loose>
+                           字幕长度预设（默认 standard）
   --max-new-tokens <n>     转写解码上限（默认取设置 / 2048）
   --output <路径>          把主产物（SRT，没有则 TXT）复制到该路径
   --output-dir <目录>      所有启用格式的输出目录（默认 {data-root}/output）；
@@ -964,8 +1000,8 @@ transcribe 选项：
   --no-srt                 不写 .srt 文件（需配合 --txt 或 --ass）
   --no-timeline            不写 .timeline.json 边车文件。只有没有任何定时产物时
                            对齐器才不加载（--txt --no-srt --no-timeline = 纯转录）
-  --script <simplified|traditional>
-                           zh / yue 的中文字形（默认 simplified）
+  --script <original|simplified|traditional>
+                           zh / yue 的中文字形（默认 original）
   --vocal-separation       转写前先做人声分离
   --demucs-model-dir <目录> 存放 htdemucs_ft_vocals.safetensors 的目录
   --words-json <路径>      写出 ForcedAligner 的词/字级时间轴（JSON）
@@ -1002,6 +1038,11 @@ align 选项：
   --ass                    额外写出 {stem}.ass（卡拉OK）
   --no-srt                 不写 .srt 文件。文稿匹配需要带时间轴的产物，
                            所以它只能与 --ass 同用
+  --no-timeline            不写 .timeline.json 边车文件
+  --script <original|simplified|traditional>
+                           zh / yue 的中文字形（有 settings.json 时默认沿用，否则 original）
+  --aligner-model-dir <目录>
+                           这一趟改用这个 CTC 对齐目录
   --output-dir <目录>      所有启用格式的输出目录（默认 {data-root}/output）
   --save-next-to-source    输出写到源文件旁（GUI 默认）；--output-dir 此时只作兜底
   --vocal-separation       对齐前先做人声分离
@@ -1023,7 +1064,7 @@ render 选项：
                            读 .txt / .srt，忽略它原有的时间轴
   --preset <id>            分段时长：short|standard|loose
                            （默认沿用测量时的那个）
-  --script <simplified|traditional>
+  --script <original|simplified|traditional>
                            中文字形，同 transcribe
   --txt                    额外写出 {stem}.txt（一行一句）
   --no-srt                 不写 .srt 文件（需配合 --txt）
@@ -1042,15 +1083,18 @@ download 选项：
                            （默认取本程序安装目录）
   --data-root <目录>       数据目录；新权重落在 {data-root}/models/ 下
                            （默认取 --app-root）
+  --model-dir <目录>       把这个模型下载到这个确切目录（优先于 settings.json
+                           里该模型自己的路径）
 
 download 进度（每行都是一整行，这里为排版折行）：
   stderr                   每次更新一行人读文本（双语）
   stdout                   每次更新一行机器可读文本，键名与顺序固定：
                              [download] state=<downloading|verifying|done|error>
                              model=<id> done=<bytes> total=<bytes> pct=<0-100>
-                             [speed=<bytes/s>] [dir=\"<路径>\"]
+                             [speed=<bytes/s>] [dir=\"<路径>\"] [message=\"<原因>\"]
                            total 未知（0）时不带 pct，速度未知时不带 speed，
-                           dir 只在终态出现。
+                           dir 只在终态出现，message 只在 error 行出现（换行折成
+                           空格、引号换成单引号）。
                            verifying  正在检查已装文件
                            done       校验通过；已经装好的模型会从 verifying 直接到 done
                            error      退出码非 0，原因在 stderr（双语）
@@ -1078,6 +1122,7 @@ download 进度（每行都是一整行，这里为排版折行）：
 
 环境变量：
   ONEASR_DATA_DIR=<目录>   覆盖数据目录（等价于 --data-root）
+  ONEASR_UI_LANG=zh|en     强制 CLI 文案语言（Electron 壳会设成界面的 UI 语言）
   ONEASR_PIPELINE_TRACE=1  打印每个分段的转写/对齐细节
 
 示例：
@@ -1149,6 +1194,19 @@ pub fn cli_preset_unknown(raw: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("未知的分段时长：{raw}（可选 short | standard | loose）"),
         UiLang::En => format!("Unknown segment length: {raw} (choose short | standard | loose)"),
+    }
+}
+
+/// `未知的中文字形：{raw}（可选 original | simplified | traditional）`
+/// / `Unknown Chinese script: {raw} (choose original | simplified | traditional)`。
+pub fn cli_script_unknown(raw: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => {
+            format!("未知的中文字形：{raw}（可选 original | simplified | traditional）")
+        }
+        UiLang::En => {
+            format!("Unknown Chinese script: {raw} (choose original | simplified | traditional)")
+        }
     }
 }
 
@@ -1493,6 +1551,7 @@ pub fn cli_download_event(
     total: u64,
     speed: u64,
     dir: Option<&std::path::Path>,
+    message: Option<&str>,
 ) -> String {
     let mut line = format!("[download] state={state} model={model} done={done} total={total}");
     if let Some(pct) = percent_of(done, total) {
@@ -1503,6 +1562,17 @@ pub fn cli_download_event(
     }
     if let Some(dir) = dir {
         line.push_str(&format!(" dir=\"{}\"", dir.display()));
+    }
+    if let Some(message) = message {
+        // 机器行必须始终是一行：换行、引号会把上层解析搞坏。错误原文里的
+        // 换行折成空格，引号换成单引号，长度上限 300 字符。
+        let one_line: String = message
+            .replace(['\r', '\n'], " ")
+            .replace('"', "'")
+            .chars()
+            .take(300)
+            .collect();
+        line.push_str(&format!(" message=\"{one_line}\""));
     }
     line
 }
@@ -2201,27 +2271,44 @@ mod tests {
                         1_073_741_824,
                         2_147_483_648,
                         8_388_608,
+                        None,
                         None
                     ),
                     "[download] state=downloading model=Qwen3-ASR-0.6B-hf done=1073741824 total=2147483648 pct=50 speed=8388608"
                 );
                 // total 未知：pct 整段缺省（不是 pct=0）。
                 assert_eq!(
-                    cli_download_event("verifying", "htdemucs_ft", 0, 0, 0, None),
+                    cli_download_event("verifying", "htdemucs_ft", 0, 0, 0, None, None),
                     "[download] state=verifying model=htdemucs_ft done=0 total=0"
                 );
                 // 终态带 dir；路径可能含空格，所以加引号。
                 assert_eq!(
-                    cli_download_event("done", "htdemucs_ft", 84_025_440, 84_025_440, 0, Some(dir)),
+                    cli_download_event(
+                        "done",
+                        "htdemucs_ft",
+                        84_025_440,
+                        84_025_440,
+                        0,
+                        Some(dir),
+                        None
+                    ),
                     format!(
                         "[download] state=done model=htdemucs_ft done=84025440 total=84025440 pct=100 dir=\"{}\"",
                         dir.display()
                     )
                 );
-                // 失败：状态叫 error（不是 failed），速度缺省。
+                // 失败：状态叫 error（不是 failed），速度缺省；error 行带 message。
                 assert_eq!(
-                    cli_download_event("error", "htdemucs_ft", 100, 200, 0, None),
-                    "[download] state=error model=htdemucs_ft done=100 total=200 pct=50"
+                    cli_download_event(
+                        "error",
+                        "htdemucs_ft",
+                        100,
+                        200,
+                        0,
+                        None,
+                        Some("connection reset\nretry")
+                    ),
+                    "[download] state=error model=htdemucs_ft done=100 total=200 pct=50 message=\"connection reset retry\""
                 );
             });
         }

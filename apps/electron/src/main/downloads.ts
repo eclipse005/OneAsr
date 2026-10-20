@@ -2,6 +2,8 @@ import { ChildProcess, spawn } from 'child_process'
 import { EventEmitter } from 'events'
 import type { DownloadState } from '../shared/types'
 import { DEFAULT_APP_ROOT, resolveCli } from './settings'
+import { cliEnv } from './cli'
+import { LineBuffer } from '../shared/line-buffer'
 import { logError } from './log'
 
 /**
@@ -30,10 +32,19 @@ export class DownloadManager extends EventEmitter {
     return this.child !== null
   }
 
-  start(model: string): { ok: boolean; code?: 'busy' | 'spawn' } {
+  start(model: string, targetDir?: string): { ok: boolean; code?: 'busy' | 'spawn' } {
     if (this.child) return { ok: false, code: 'busy' }
     const cli = resolveCli()
-    const args = ['download', '--model', model, '--app-root', DEFAULT_APP_ROOT, '--data-root', DEFAULT_APP_ROOT]
+    const args = [
+      'download',
+      '--model',
+      model,
+      '--app-root',
+      DEFAULT_APP_ROOT,
+      '--data-root',
+      DEFAULT_APP_ROOT
+    ]
+    if (targetDir) args.push('--model-dir', targetDir)
     this.current = {
       model,
       state: 'verifying',
@@ -48,7 +59,7 @@ export class DownloadManager extends EventEmitter {
     try {
       child = spawn(cli, args, {
         cwd: DEFAULT_APP_ROOT,
-        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT },
+        env: cliEnv(),
         windowsHide: true
       })
     } catch (error) {
@@ -59,21 +70,21 @@ export class DownloadManager extends EventEmitter {
     }
     this.child = child
 
-    const onLine = (buf: Buffer, stream: 'out' | 'err'): void => {
-      for (const raw of buf.toString('utf8').split(/\r?\n/)) {
-        const line = raw.trim()
-        if (!line) continue
-        if (stream === 'err') continue // 双语人读行不进 UI（UI 有自己的文案）
-        const parsed = parseEvent(line)
-        if (!parsed) continue
-        this.current = { ...parsed, dir: parsed.dir ?? this.current?.dir }
-        this.emit('updated', this.current)
-      }
+    const stdoutLines = new LineBuffer()
+    let stderr = ''
+    const onStdoutLine = (line: string): void => {
+      const parsed = parseEvent(line)
+      if (!parsed) return
+      this.current = { ...parsed, dir: parsed.dir ?? this.current?.dir }
+      this.emit('updated', this.current)
     }
-    child.stdout?.on('data', (b) => onLine(b, 'out'))
-    child.stderr?.on('data', (b) => onLine(b, 'err'))
+    child.stdout?.on('data', (b) => stdoutLines.push(b.toString('utf8'), onStdoutLine))
+    child.stderr?.on('data', (b) => {
+      stderr += b.toString('utf8')
+    })
 
     child.on('close', (code) => {
+      stdoutLines.flush(onStdoutLine)
       this.child = null
       const prev = this.current
       if (prev && prev.state !== 'done' && prev.state !== 'error') {
@@ -82,7 +93,10 @@ export class DownloadManager extends EventEmitter {
           ...prev,
           state: code === 0 ? 'done' : 'error',
           pct: code === 0 ? 100 : prev.pct,
-          message: code === 0 ? undefined : `exit ${code}`
+          message:
+            code === 0
+              ? undefined
+              : prev.message ?? (stderr.trim().slice(-300) || `exit ${code}`)
         }
         this.emit('updated', this.current)
       }
@@ -147,6 +161,7 @@ function parseEvent(line: string): DownloadState | null {
     totalBytes: Number.isFinite(total) ? total : 0,
     pct: Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 0,
     speed,
-    dir: kv.get('dir')
+    dir: kv.get('dir'),
+    message: kv.get('message')
   }
 }

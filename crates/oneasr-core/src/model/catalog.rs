@@ -609,15 +609,8 @@ mod tests {
 
     #[test]
     fn every_catalog_file_is_revision_pinned_and_hashed() {
-        for id in [
-            ModelId::Qwen3Asr06B,
-            ModelId::Qwen3Asr17B,
-            ModelId::Qwen3Asr06BInt8,
-            ModelId::Qwen3Asr17BInt8,
-            ModelId::QwenAlign06B,
-            ModelId::OmniAsrCtc300M,
-            ModelId::HtdemucsFt,
-        ] {
+        // 遍历唯一清单：新增模型漏了哈希 / revision，这条测试直接变红。
+        for id in ModelId::ALL {
             let def = model_definition(id);
             assert!(!def.download_files.is_empty(), "{id:?}");
             for file in &def.download_files {

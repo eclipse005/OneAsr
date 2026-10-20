@@ -27,7 +27,8 @@ export function Popover({
   onClose,
   children,
   className = 'chip-menu',
-  label
+  label,
+  trigger
 }: {
   open: boolean
   anchor: DOMRect | null
@@ -35,6 +36,8 @@ export function Popover({
   children: React.ReactNode
   className?: string
   label?: string
+  /** 触发按钮；点它自己不算“点外面”，否则菜单会被关掉又立刻重开。 */
+  trigger?: React.RefObject<HTMLElement | null>
 }) {
   const layer = useLayerMotion()
   return (
@@ -46,6 +49,7 @@ export function Popover({
           className={className}
           label={label}
           motion={layer}
+          trigger={trigger}
         >
           {children}
         </PopoverBody>
@@ -60,6 +64,7 @@ function PopoverBody({
   children,
   className,
   label,
+  trigger,
   motion: motionProps
 }: {
   anchor: DOMRect
@@ -67,6 +72,7 @@ function PopoverBody({
   children: React.ReactNode
   className: string
   label?: string
+  trigger?: React.RefObject<HTMLElement | null>
   motion: ReturnType<typeof useLayerMotion>
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -75,15 +81,18 @@ function PopoverBody({
   useEffect(() => {
     claimPopover(onClose)
     return () => releasePopover(onClose)
-  }, [onClose])
+  }, [onClose, trigger])
 
   useEffect(() => {
     const onDown = (e: MouseEvent): void => {
-      if ((e.target as HTMLElement).closest('.chip-menu')) return
+      const target = e.target as Node
+      if (ref.current?.contains(target)) return
+      if (trigger?.current?.contains(target)) return
       onClose()
     }
     const onMove = (e: Event): void => {
-      if ((e.target as HTMLElement | null)?.closest?.('.chip-menu')) return
+      const target = e.target as Node | null
+      if (target && ref.current?.contains(target)) return
       onClose()
     }
     window.addEventListener('mousedown', onDown, true)
@@ -94,7 +103,7 @@ function PopoverBody({
       window.removeEventListener('scroll', onMove, true)
       window.removeEventListener('resize', onMove)
     }
-  }, [onClose])
+  }, [onClose, trigger])
 
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>('button')?.focus()
@@ -163,12 +172,14 @@ export function SelectMenu({
   footer?: (close: () => void) => React.ReactNode
 }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const current = options.find((o) => o.id === value)
   const close = (): void => setAnchor(null)
 
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         className={`${className ?? ''} ${anchor ? 'open' : ''}`}
         disabled={disabled}
@@ -185,7 +196,13 @@ export function SelectMenu({
           ▾
         </span>
       </button>
-      <Popover open={anchor != null} anchor={anchor} onClose={close} label={ariaLabel}>
+      <Popover
+        open={anchor != null}
+        anchor={anchor}
+        onClose={close}
+        label={ariaLabel}
+        trigger={triggerRef}
+      >
         <div role="listbox" aria-label={ariaLabel}>
           {options.map((o) => (
             <button

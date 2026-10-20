@@ -174,6 +174,21 @@ export class JobQueue<T extends QueueItem> {
     return this.current?.runId === runId
   }
 
+  /** 正在跑，或已经进了运行队列（还没 spawn）。启动前的并发复查用它。 */
+  isActive(id: string): boolean {
+    return this.isRunning(id) || this.queueRank(id) !== undefined
+  }
+
+  /**
+   * 这个 run 是否已被取消（停在宽限期里、还没 close）。
+   *
+   * close 回调用它判断「这次 run 是取消结束还是正常结束」——不能读
+   * `task.status`：取消后用户可能马上重开同一行，状态会被改成 queued。
+   */
+  isCancelling(runId: RunId): boolean {
+    return this.current?.runId === runId && this.current.cancelled
+  }
+
   /**
    * kill 命令的唯一裁决点：只有仍打在 current run 上的命令才放行。
    * 旧 run 的晚到定时器 / 晚到命令（runId 对不上）返回 null，调用方不得执行。

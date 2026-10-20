@@ -36,7 +36,7 @@ export interface OneAsrApi {
   resetSettings: () => Promise<Settings>
   /** 模型状态/就绪/门禁/清单：CLI 的 `status --json` 原样转发 */
   getStatus: () => Promise<StatusSnapshot | null>
-  startDownload: (model: string) => Promise<{ ok: boolean; code?: string }>
+  startDownload: (model: string, targetDir?: string) => Promise<{ ok: boolean; code?: string }>
   cancelDownload: () => Promise<void>
   getDownloadState: () => Promise<DownloadState | null>
   onDownloadUpdated: (cb: (state: DownloadState) => void) => () => void
@@ -77,7 +77,6 @@ export interface OneAsrApi {
   getHotwords: () => Promise<HotwordStore>
   saveHotwords: (store: HotwordStore) => Promise<HotwordStore>
   onTasksUpdated: (cb: (tasks: TaskSnapshot[]) => void) => () => void
-  onTaskProgress: (cb: (payload: { id: string; line: string }) => void) => () => void
   onStatsUpdated: (cb: (stats: StatsSnapshot) => void) => () => void
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>

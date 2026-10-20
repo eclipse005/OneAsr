@@ -298,6 +298,12 @@ pub struct SettingsLoadReport {
     /// `settings.json` 实际读到的那份（数据目录优先、安装目录兜底）；都没读到
     /// 时是数据目录里的写路径。写入永远只走数据目录。
     pub config_path: Option<PathBuf>,
+    /// **真的读到了**一份 settings.json（数据目录或安装目录）。
+    ///
+    /// 这不是诊断字段而是契约：CLI 的模型路径解析用它区分「用户配置了模型」
+    /// 与「一个都没有、按安装布局兜底」。没有它就只能靠目录是否为空来猜，
+    /// 而空目录恰好也是合法配置。
+    pub found: bool,
     /// Non-NotFound read failure (permission, file lock, …).
     pub read_error: Option<String>,
     /// File exists but is not valid settings JSON.
@@ -371,6 +377,7 @@ impl Settings {
             match std::fs::read_to_string(path) {
                 Ok(text) => {
                     report.config_path = Some(path.clone());
+                    report.found = true;
                     return Some(match serde_json::from_str::<Settings>(&text) {
                         Ok(mut s) => {
                             s.normalize_with_notes(&mut report.repairs);
@@ -1828,6 +1835,7 @@ mod tests {
         let loaded = Settings::load_first_of(&candidates, &mut report).expect("legacy settings");
         assert_eq!(loaded.chunk_target_seconds, 90);
         assert_eq!(report.config_path.as_deref(), Some(legacy.as_path()));
+        assert!(report.found, "读到安装目录那份也算 found");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1844,6 +1852,7 @@ mod tests {
         let loaded = Settings::load_first_of(&candidates, &mut report).expect("data settings");
         assert_eq!(loaded.chunk_target_seconds, 120);
         assert_eq!(report.config_path.as_deref(), Some(data.as_path()));
+        assert!(report.found);
 
         let _ = std::fs::remove_dir_all(&root);
     }

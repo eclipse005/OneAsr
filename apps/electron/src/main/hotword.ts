@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { writeFileAtomicSync } from './atomic'
 import type { HotwordGroup, HotwordStore } from '../shared/types'
 import { DEFAULT_APP_ROOT } from './settings'
 
@@ -19,11 +20,9 @@ export function defaultHotwordStore(): HotwordStore {
 
 export function loadHotwords(appRoot = DEFAULT_APP_ROOT): HotwordStore {
   const p = hotwordPath(appRoot)
-  if (!fs.existsSync(p)) {
-    const d = defaultHotwordStore()
-    saveHotwords(d, appRoot)
-    return d
-  }
+  // 读是读、写是写：没有文件就返回默认库，不在读取路径上落盘。
+  // 落盘只发生在用户保存时（saveHotwords）。
+  if (!fs.existsSync(p)) return defaultHotwordStore()
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<HotwordStore>
     const base = defaultHotwordStore()
@@ -58,7 +57,7 @@ export function saveHotwords(store: HotwordStore, appRoot = DEFAULT_APP_ROOT): H
     threshold: Math.max(0, Math.min(1, store.threshold ?? 0.7))
   }
   const p = hotwordPath(appRoot)
-  fs.writeFileSync(p, JSON.stringify(normalized, null, 2) + '\n', 'utf8')
+  writeFileAtomicSync(p, JSON.stringify(normalized, null, 2) + '\n')
   return normalized
 }
 

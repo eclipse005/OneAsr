@@ -156,8 +156,14 @@ function alignerKind(model: string): 'ctc' | 'qwen' {
   return model.toLowerCase().includes('qwen') ? 'qwen' : 'ctc'
 }
 
-function catalogReady(catalog: { id: string; ready: boolean }[] | undefined, id: string): boolean {
-  return !!catalog?.find((c) => c.id === id)?.ready
+function modelSlotReady(
+  status: StatusSnapshot | null,
+  family: 'asr' | 'aligner' | 'demucs' | 'sensevoice',
+  modelId: string,
+  dir: string
+): boolean {
+  const slot = status?.models[family]
+  return !!slot?.ready && slot.id === modelId && slot.dir === dir
 }
 
 function ModelPathField({
@@ -194,14 +200,19 @@ function ModelPathField({
   verifyingLabel: string
   retryLabel: string
   cancelLabel: string
-  onDownload: (id: string) => void
+  onDownload: (id: string, targetDir?: string) => void
   onCancel: () => void
 }) {
   const active = download?.model === modelId
   const isDown = active && downloading
   const isErr = active && download?.state === 'error'
   const pct = active ? Math.round(download?.pct ?? 0) : 0
-  let actionLabel = ready ? redownloadLabel : downloadLabel
+  // 下载到当前显示的目录且已成功：在保存前也先显示「重新下载」，
+  // 否则用户会以为刚下完的按钮还是「下载」。
+  const downloadedHere =
+    active && download?.state === 'done' && (!download.dir || download.dir === value)
+  const readyNow = ready || downloadedHere
+  let actionLabel = readyNow ? redownloadLabel : downloadLabel
   if (isErr) actionLabel = retryLabel
   const progressLabel =
     download?.state === 'verifying'
@@ -242,11 +253,11 @@ function ModelPathField({
           ) : (
             <button
               type="button"
-              className={`icon-btn ${ready && !isErr ? '' : 'primary'}`}
+              className={`icon-btn ${readyNow && !isErr ? '' : 'primary'}`}
               disabled={downloading}
               title={actionLabel}
               aria-label={actionLabel}
-              onClick={() => onDownload(modelId)}
+              onClick={() => onDownload(modelId, value)}
             >
               <span className="icon-glyph i-retry" aria-hidden />
             </button>
@@ -291,7 +302,7 @@ export function SettingsDrawer({
   status: StatusSnapshot | null
   /** 当前下载进度（null = 没在下） */
   download: DownloadState | null
-  onDownloadStart: (id: string) => void
+  onDownloadStart: (id: string, targetDir?: string) => void
   onDownloadCancel: () => void
   dirty: boolean
   /** 刚保存成功：主按钮短暂保持主色并显示「已保存」 */
@@ -307,7 +318,10 @@ export function SettingsDrawer({
   onRestoreDefaults: () => void
   onClose: () => void
   onPickDir: () => void
-  onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir') => void
+  onPickModel: (
+    field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir',
+    modelId?: string
+  ) => void
   onOpenModels: () => void
   onRefreshModels: () => void
   /** CLI 缺 status/transcript 时为 true */
@@ -547,6 +561,7 @@ export function SettingsDrawer({
                     {s.cliOutdated}
                   </p>
                 )}
+                <p className="field-hint">{s.modelPathsHint}</p>
                 <div className="models-toolbar">
                   <div className="models-status" onClick={onRefreshModels} title={s.refreshModelsStatus}>
                     <Pill ok={!!status?.models.asr.ready} label={s.asr} ready={s.ready} missing={s.missing} />
@@ -616,9 +631,9 @@ export function SettingsDrawer({
                       asr_dirs: { ...draft.asr_dirs, [id]: v }
                     })
                   }}
-                  onBrowse={() => onPickModel('asr_model_dir')}
+                  onBrowse={() => onPickModel('asr_model_dir', asrId(size, quant))}
                   modelId={asrId(size, quant)}
-                  ready={catalogReady(status?.catalog, asrId(size, quant))}
+                  ready={modelSlotReady(status, 'asr', asrId(size, quant), draft.asr_model_dir)}
                   download={download}
                   downloading={downloading}
                   browseLabel={s.browse}
@@ -656,9 +671,9 @@ export function SettingsDrawer({
                       aligner_dirs: { ...draft.aligner_dirs, [id]: v }
                     })
                   }}
-                  onBrowse={() => onPickModel('aligner_model_dir')}
+                  onBrowse={() => onPickModel('aligner_model_dir', draft.aligner_model)}
                   modelId={draft.aligner_model}
-                  ready={catalogReady(status?.catalog, draft.aligner_model)}
+                  ready={modelSlotReady(status, 'aligner', draft.aligner_model, draft.aligner_model_dir)}
                   download={download}
                   downloading={downloading}
                   browseLabel={s.browse}
@@ -691,7 +706,7 @@ export function SettingsDrawer({
                   onChange={(v) => set('demucs_model_dir', v)}
                   onBrowse={() => onPickModel('demucs_model_dir')}
                   modelId="htdemucs_ft"
-                  ready={catalogReady(status?.catalog, 'htdemucs_ft')}
+                  ready={modelSlotReady(status, 'demucs', 'htdemucs_ft', draft.demucs_model_dir)}
                   download={download}
                   downloading={downloading}
                   browseLabel={s.browse}
@@ -710,7 +725,7 @@ export function SettingsDrawer({
                   onChange={(v) => set('sensevoice_model_dir', v)}
                   onBrowse={() => onPickModel('sensevoice_model_dir')}
                   modelId="SenseVoiceSmall"
-                  ready={catalogReady(status?.catalog, 'SenseVoiceSmall')}
+                  ready={modelSlotReady(status, 'sensevoice', 'SenseVoiceSmall', draft.sensevoice_model_dir || '')}
                   download={download}
                   downloading={downloading}
                   browseLabel={s.browse}

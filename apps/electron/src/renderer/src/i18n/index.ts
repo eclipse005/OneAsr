@@ -276,6 +276,8 @@ export const zh = {
   demucsPurpose: '人声分离',
   sensePurpose: '粗转',
   modelRetry: '重试',
+  modelPathsHint: '每个模型各用各的路径；改动保存后用于转写，下载会落到当前显示的路径。',
+  sparklineAria: '近 30 天处理时长趋势',
 } as const
 
 type Dict = { [K in keyof typeof zh]: string }
@@ -554,6 +556,8 @@ export const en: Dict = {
   demucsPurpose: 'Vocals',
   sensePurpose: 'Hotword ASR',
   modelRetry: 'Retry',
+  modelPathsHint: 'Each model keeps its own path. Save to use it for transcription; downloads go to the path shown above.',
+  sparklineAria: '30-day media trend',
 }
 
 export function resolveUiLang(setting: string): UiLang {
@@ -615,6 +619,24 @@ export function unsupportedCount(lang: UiLang, n: number): string {
   return lang === 'zh'
     ? `已忽略 ${n} 个不支持的文件（支持 wav / mp3 / mp4 / mkv …）`
     : `${n} unsupported file${n > 1 ? 's' : ''} ignored (wav / mp3 / mp4 / mkv …)`
+}
+
+/** 任务状态 → 界面文案（统计页的最近会话直接用）。 */
+export function taskStatusLabel(lang: UiLang, status: string): string {
+  const s = t(lang) as unknown as Record<string, string>
+  return s[status] ?? status
+}
+
+/** 热力图格子的悬停说明：日期 + 时长 + 成功/失败数。 */
+export function heatTooltip(
+  lang: UiLang,
+  day: string,
+  mediaSec: number,
+  tasks: number,
+  errors: number
+): string {
+  const s = t(lang)
+  return `${day}: ${formatDuration(mediaSec)} · ${tasks} ${s.success} · ${errors} ${s.failures}`
 }
 
 /** 「排队第 N 位」/「Queued · #N」：队列位次（Dict 只放字符串，带参数的走 helper）。 */

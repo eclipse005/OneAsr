@@ -1,7 +1,22 @@
 import { spawn } from 'child_process'
 import { DEFAULT_APP_ROOT, resolveCli } from './settings'
 import { logError } from './log'
+import { mainLang } from './i18n'
 import type { CliCapabilities } from '../shared/types'
+
+/**
+ * 所有 CLI 子进程共用的环境：数据目录 + 界面语言。
+ *
+ * `ONEASR_UI_LANG` 让 CLI 的运行期错误/摘要与界面语言一致；没有它，
+ * 中文系统 + 英文界面时错误会以系统语言出现。
+ */
+export function cliEnv(appRoot = DEFAULT_APP_ROOT): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ONEASR_DATA_DIR: appRoot,
+    ONEASR_UI_LANG: mainLang()
+  }
+}
 
 /**
  * 调 oneasr-cli 并解析它 **stdout 上的 JSON**。
@@ -23,7 +38,7 @@ export function runCliJson<T>(args: string[], timeoutMs = 60000): Promise<CliRes
     try {
       child = spawn(cli, args, {
         cwd: DEFAULT_APP_ROOT,
-        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT },
+        env: cliEnv(),
         // Windows 上不加这个每次 spawn 都会闪一个控制台窗口
         //（probe/status/transcribe/download 都走这里）
         windowsHide: true
@@ -89,7 +104,7 @@ export function runCliCapture(
     try {
       child = spawn(cli, args, {
         cwd: DEFAULT_APP_ROOT,
-        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT },
+        env: cliEnv(),
         windowsHide: true
       })
     } catch (error) {

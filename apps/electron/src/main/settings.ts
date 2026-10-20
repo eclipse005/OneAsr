@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { writeFileAtomicSync } from './atomic'
 import type { Settings } from '../shared/types'
 
 /**
@@ -70,7 +71,7 @@ export function defaultSettings(appRoot = DEFAULT_APP_ROOT): Settings {
     output_txt: false,
     output_ass: false,
     subtitle_beautify: false,
-    text_script: 'simplified',
+    text_script: 'original',
     vocal_separation: false,
     demucs_model_dir: path.join(models, 'htdemucs_ft'),
     sensevoice_model_dir: path.join(models, 'SenseVoiceSmall'),
@@ -100,7 +101,6 @@ export function loadSettings(appRoot = DEFAULT_APP_ROOT): Settings {
 /** 写 settings.json：与磁盘上已有的字段合并（保住壳还不认识的字段）。 */
 export function saveSettings(settings: Settings, appRoot = DEFAULT_APP_ROOT): Settings {
   const p = settingsPath(appRoot)
-  fs.mkdirSync(path.dirname(p), { recursive: true })
   let existing: Record<string, unknown> = {}
   if (fs.existsSync(p)) {
     try {
@@ -110,7 +110,7 @@ export function saveSettings(settings: Settings, appRoot = DEFAULT_APP_ROOT): Se
     }
   }
   const out = { ...existing, ...settings }
-  fs.writeFileSync(p, JSON.stringify(out, null, 2) + '\n', 'utf8')
+  writeFileAtomicSync(p, JSON.stringify(out, null, 2) + '\n')
   return loadSettings(appRoot)
 }
 

@@ -357,6 +357,11 @@ function createWindow(): void {
       mainWindow?.hide()
     }
   })
+  // macOS 关掉唯一窗口后进程还活着；不置空的话 activate / 托盘都会对
+  // 已销毁的 BrowserWindow 调方法（“Object has been destroyed”）。
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -372,10 +377,6 @@ function createWindow(): void {
       })
     })
   }
-
-  jobs.on('tasks', (tasks) => mainWindow?.webContents.send('tasks:updated', tasks))
-  jobs.on('progress', (payload) => mainWindow?.webContents.send('task:progress', payload))
-  jobs.on('stats', (stats) => mainWindow?.webContents.send('stats:updated', stats))
 }
 
 function registerIpc(): void {
@@ -400,7 +401,9 @@ function registerIpc(): void {
     return r.ok ? r.data : null
   })
   // 下载：一次一个，进度从 CLI 的 stdout 机器行来
-  ipcMain.handle('download:start', (_e, model: string) => downloads.start(model))
+  ipcMain.handle('download:start', (_e, model: string, targetDir?: string) =>
+    downloads.start(model, targetDir)
+  )
   ipcMain.handle('download:cancel', () => {
     downloads.cancel()
   })
@@ -557,15 +560,19 @@ app.whenReady().then(() => {
   }
   createWindow()
   createTray(resolveAppIcon())
-  // 托盘 tooltip 跟着当前阶段走（旧版托盘同款）：长任务挂着的时候一眼能看到进展
-  // 下载进度转发给渲染层（设置 → 模型 里的下载区）
-  downloads.on('updated', (state) => mainWindow?.webContents.send('download:updated', state))
-  jobs.on('tasks', (list: { status: string; stage?: string }[]) => {
+  // 事件订阅只注册一次：macOS 重开窗口时 createWindow 会被再次调用，
+  // 订阅若放在里面，每开一次窗口就多发一份 IPC。
+  jobs.on('tasks', (tasks: Array<{ status: string; stage?: string }>) => {
+    mainWindow?.webContents.send('tasks:updated', tasks)
     if (!tray) return
-    const running = list.find((t) => t.status === 'running')
+    // 托盘 tooltip 跟着当前阶段走（旧版托盘同款）
+    const running = tasks.find((t) => t.status === 'running')
     const base = m().trayTooltip
     tray.setToolTip(running?.stage ? `${base} · ${running.stage}` : base)
   })
+  jobs.on('stats', (stats) => mainWindow?.webContents.send('stats:updated', stats))
+  // 下载进度转发给渲染层（设置 → 模型 里的下载区）
+  downloads.on('updated', (state) => mainWindow?.webContents.send('download:updated', state))
   console.log('[oneasr] tray ready')
 })
 

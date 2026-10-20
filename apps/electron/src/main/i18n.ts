@@ -19,14 +19,20 @@ const zh = {
    * 同名文件当成本次的产物），于是这一次没有可说清的产物 —— 报失败，
    * 不报假绿。
    */
-  taskNoOutput: 'CLI 报告成功但没有给出产物路径，无法确认这次的结果'
+  taskNoOutput: 'CLI 报告成功但没有给出产物路径，无法确认这次的结果',
+  transcriptUnavailable: '这一行的文稿暂不可用',
+  noTranscript: '这一行没有文稿',
+  cliStatusFailed: '读取 CLI 状态失败'
 }
 
 const en: typeof zh = {
   trayTooltip: 'OneAsr — offline subtitles',
   trayOpen: 'Open OneAsr',
   trayQuit: 'Quit OneAsr',
-  taskNoOutput: 'The CLI reported success but gave no output path, so this run cannot be confirmed'
+  taskNoOutput: 'The CLI reported success but gave no output path, so this run cannot be confirmed',
+  transcriptUnavailable: 'The transcript for this row is not available',
+  noTranscript: 'This row has no transcript',
+  cliStatusFailed: 'Could not read CLI status'
 }
 
 function systemLooksChinese(): boolean {

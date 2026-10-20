@@ -46,6 +46,23 @@ use serde_json::json;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+
+    // 线程池 / 线程优先级：这里**刻意不调用** `oneasr_core::init_runtime()`。
+    // 它做的唯一一件事是"给 UI 事件循环留一个核"（为全局 rayon 池保留一个
+    // 逻辑核），理由是让 UI 不被模型 CPU 算子饿死；CLI 没有事件循环要保护，
+    // 一次性批处理把整台机器用满才是对的，ffmpeg 作为子进程也不需要别人让路。
+    // `demote_current_thread()` 同理，那是 GUI worker 线程的优先级策略。
+
+    // CLI 不读 settings.json 的全局选项（全部走参数），但 GUI 会把界面语言
+    // 通过 ONEASR_UI_LANG 传进来，让运行期错误和界面一致；没设就跟随系统。
+    // 放在 `--help` 提前返回之前：连帮助正文也要跟界面语言一致。
+    let ui_lang = match env::var("ONEASR_UI_LANG").ok().as_deref() {
+        Some(code) if code.eq_ignore_ascii_case("zh") => i18n::UiLang::Zh,
+        Some(code) if code.eq_ignore_ascii_case("en") => i18n::UiLang::En,
+        _ => i18n::detect_system_lang(),
+    };
+    oneasr_core::i18n::set_ui_lang(ui_lang);
+
     if args.len() < 2 || is_help(&args[1]) {
         print_help();
         return if args.len() < 2 {
@@ -54,18 +71,6 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         };
     }
-
-    // 线程池 / 线程优先级：这里**刻意不调用** `oneasr_core::init_runtime()`。
-    // 它做的唯一一件事是"给 UI 事件循环留一个核"（为全局 rayon 池保留一个
-    // 逻辑核），理由是让 UI 不被模型 CPU 算子饿死；CLI 没有事件循环要保护，
-    // 一次性批处理把整台机器用满才是对的，ffmpeg 作为子进程也不需要别人让路。
-    // `demote_current_thread()` 同理，那是 GUI worker 线程的优先级策略。
-
-    // CLI 不读 settings.json（全部走参数），文案语言直接跟随系统语言——
-    // 对所有子命令、所有输出生效：用法、参数校验错误、运行摘要都取自
-    // `oneasr_core::i18n`，本文件里不出现硬编码文案（键值摘要的键名即 flag 名，
-    // 两种语言一致，同样定义在 i18n）。
-    oneasr_core::i18n::set_ui_lang(oneasr_core::i18n::detect_system_lang());
 
     // Default subcommand: bare flags act as `transcribe`.
     let (cmd, rest) = if args[1].starts_with('-') {
@@ -129,14 +134,24 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     let want_ass = flag(args, "--ass");
     let no_srt = flag(args, "--no-srt");
     let no_timeline = flag(args, "--no-timeline");
-    let script = arg(args, "--script");
+    let script = script_arg(args)?;
     let vocal_separation = flag(args, "--vocal-separation");
     let demucs_model_dir = arg(args, "--demucs-model-dir").map(PathBuf::from);
+    let asr_dir_flag = arg(args, "--asr-model-dir").map(PathBuf::from);
+    let aligner_dir_flag = arg(args, "--aligner-model-dir").map(PathBuf::from);
     let hotword_group = arg(args, "--hotword-group");
     let hotword_words = arg(args, "--hotwords");
     let sensevoice_model_dir = arg(args, "--sensevoice-model-dir").map(PathBuf::from);
     let output_dir = arg(args, "--output-dir").map(PathBuf::from);
     let save_next_to_source = flag(args, "--save-next-to-source");
+    let subtitle_preset = match arg(args, "--preset") {
+        None => None,
+        Some(raw) if matches!(raw.as_str(), "short" | "standard" | "loose") => Some(raw),
+        Some(raw) => {
+            eprintln!("{}", i18n::cli_preset_unknown(&raw));
+            return Err(2);
+        }
+    };
 
     let input_path = PathBuf::from(&input);
     if !input_path.is_file() {
@@ -144,6 +159,11 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         return Err(1);
     }
     ensure_ffmpeg(&app_root)?;
+
+    // 模型选择与目录的**唯一配置来源**是 settings.json（GUI 写的那份）。
+    // 没有配置文件时才退回安装布局扫描 —— 这两种情况不能混：空目录表也是
+    // 一份合法配置，不能用“表为空”去猜“没配置过”。
+    let (saved, settings_found) = load_model_settings();
 
     let mut settings = Settings {
         language,
@@ -158,6 +178,9 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
     settings.output_txt = want_txt;
     settings.output_ass = want_ass;
     settings.output_srt = !no_srt;
+    if let Some(preset) = subtitle_preset {
+        settings.subtitle_length_preset = preset;
+    }
     if no_srt && !want_txt && !want_ass {
         eprintln!("{}", i18n::cli_no_srt_warning());
     }
@@ -165,6 +188,7 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         settings.text_script = s;
     }
     settings.vocal_separation = vocal_separation;
+
     // `--asr 0.6b|1.7b|<目录名>`：显式指定只认那一个，否则按 0.6B→1.7B、
     // fp16 优先的顺序扫描已装目录。与 `--aligner` 同一套优先级。
     let asr_override = match arg(args, "--asr").as_deref() {
@@ -188,20 +212,30 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
             }
         },
     };
-    apply_app_root_paths(
-        &mut settings,
-        &app_root,
-        &data_root,
-        asr_override,
-        aligner_override,
-    );
+
+    if settings_found {
+        // 配置里的每个模型各用各的目录表；输出仍由命令行决定。
+        apply_saved_model_config(&mut settings, &saved);
+        if let Some(pick) = asr_override {
+            settings.asr_model = choose_saved_asr(&saved, pick).as_str().into();
+        }
+        if let Some(id) = aligner_override {
+            settings.aligner_model = id.as_str().into();
+        }
+        // 批处理默认仍写 {data-root}/output；GUI 会再用 --output-dir /
+        // --save-next-to-source 把它要的语义带回来。
+        settings.output_dir = oneasr_core::paths::output_dir_under(&data_root);
+        settings.save_next_to_source = false;
+    } else {
+        apply_app_root_paths(
+            &mut settings,
+            &app_root,
+            &data_root,
+            asr_override,
+            aligner_override,
+        );
+    }
     apply_output_flags(&mut settings, output_dir, save_next_to_source);
-    if let Some(dir) = demucs_model_dir {
-        settings.demucs_model_dir = dir;
-    }
-    if let Some(dir) = sensevoice_model_dir {
-        settings.sensevoice_model_dir = dir;
-    }
     // 热词只在这一趟识别里有消费者，所以**只有给了旗标才碰 hotword.json**——
     // 不碰它，普通转写就不会触发老配置迁移之类的写盘副作用。
     // `--hotword-group`（从库里查组）与 `--hotwords`（即席词表）二选一。
@@ -215,6 +249,32 @@ fn cmd_transcribe(args: &[String]) -> Result<(), i32> {
         )?;
     }
     settings.normalize();
+    if settings_found {
+        // `normalize` 会把不存在的自定义目录修回安装布局；配置里的原样路径
+        // 才是用户的选择，恢复它，让门禁按那个目录报缺失。
+        pin_saved_active_dirs(&mut settings);
+    }
+    if let Some(dir) = asr_dir_flag {
+        let id = ModelId::parse_asr(&settings.asr_model);
+        settings.asr_model = id.as_str().into();
+        settings.asr_dirs.insert(id.as_str().into(), dir.clone());
+        settings.asr_model_dir = dir;
+    }
+    if let Some(dir) = aligner_dir_flag {
+        let id = settings.selected_aligner_id();
+        settings
+            .aligner_dirs
+            .insert(id.as_str().into(), dir.clone());
+        settings.aligner_model_dir = dir;
+    }
+    // 人声分离 / 热词粗转没有 per-id 表，显式旗标在 normalize 之后落，
+    // 缺目录时门禁会如实报错，而不是被修回安装布局。
+    if let Some(dir) = demucs_model_dir {
+        settings.demucs_model_dir = dir;
+    }
+    if let Some(dir) = sensevoice_model_dir {
+        settings.sensevoice_model_dir = dir;
+    }
     if let Err(e) = settings.can_start() {
         eprintln!("{e}");
         return Err(1);
@@ -377,6 +437,20 @@ fn events_json_arg(args: &[String]) -> Result<bool, i32> {
         Some(v) if v.eq_ignore_ascii_case("json") => Ok(true),
         Some(v) => {
             eprintln!("{}", i18n::cli_events_unknown(v));
+            Err(2)
+        }
+    }
+}
+
+/// `--script` 只认三个中文字形；拼错报用法错误，不静默退回 original。
+fn script_arg(args: &[String]) -> Result<Option<String>, i32> {
+    match arg(args, "--script") {
+        None => Ok(None),
+        Some(raw) if matches!(raw.as_str(), "original" | "simplified" | "traditional") => {
+            Ok(Some(raw))
+        }
+        Some(raw) => {
+            eprintln!("{}", i18n::cli_script_unknown(&raw));
             Err(2)
         }
     }
@@ -628,12 +702,52 @@ fn cmd_status(args: &[String]) -> Result<(), i32> {
     // 数据目录必须先钉住：settings.json、models/ 都从它算。
     let data_root = pin_data_root(args, &app_root)?;
     let want_json = flag(args, "--json");
+    let asr_pick = match arg(args, "--asr").as_deref() {
+        None => None,
+        Some(raw) => match parse_asr_arg(raw) {
+            Some(pick) => Some(pick),
+            None => {
+                eprintln!("{}", i18n::cli_asr_unknown(raw));
+                return Err(2);
+            }
+        },
+    };
+    let asr_dir_flag = arg(args, "--asr-model-dir").map(PathBuf::from);
+    let aligner_dir_flag = arg(args, "--aligner-model-dir").map(PathBuf::from);
 
-    let mut settings = Settings::load();
+    let (mut settings, report) = Settings::load_with_report();
     // can_start 的原因由 core 按**进程语言**定格，所以先把语言设对再问门禁。
     i18n::set_ui_lang(settings.resolved_ui_language());
     apply_status_overrides(&mut settings, args)?;
-    let settings = resolve_status_paths(settings, &app_root, &data_root);
+
+    if report.found {
+        // settings.json 存在：模型选择与每个模型的目录都以它为准。
+        if let Some(pick) = asr_pick {
+            settings.asr_model = choose_saved_asr(&settings, pick).as_str().into();
+        }
+        settings.normalize();
+        // 配置里的自定义目录即使不存在也要原样保留，让门禁报“这个目录缺”，
+        // 而不是 normalize 悄悄修回安装布局。
+        pin_saved_active_dirs(&mut settings);
+    } else {
+        // 完全没有配置：沿用安装布局扫描（headless 的旧行为）。
+        settings = resolve_status_paths(settings, &app_root, &data_root, asr_pick);
+    }
+
+    if let Some(dir) = asr_dir_flag {
+        let id = ModelId::parse_asr(&settings.asr_model);
+        settings.asr_model = id.as_str().into();
+        settings.asr_dirs.insert(id.as_str().into(), dir.clone());
+        settings.asr_model_dir = dir;
+    }
+    if let Some(dir) = aligner_dir_flag {
+        let id = settings.selected_aligner_id();
+        settings
+            .aligner_dirs
+            .insert(id.as_str().into(), dir.clone());
+        settings.aligner_model_dir = dir;
+    }
+
     let mut report = status_report(
         &settings,
         &app_root,
@@ -690,6 +804,11 @@ fn apply_status_overrides(settings: &mut Settings, args: &[String]) -> Result<()
     if flag(args, "--no-srt") {
         settings.output_srt = false;
     }
+    // 文稿匹配在 align 里固定 CTC；门禁必须问同一个引擎，否则设置里选着
+    // Qwen 时会放行一个跑到打轴阶段才发现 CTC 缺失的任务。
+    if flag(args, "--transcript") {
+        settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+    }
     let hotword_group = arg(args, "--hotword-group");
     let hotword_words = arg(args, "--hotwords");
     if hotword_group.is_some() || hotword_words.is_some() {
@@ -710,22 +829,19 @@ fn apply_status_overrides(settings: &mut Settings, args: &[String]) -> Result<()
 /// 旗标时 `apply_app_root_paths` 按 ASR_CHOICES 扫描（0.6B 优先），那会把设置里选的
 /// 1.7B 静默压回 0.6B —— 门禁于是去看另一个模型的目录，是典型的假绿。壳调 transcribe
 /// 时传的正是设置里的 id（`--asr <id>` / `--aligner <id>`），这里跟上它的选择。
-fn resolve_status_paths(mut settings: Settings, app_root: &Path, data_root: &Path) -> Settings {
-    // transcribe 从 `Settings::default()` 起手：settings 里那种「每个尺寸手选的目录」
-    // （`asr_dirs` / `aligner_dirs`）它一次都读不到，只认 catalog id + root 布局。
-    // status 报的是**命令行这一趟真会用的目录**，所以这里跟着丢掉手选记录 ——
-    // 否则门禁会去查一个 run 根本不加载的目录（假绿）。
+fn resolve_status_paths(
+    mut settings: Settings,
+    app_root: &Path,
+    data_root: &Path,
+    asr_override: Option<AsrPick>,
+) -> Settings {
+    // 没有 settings.json 时的兜底：transcribe 从 `Settings::default()` 起手，
+    // 只认 catalog id + root 布局。这里用同一套扫描，门禁才和 run 一致。
     settings.asr_dirs.clear();
     settings.aligner_dirs.clear();
-    let asr = settings.selected_asr_id();
+    let asr = asr_override.unwrap_or(AsrPick::Exact(settings.selected_asr_id()));
     let aligner = settings.selected_aligner_id();
-    apply_app_root_paths(
-        &mut settings,
-        app_root,
-        data_root,
-        Some(AsrPick::Exact(asr)),
-        Some(aligner),
-    );
+    apply_app_root_paths(&mut settings, app_root, data_root, Some(asr), Some(aligner));
     settings.normalize();
     settings
 }
@@ -1069,8 +1185,21 @@ fn cmd_asr_chunk(args: &[String]) -> Result<(), i32> {
             }
         },
     };
-    apply_app_root_paths(&mut settings, &app_root, &data_root, asr_override, None);
+    // 与 transcribe 同一套模型路径规则：有 settings.json 就用每个模型自己的
+    // 目录，没有才扫描安装布局。
+    let (saved, settings_found) = load_model_settings();
+    if settings_found {
+        apply_saved_model_config(&mut settings, &saved);
+        if let Some(pick) = asr_override {
+            settings.asr_model = choose_saved_asr(&saved, pick).as_str().into();
+        }
+    } else {
+        apply_app_root_paths(&mut settings, &app_root, &data_root, asr_override, None);
+    }
     settings.normalize();
+    if settings_found {
+        pin_saved_active_dirs(&mut settings);
+    }
 
     let tmp = env::temp_dir().join(format!(
         "oneasr_dump_{}_{}.wav",
@@ -1197,7 +1326,7 @@ fn cmd_render(args: &[String]) -> Result<(), i32> {
     })?;
     eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_TIMELINE, &timeline_path));
 
-    let script = match arg(args, "--script") {
+    let script = match script_arg(args)? {
         Some(raw) => oneasr_core::TextScript::from_id(&raw),
         None => oneasr_core::TextScript::Original,
     };
@@ -1322,6 +1451,69 @@ fn apply_output_flags(
     }
     if save_next_to_source {
         settings.save_next_to_source = true;
+    }
+}
+
+/// settings.json 的模型路径配置是否真的存在。
+///
+/// 存在时，模型选择与目录以 settings.json 为准（每个模型各记各的目录）；
+/// 只有完全没有配置文件时，才退回安装布局扫描。这个区分是「用户配置」与
+/// 「从没配置过」的边界，不能靠 `asr_dirs` 是否为空来猜 —— 空目录表也是
+/// 一份合法配置。
+fn load_model_settings() -> (Settings, bool) {
+    let (saved, report) = Settings::load_with_report();
+    (saved, report.found)
+}
+
+/// 把 settings.json 里的**模型选择与路径**抄进这一趟运行的设置。
+///
+/// 只抄模型：语言、输出格式、后端等仍由命令行旗标决定，CLI 的批处理语义
+/// 不因为存在一份 GUI 配置而改变。
+fn apply_saved_model_config(settings: &mut Settings, saved: &Settings) {
+    settings.asr_model = saved.asr_model.clone();
+    settings.asr_dirs = saved.asr_dirs.clone();
+    settings.aligner_model = saved.aligner_model.clone();
+    settings.aligner_dirs = saved.aligner_dirs.clone();
+    settings.demucs_model_dir = saved.demucs_model_dir.clone();
+    settings.sensevoice_model_dir = saved.sensevoice_model_dir.clone();
+}
+
+/// 把当前选中的 ASR/对齐器目录重新钉到**配置里的原样路径**上。
+///
+/// `normalize` 会把「不存在的自定义目录」修回安装布局；对 GUI 配置来说那是
+/// 错的：用户挑的就是那个目录，缺失应当报未就绪，而不是悄悄换一个。这个函数
+/// 在 normalize 之后调用，按 per-model 表恢复 WYSIWYG。
+fn pin_saved_active_dirs(settings: &mut Settings) {
+    settings.asr_model_dir = settings.asr_dir_for(settings.selected_asr_id());
+    settings.aligner_model_dir = settings.aligner_dir_for(settings.selected_aligner_id());
+}
+
+/// `--asr 0.6b` 这种**尺寸级**写法在配置里的落点：同尺寸的 fp16 / int8 各查
+/// 自己的目录，fp16 优先；两个都不存在就保留 fp16 让门禁报缺。
+fn choose_saved_asr(saved: &Settings, pick: AsrPick) -> ModelId {
+    match pick {
+        AsrPick::Exact(id) => id,
+        AsrPick::Size(id) => {
+            let fp16 = id.asr_base();
+            let int8 = id.with_quant(true);
+            if saved.asr_dir_for(fp16).is_dir() {
+                fp16
+            } else if saved.asr_dir_for(int8).is_dir() {
+                int8
+            } else {
+                fp16
+            }
+        }
+    }
+}
+
+/// 单个模型**已配置**的落点。四个模型族各问各自的路径表。
+fn configured_model_dir(settings: &Settings, id: ModelId) -> PathBuf {
+    match id.kind() {
+        ModelKind::Asr => settings.asr_dir_for(id),
+        ModelKind::Align => settings.aligner_dir_for(id),
+        ModelKind::Demucs => settings.resolved_demucs_model_dir(),
+        ModelKind::Hotword => settings.resolved_sensevoice_model_dir(),
     }
 }
 
@@ -1541,12 +1733,16 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     let want_txt = flag(args, "--txt");
     let want_ass = flag(args, "--ass");
     let no_srt = flag(args, "--no-srt");
+    let no_timeline = flag(args, "--no-timeline");
     if let Err(msg) = check_align_outputs(no_srt, want_ass) {
         eprintln!("{msg}");
         return Err(2);
     }
     let output_dir = arg(args, "--output-dir").map(PathBuf::from);
     let save_next_to_source = flag(args, "--save-next-to-source");
+    let demucs_dir_flag = arg(args, "--demucs-model-dir").map(PathBuf::from);
+    let aligner_dir_flag = arg(args, "--aligner-model-dir").map(PathBuf::from);
+    let script_flag = script_arg(args)?;
 
     let app_root = parse_app_root(args)?;
     // 数据目录必须在任何 `Settings::default()` / 路径解析之前钉住。
@@ -1568,6 +1764,9 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         );
     }
 
+    // 与 transcribe 同一条规则：模型选择/目录以 settings.json 为准；没有配置
+    // 时才扫描安装布局。align 固定 CTC，但 CTC 目录仍来自它的 per-model 配置。
+    let (saved, settings_found) = load_model_settings();
     let mut settings = Settings {
         language,
         backend,
@@ -1580,13 +1779,45 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     settings.output_txt = want_txt;
     settings.output_ass = want_ass;
     settings.subtitle_beautify = flag(args, "--beautify");
-    if let Some(dir) = arg(args, "--demucs-model-dir") {
-        settings.demucs_model_dir = PathBuf::from(dir);
+    if let Some(script) = script_flag {
+        settings.text_script = script;
+    } else if settings_found {
+        settings.text_script = saved.text_script.clone();
     }
     // 文稿匹配固定用 CTC：整段一次对齐，块边界不伤词。见设计文档 §1.1。
     settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+    if settings_found {
+        apply_saved_model_config(&mut settings, &saved);
+        // apply_saved_model_config 会把 aligner_model 抄成设置里的选择；align
+        // 的契约是固定 CTC，所以再压一次。
+        settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+        settings.output_dir = oneasr_core::paths::output_dir_under(&data_root);
+        settings.save_next_to_source = false;
+    } else {
+        apply_app_root_paths(
+            &mut settings,
+            &app_root,
+            &data_root,
+            None,
+            Some(oneasr_core::ModelId::OmniAsrCtc300M),
+        );
+    }
     apply_output_flags(&mut settings, output_dir, save_next_to_source);
     settings.normalize();
+    if settings_found {
+        pin_saved_active_dirs(&mut settings);
+        // pin 会把 aligner 恢复成设置里选的那个；文稿匹配必须是 CTC。
+        settings.select_aligner_model(oneasr_core::ModelId::OmniAsrCtc300M);
+        settings.aligner_model_dir = saved.aligner_dir_for(oneasr_core::ModelId::OmniAsrCtc300M);
+        settings.demucs_model_dir = saved.resolved_demucs_model_dir();
+        settings.sensevoice_model_dir = saved.resolved_sensevoice_model_dir();
+    }
+    if let Some(dir) = aligner_dir_flag {
+        settings.aligner_model_dir = dir;
+    }
+    if let Some(dir) = demucs_dir_flag {
+        settings.demucs_model_dir = dir;
+    }
     if let Err(e) = settings.can_start_transcript() {
         eprintln!("{e}");
         return Err(1);
@@ -1634,7 +1865,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         },
         ProcessExportOptions {
             words_json: None,
-            timeline_json: true,
+            timeline_json: !no_timeline,
         },
     );
     let timing = clock.finish();
@@ -1877,9 +2108,17 @@ fn cmd_download(args: &[String]) -> Result<(), i32> {
     // 与 transcribe 一样：数据目录先钉住，模型落点从它算。下载不碰 ffmpeg，
     // 所以不像 transcribe 那样查 bin/ffmpeg。
     let data_root = pin_data_root(args, &app_root)?;
+    let explicit_dir = arg(args, "--model-dir").map(PathBuf::from);
+    let (saved, settings_found) = load_model_settings();
 
     let target = pick.target;
-    let target_dir = oneasr_core::paths::models_root().join(target.as_str());
+    let target_dir = explicit_dir.clone().unwrap_or_else(|| {
+        if settings_found {
+            configured_model_dir(&saved, target)
+        } else {
+            oneasr_core::paths::models_root().join(target.as_str())
+        }
+    });
 
     eprintln!("{}", i18n::cli_download_banner());
     eprintln!("{}", i18n::cli_kv_str(i18n::CLI_KV_MODEL, target.as_str()));
@@ -1887,31 +2126,53 @@ fn cmd_download(args: &[String]) -> Result<(), i32> {
     eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_DATA, &data_root));
     eprintln!("{}", i18n::cli_kv(i18n::CLI_KV_TARGET, &target_dir));
 
-    // 先验后下：数据目录优先、安装目录兜底，与 `apply_app_root_paths` 的扫描同一
-    // 形状。本进程刚起来，就绪缓存是空的，不必像 GUI 那样先失效一次。
+    // 先验后下：配置存在时按每个模型自己的目录查；没有配置时沿用安装布局扫描。
+    // 候选在外层（fp16 优先），root/目录在内层。
     let roots: Vec<&Path> = if data_root == app_root {
         vec![&data_root]
     } else {
         vec![&data_root, &app_root]
     };
+    let dirs_for = |id: ModelId| -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        if id == target && explicit_dir.is_some() {
+            // 显式 --model-dir 就是“确保装在这里”：不再回退去别的目录报已装。
+            dirs.push(explicit_dir.clone().unwrap());
+        } else if settings_found {
+            dirs.push(configured_model_dir(&saved, id));
+        } else {
+            dirs.extend(
+                roots
+                    .iter()
+                    .map(|root| root.join(oneasr_core::paths::MODELS_DIR).join(id.as_str())),
+            );
+        }
+        dirs
+    };
     let total = catalog_bytes(target);
-    emit_download_event("verifying", target, 0, total, 0, None);
+    emit_download_event("verifying", target, 0, total, 0, None, None);
     eprintln!("{}", i18n::cli_download_verifying(target.as_str()));
-    if let Some((id, dir)) = installed_model(&pick, &roots) {
+    if let Some((id, dir)) = installed_model(&pick, dirs_for) {
         let total = catalog_bytes(id);
         eprintln!("{}", i18n::cli_download_already(id.as_str(), &dir));
-        emit_download_event("done", id, total, total, 0, Some(&dir));
+        emit_download_event("done", id, total, total, 0, Some(&dir), None);
         return Ok(());
     }
 
     // 下载器会把「目录建不出来」包成 Failed，但那条信息里只有系统原文
     // （拒绝访问 (os error 5) 之类），不说是哪个目录。先探一次，报错就能点名。
     if let Err(e) = oneasr_core::probe_writable(&target_dir) {
-        eprintln!(
-            "{}",
-            i18n::cli_download_dir_not_writable(&target_dir, &e.to_string())
+        let message = i18n::cli_download_dir_not_writable(&target_dir, &e.to_string());
+        eprintln!("{message}");
+        emit_download_event(
+            "error",
+            target,
+            0,
+            total,
+            0,
+            Some(&target_dir),
+            Some(&message),
         );
-        emit_download_event("error", target, 0, total, 0, Some(&target_dir));
         return Err(1);
     }
 
@@ -1933,6 +2194,7 @@ fn cmd_download(args: &[String]) -> Result<(), i32> {
             p.total_bytes,
             p.speed_bytes_per_sec,
             None,
+            None,
         );
     });
     match outcome {
@@ -1941,7 +2203,7 @@ fn cmd_download(args: &[String]) -> Result<(), i32> {
             // 回调的最后一次 tick 可能还差几百毫秒。
             let total = catalog_bytes(target);
             eprintln!("{}", i18n::cli_download_done(target.as_str(), &model_dir));
-            emit_download_event("done", target, total, total, 0, Some(&model_dir));
+            emit_download_event("done", target, total, total, 0, Some(&model_dir), None);
             Ok(())
         }
         DownloadOutcome::Failed {
@@ -1957,14 +2219,24 @@ fn cmd_download(args: &[String]) -> Result<(), i32> {
                 total_bytes.max(total),
                 0,
                 Some(&target_dir),
+                Some(&message),
             );
             Err(1)
         }
         // CLI 没有取消入口（命令行上没人能再按一次取消），这条分支只是把枚举走完：
         // 真出现了也按失败报，绝不静默退出 0。
         DownloadOutcome::Cancelled { .. } => {
-            eprintln!("{}", i18n::cli_download_cancelled(target.as_str()));
-            emit_download_event("error", target, 0, total, 0, Some(&target_dir));
+            let message = i18n::cli_download_cancelled(target.as_str());
+            eprintln!("{message}");
+            emit_download_event(
+                "error",
+                target,
+                0,
+                total,
+                0,
+                Some(&target_dir),
+                Some(&message),
+            );
             Err(1)
         }
     }
@@ -1990,37 +2262,39 @@ fn emit_download_event(
     total: u64,
     speed: u64,
     dir: Option<&Path>,
+    message: Option<&str>,
 ) {
     println!(
         "{}",
-        i18n::cli_download_event(state, model.as_str(), done, total, speed, dir)
+        i18n::cli_download_event(state, model.as_str(), done, total, speed, dir, message)
     );
 }
 
 /// 「已装好且校验通过」的目录：命中就返回 `(id, 目录)`。
 ///
-/// 扫描顺序是**候选在外、root 在内**，与 `apply_app_root_paths` 同一条规则：fp16
-/// 优先是全局规则，不被 root 顺序截胡——否则 `--data-root` 里只装了 int8 就会盖过
-/// `--app-root` 里的 fp16。
-fn installed_model(pick: &DownloadPick, roots: &[&Path]) -> Option<(ModelId, PathBuf)> {
-    first_installed(&pick.candidates, roots, |id, dir| {
+/// 候选在外层：fp16 优先是全局规则，不被目录顺序截胡。`dirs_for` 由调用方
+/// 决定 —— 有配置时是每个模型自己的目录，没有配置时是 data/app 的安装布局。
+fn installed_model(
+    pick: &DownloadPick,
+    dirs_for: impl Fn(ModelId) -> Vec<PathBuf>,
+) -> Option<(ModelId, PathBuf)> {
+    first_ready(&pick.candidates, dirs_for, |id, dir| {
         check_model_dir(id, dir).is_ok()
     })
 }
 
-/// 按「候选 → root」的顺序找第一个 `ready` 的目录。
+/// 按「候选 → 目录」的顺序找第一个 `ready` 的目录。
 ///
-/// 判据从参数进，是为了让这条**顺序**能被单测钉住：真判据要跑 `check_*_model_dir`，
-/// 那需要真的几 GB 权重（见 `download_gate_scans_candidates_before_roots`）。
-fn first_installed(
+/// 判据从参数进，是为了让这条**顺序**能被单测钉住：真判据要跑
+/// `check_*_model_dir`，那需要真的几 GB 权重。
+fn first_ready(
     candidates: &[ModelId],
-    roots: &[&Path],
+    dirs_for: impl Fn(ModelId) -> Vec<PathBuf>,
     ready: impl Fn(ModelId, &Path) -> bool,
 ) -> Option<(ModelId, PathBuf)> {
     candidates.iter().find_map(|id| {
-        roots
-            .iter()
-            .map(|root| root.join(oneasr_core::paths::MODELS_DIR).join(id.as_str()))
+        dirs_for(*id)
+            .into_iter()
             .find(|dir| ready(*id, dir))
             .map(|dir| (*id, dir))
     })
@@ -2539,10 +2813,10 @@ mod tests {
         assert!(parse_asr_arg("ctc").is_none());
     }
 
-    /// 「先验后下」的扫描顺序：**候选在外、root 在内**（fp16 优先是全局规则，不被
+    /// 「先验后下」的扫描顺序：**候选在外、目录在内**（fp16 优先是全局规则，不被
     /// root 顺序截胡），与 `apply_app_root_paths` 同一条。
     ///
-    /// 断骨验证：把 `first_installed` 的两层循环对调（root 在外），`seen` 的顺序
+    /// 断骨验证：把 `first_ready` 的两层循环对调（目录在外），`seen` 的顺序
     /// 断言立刻变红。
     #[test]
     fn download_gate_scans_candidates_before_roots() {
@@ -2552,10 +2826,16 @@ mod tests {
         let app = env::temp_dir().join("oneasr-dl-gate-app");
         let roots = [data.as_path(), app.as_path()];
         let candidates = [ModelId::Qwen3Asr17B, ModelId::Qwen3Asr17BInt8];
+        let dirs_for = |id: ModelId| -> Vec<PathBuf> {
+            roots
+                .iter()
+                .map(|root| root.join("models").join(id.as_str()))
+                .collect()
+        };
 
         // 就绪的是「int8 @ data」：候选在外时，fp16 的两个根都要先问过。
         let seen = RefCell::new(Vec::new());
-        let found = first_installed(&candidates, &roots, |id, dir| {
+        let found = first_ready(&candidates, dirs_for, |id, dir| {
             seen.borrow_mut().push((id, dir.to_path_buf()));
             id == ModelId::Qwen3Asr17BInt8 && dir.starts_with(&data)
         });
@@ -2584,6 +2864,46 @@ mod tests {
             ],
             "fp16 的两个根没问完，就不该轮到 int8"
         );
+    }
+
+    /// 下载的「已装」检查也按每个模型自己的配置目录走，而不是只看安装布局。
+    ///
+    /// 断骨锚点：把 `configured_model_dir` 换回 `models_root()/id`，本用例变红。
+    #[test]
+    fn download_gate_uses_each_models_configured_dir() {
+        let (root, asr, aligner, demucs, sensevoice) = fake_model_dirs("download-dirs");
+        let saved = Settings {
+            asr_dirs: [(ModelId::Qwen3Asr06B.as_str().to_string(), asr.clone())]
+                .into_iter()
+                .collect(),
+            aligner_dirs: [(
+                ModelId::OmniAsrCtc300M.as_str().to_string(),
+                aligner.clone(),
+            )]
+            .into_iter()
+            .collect(),
+            demucs_model_dir: demucs.clone(),
+            sensevoice_model_dir: sensevoice.clone(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            installed_model(&DownloadPick::one(ModelId::Qwen3Asr06B), |id| vec![
+                configured_model_dir(&saved, id)
+            ]),
+            Some((ModelId::Qwen3Asr06B, asr))
+        );
+        assert_eq!(
+            installed_model(&DownloadPick::one(ModelId::OmniAsrCtc300M), |id| vec![
+                configured_model_dir(&saved, id)
+            ]),
+            Some((ModelId::OmniAsrCtc300M, aligner))
+        );
+        assert_eq!(configured_model_dir(&saved, ModelId::HtdemucsFt), demucs);
+        assert_eq!(
+            configured_model_dir(&saved, ModelId::SenseVoiceSmall),
+            sensevoice
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ── 热词：`--hotword-group` / `--hotwords` ─────────────────────────
@@ -3180,6 +3500,21 @@ mod tests {
         );
     }
 
+    /// `--transcript` 比 `--aligner qwen` 更强：align 固定 CTC，门禁必须同源。
+    #[test]
+    fn status_transcript_forces_ctc() {
+        let mut s = Settings::default();
+        apply_status_overrides(
+            &mut s,
+            &["--transcript".into(), "--aligner".into(), "qwen".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            s.aligner_model,
+            oneasr_core::ModelId::OmniAsrCtc300M.as_str()
+        );
+    }
+
     /// 目录解析：与 transcribe 同一条规则 —— 点名的型号赢过扫描，root 布局照常生效。
     ///
     /// 断骨锚点：把 `resolve_status_paths` 传的 `AsrPick::Exact` 改回 `None`，
@@ -3201,7 +3536,7 @@ mod tests {
             aligner_model: ModelId::OmniAsrCtc300M.as_str().into(),
             ..Settings::default()
         };
-        let resolved = resolve_status_paths(selected, &root, &root);
+        let resolved = resolve_status_paths(selected, &root, &root, None);
         assert_eq!(resolved.asr_model, ModelId::Qwen3Asr17B.as_str());
         assert_eq!(
             resolved.asr_model_dir,
@@ -3227,13 +3562,116 @@ mod tests {
             ModelId::Qwen3Asr06B.as_str().to_string(),
             root.join("picked-elsewhere"),
         );
-        let resolved = resolve_status_paths(with_pick, &root, &root);
+        let resolved = resolve_status_paths(with_pick, &root, &root, None);
         assert_eq!(
             resolved.asr_model_dir,
             root.join("models").join(ModelId::Qwen3Asr06B.as_str()),
             "手选目录不参与命令行的路径解析"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 每个模型各记各的目录，且**原样**使用：normalize 之后也不能被修回安装布局。
+    ///
+    /// 断骨锚点：把 `pin_saved_active_dirs` 的两行删掉，两个断言都会变红。
+    #[test]
+    fn saved_model_dirs_are_per_model_and_wysiwyg() {
+        let root = env::temp_dir().join(format!("oneasr-saved-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let asr_custom = root.join("my-asr");
+        let aligner_custom = root.join("my-aligner");
+        // 目录**不创建**：缺失的自定义目录也必须原样保留，让门禁报缺。
+        let mut saved = Settings {
+            asr_model: ModelId::Qwen3Asr17B.as_str().into(),
+            aligner_model: ModelId::OmniAsrCtc300M.as_str().into(),
+            ..Settings::default()
+        };
+        saved.asr_dirs.insert(
+            ModelId::Qwen3Asr17B.as_str().to_string(),
+            asr_custom.clone(),
+        );
+        saved.aligner_dirs.insert(
+            ModelId::OmniAsrCtc300M.as_str().to_string(),
+            aligner_custom.clone(),
+        );
+
+        let mut run = Settings::default();
+        apply_saved_model_config(&mut run, &saved);
+        run.normalize();
+        pin_saved_active_dirs(&mut run);
+
+        assert_eq!(run.asr_model_dir, asr_custom);
+        assert_eq!(run.aligner_model_dir, aligner_custom);
+        assert!(
+            !run.asr_model_dir.is_dir(),
+            "测试前提：自定义目录本来就不存在"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 尺寸级别名在配置里也按 per-model 目录找：fp16 缺、int8 在，就用 int8。
+    ///
+    /// 断骨锚点：把 `choose_saved_asr` 的 Size 分支改成只回 fp16，本用例变红。
+    #[test]
+    fn size_alias_uses_each_variants_saved_dir() {
+        let root = env::temp_dir().join(format!("oneasr-size-pick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let fp16 = root.join("fp16-missing");
+        let int8 = root.join("int8-present");
+        std::fs::create_dir_all(&int8).unwrap();
+        let saved = Settings {
+            asr_dirs: [
+                (ModelId::Qwen3Asr06B.as_str().to_string(), fp16),
+                (ModelId::Qwen3Asr06BInt8.as_str().to_string(), int8),
+            ]
+            .into_iter()
+            .collect(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            choose_saved_asr(&saved, AsrPick::Size(ModelId::Qwen3Asr06B)),
+            ModelId::Qwen3Asr06BInt8
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 文件系统里不存在自定义目录时，`status` 报的仍是那个目录（不是安装布局）。
+    #[test]
+    fn status_keeps_the_configured_missing_dir() {
+        let root = env::temp_dir().join(format!("oneasr-status-custom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let custom = root.join("custom-asr");
+        let saved = Settings {
+            asr_model: ModelId::Qwen3Asr06B.as_str().into(),
+            asr_dirs: [(ModelId::Qwen3Asr06B.as_str().to_string(), custom.clone())]
+                .into_iter()
+                .collect(),
+            ..Settings::default()
+        };
+        let mut run = saved.clone();
+        apply_saved_model_config(&mut run, &saved);
+        run.normalize();
+        pin_saved_active_dirs(&mut run);
+        let report = status_report(&run, &root, &root, &root.join("models"));
+        assert_eq!(report.asr.dir, custom);
+        assert!(!report.asr.ready);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `--script` 只认三个值；拼错是用法错（2），不能静默退回 original。
+    #[test]
+    fn script_arg_accepts_the_three_scripts_and_rejects_unknown() {
+        for raw in ["original", "simplified", "traditional"] {
+            assert_eq!(
+                script_arg(&["--script".into(), raw.into()]).unwrap(),
+                Some(raw.to_string())
+            );
+        }
+        assert_eq!(script_arg(&[]).unwrap(), None);
+        assert_eq!(
+            script_arg(&["--script".into(), "Simplified".into()]).unwrap_err(),
+            2
+        );
     }
 
     /// 阶段编号：条件阶段不进分母，pct = index / total 四舍五入。

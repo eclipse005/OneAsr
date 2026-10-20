@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { formatDuration, moreItems, t, UiLang } from '../i18n'
+import { formatDuration, heatTooltip, moreItems, t, taskStatusLabel, UiLang } from '../i18n'
 import { useEscClose } from '../esc'
 import { useSurfaceMotion } from '../motion'
 import type { StatsSnapshot } from '../../../shared/types'
@@ -124,7 +124,7 @@ export function StatsPanel({
                   viewBox={`0 0 ${w} ${h}`}
                   preserveAspectRatio="none"
                   role="img"
-                  aria-label="media sparkline"
+                  aria-label={s.sparklineAria}
                 >
                   <polyline
                     fill="none"
@@ -144,12 +144,12 @@ export function StatsPanel({
 
               <div className="chart-card">
                 <h5>{s.heatTitle}</h5>
-                <div className="heat" title="media seconds / day">
+                <div className="heat" title={s.heatTitle}>
                   {stats.perDay.map((d) => (
                     <i
                       key={d.day}
                       className={heatLevel(d.mediaSec, d.errors)}
-                      title={`${d.day}: ${formatDuration(d.mediaSec)} · ${d.tasks} ok · ${d.errors} err`}
+                      title={heatTooltip(lang, d.day, d.mediaSec, d.tasks, d.errors)}
                     />
                   ))}
                 </div>
@@ -198,7 +198,7 @@ export function StatsPanel({
                               <span className="recent-name" title={r.name}>
                                 {r.name}
                               </span>
-                              <span className={`recent-status ${r.status}`}>{r.status}</span>
+                              <span className={`recent-status ${r.status}`}>{taskStatusLabel(lang, r.status)}</span>
                               {r.durationMs != null && (
                                 <span className="recent-ms">{(r.durationMs / 1000).toFixed(1)}s</span>
                               )}

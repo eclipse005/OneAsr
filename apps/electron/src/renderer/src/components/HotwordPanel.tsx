@@ -51,6 +51,7 @@ export function HotwordEditor({
   const [addRaw, setAddRaw] = useState('')
   const [lastAdded, setLastAdded] = useState<number | null>(null)
   const [groupAnchor, setGroupAnchor] = useState<DOMRect | null>(null)
+  const groupTriggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!value.groups.some((g) => g.id === sel)) {
@@ -106,6 +107,7 @@ export function HotwordEditor({
       <div className="hw-group-bar">
         <div className={`hw-group-menu${groupAnchor ? ' open' : ''}`}>
           <button
+            ref={groupTriggerRef}
             type="button"
             className="hw-group-trigger"
             aria-haspopup="listbox"
@@ -129,6 +131,7 @@ export function HotwordEditor({
             onClose={() => setGroupAnchor(null)}
             className="chip-menu hw-group-popover"
             label={s.groups}
+            trigger={groupTriggerRef}
           >
             <ul className="hw-group-listbox" role="listbox">
               {value.groups.map((g) => {

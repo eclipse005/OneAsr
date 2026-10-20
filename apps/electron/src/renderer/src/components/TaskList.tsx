@@ -236,6 +236,9 @@ export function TaskList({
                 }
               }}
               onDrop={(e) => {
+                // 媒体文件会让窗口级 drop 接管；这里先清掉行高亮，
+                // 否则媒体拖放后这一行会一直停在 row-drop。
+                setDropTargetId(null)
                 const paths = Array.from(e.dataTransfer.files || [])
                   .map((f) => window.oneasr.getPathForFile?.(f) || '')
                   .filter((p): p is string => !!p)
@@ -243,7 +246,6 @@ export function TaskList({
                 if (!transcript) return // 媒体：让窗口级 drop 走正常添加
                 e.preventDefault()
                 e.stopPropagation()
-                setDropTargetId(null)
                 onAttachTranscript(task.id, transcript)
               }}
               {...rowMotion}
