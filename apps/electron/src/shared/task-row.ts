@@ -1,20 +1,41 @@
 import type { TaskStatus } from './types'
+import { supportsHotwords } from './language'
 
-/**
- * 打轴时行内控件也不收起来。热词对对齐无效，所以禁用；
- * 语言会传给对齐器，人声分离也会跑，这两项保持可用。
- */
-export function rowChipState(hasTranscript: boolean): {
+/** 行内组名：没起名时退回占位名，绝不把胶囊渲染成空白。 */
+export function hotwordGroupLabel(
+  name: string | null | undefined,
+  placeholder: string
+): string {
+  return (name ?? '').trim() || placeholder
+}
+
+/** 热词为什么不能选：打轴不用，或这行语言不支持。 */
+export type HotwordsDisabledReason = 'align' | 'language' | null
+
+export interface RowChipState {
   showLanguage: boolean
   showHotwords: boolean
   languageEnabled: boolean
   hotwordsEnabled: boolean
-} {
+  hotwordsDisabledReason: HotwordsDisabledReason
+}
+
+/**
+ * 打轴时行内控件也不收起来。热词对对齐无效，所以禁用；
+ * 语言会传给对齐器，人声分离也会跑，这两项保持可用。
+ *
+ * 语言不是中文 / 英文时热词同样禁用——这一栏固定显示「无热词」，
+ * 不能挂一个管线永远不会读取的组。两个原因同时成立时按打轴算
+ * （对齐连中文热词也不用）。
+ */
+export function rowChipState(hasTranscript: boolean, language: string): RowChipState {
+  const languageOk = supportsHotwords(language)
   return {
     showLanguage: true,
     showHotwords: true,
     languageEnabled: true,
-    hotwordsEnabled: !hasTranscript
+    hotwordsEnabled: !hasTranscript && languageOk,
+    hotwordsDisabledReason: hasTranscript ? 'align' : languageOk ? null : 'language'
   }
 }
 

@@ -1,23 +1,52 @@
 import { describe, expect, it } from 'vitest'
-import { rowChipState, rowStartIcon, rowStartKind } from './task-row'
+import { hotwordGroupLabel, rowChipState, rowStartIcon, rowStartKind } from './task-row'
 
 describe('rowChipState', () => {
   it('打轴时语言和热词都还在，热词禁用，语言仍可用', () => {
-    expect(rowChipState(true)).toEqual({
+    expect(rowChipState(true, 'zh')).toEqual({
       showLanguage: true,
       showHotwords: true,
       languageEnabled: true,
-      hotwordsEnabled: false
+      hotwordsEnabled: false,
+      hotwordsDisabledReason: 'align'
     })
   })
 
-  it('普通转写时语言和热词都能改', () => {
-    expect(rowChipState(false)).toEqual({
-      showLanguage: true,
-      showHotwords: true,
-      languageEnabled: true,
-      hotwordsEnabled: true
-    })
+  it('普通转写时中文和英文都能改热词', () => {
+    for (const language of ['zh', 'en']) {
+      expect(rowChipState(false, language)).toEqual({
+        showLanguage: true,
+        showHotwords: true,
+        languageEnabled: true,
+        hotwordsEnabled: true,
+        hotwordsDisabledReason: null
+      })
+    }
+  })
+
+  it('其它语言热词禁用：这一栏固定为「无」，不能选组', () => {
+    for (const language of ['yue', 'ja', 'ko', 'auto']) {
+      const chips = rowChipState(false, language)
+      expect(chips.hotwordsEnabled, language).toBe(false)
+      expect(chips.hotwordsDisabledReason, language).toBe('language')
+    }
+  })
+
+  it('打轴和不支持的语言同时成立时，按打轴解释', () => {
+    expect(rowChipState(true, 'ja').hotwordsDisabledReason).toBe('align')
+  })
+})
+
+describe('hotwordGroupLabel', () => {
+  it('没起名的组用本地化占位名，不渲染空白胶囊', () => {
+    expect(hotwordGroupLabel('', '未命名')).toBe('未命名')
+    expect(hotwordGroupLabel('   ', '未命名')).toBe('未命名')
+    expect(hotwordGroupLabel(undefined, 'Untitled')).toBe('Untitled')
+  })
+
+  it('起过名的组原样显示（两侧空白不算名字）', () => {
+    expect(hotwordGroupLabel('ICT', '未命名')).toBe('ICT')
+    expect(hotwordGroupLabel('  ICT  ', '未命名')).toBe('ICT')
   })
 })
 

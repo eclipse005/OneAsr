@@ -69,3 +69,16 @@ export function wordsCsv(group: HotwordGroup | undefined): string {
     .filter(Boolean)
     .join(',')
 }
+
+/**
+ * 新任务该自动绑的默认组：开关开着、组存在、而且**真的有词**。
+ *
+ * 空组不自动绑：否则新任务一进来就挂着一个没有词的组，开跑会被
+ * 「热词组为空」挡住。想逼自己先填词，可以在行里手动选这组；自动启用
+ * 只该在确实有词可提示时生效。
+ */
+export function newTaskGroup(store: HotwordStore): string | null {
+  if (!store.default_group_enabled || !store.default_group) return null
+  const group = store.groups.find((g) => g.id === store.default_group)
+  return wordsCsv(group) ? store.default_group : null
+}

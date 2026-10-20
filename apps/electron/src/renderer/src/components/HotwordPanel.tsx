@@ -4,20 +4,7 @@ import { t, UiLang } from '../i18n'
 import { useLayerMotion } from '../motion'
 import { Popover } from './Popover'
 import type { HotwordGroup, HotwordStore } from '../../../shared/types'
-
-function parseWords(raw: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const part of raw.split(/[,，\n\r\t]+/)) {
-    const w = part.trim()
-    if (!w) continue
-    const key = w.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(w)
-  }
-  return out
-}
+import { parseHotwordInput } from '../../../shared/hotwords'
 
 function joinWords(words: string[]): string {
   return words.join('\n')
@@ -60,7 +47,7 @@ export function HotwordEditor({
   }, [value, sel])
 
   const group = value.groups.find((g) => g.id === sel) || value.groups[0]
-  const words = useMemo(() => parseWords(group?.words || ''), [group?.words])
+  const words = useMemo(() => parseHotwordInput(group?.words || ''), [group?.words])
 
   const touch = (next: HotwordStore) => onChange(next)
 
@@ -77,7 +64,7 @@ export function HotwordEditor({
 
   const applyAdd = () => {
     if (!group) return
-    const incoming = parseWords(addRaw)
+    const incoming = parseHotwordInput(addRaw)
     if (!incoming.length) return
     const before = new Set(words.map((w) => w.toLowerCase()))
     const merged = [...words]
@@ -228,7 +215,10 @@ export function HotwordEditor({
         {!group ? (
           <span>{s.emptyGroup}</span>
         ) : words.length === 0 ? (
-          <span>{s.emptyChips}</span>
+          <div className="hw-empty">
+            <span>{s.emptyChips}</span>
+            <span className="hw-empty-example">{s.emptyChipsExample}</span>
+          </div>
         ) : (
           <AnimatePresence initial={false}>
             {words.map((w) => (

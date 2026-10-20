@@ -15,7 +15,14 @@ import { useRowMotion } from '../motion'
 import { SelectMenu } from './Popover'
 import { formatSize } from '../lib/format'
 import { isTranscriptPath } from '../lib/pairing'
-import { rowChipState, rowStartIcon, rowStartKind, type RowStartKind } from '../../../shared/task-row'
+import {
+  hotwordGroupLabel,
+  rowChipState,
+  rowStartIcon,
+  rowStartKind,
+  type RowStartKind
+} from '../../../shared/task-row'
+import { supportsHotwords } from '../../../shared/language'
 import type { HotwordGroup, TaskSnapshot } from '../../../shared/types'
 
 /**
@@ -177,7 +184,15 @@ export function TaskList({
           const locked = task.status === 'running'
           const doneWithOutput = task.status === 'done' && !!task.outputPath
           const language = task.language || defaultLanguage
-          const boundGroup = hotwordGroups.find((g) => g.id === task.hotwordGroupId)
+          const hotwordLanguageOk = supportsHotwords(language)
+          // 不支持的语言连「已绑组」都不显示：主进程换语言时会清掉绑定，
+          // 这里再兜一层，避免旧快照在禁用状态里露出一个组名。
+          const boundGroup = hotwordLanguageOk
+            ? hotwordGroups.find((g) => g.id === task.hotwordGroupId)
+            : undefined
+          const boundGroupLabel = boundGroup
+            ? hotwordGroupLabel(boundGroup.name, s.emptyGroup)
+            : undefined
           const size = formatSize(task.sizeBytes)
           const duration = task.durationSec != null ? formatDuration(task.durationSec) : undefined
           const meta = [size, duration].filter(Boolean).join('  ·  ')
@@ -197,7 +212,13 @@ export function TaskList({
           // 只有**真的进了队列**（有排队位次）或正在跑才锁；刚添加的待处理行还允许改稿
           const transcriptLocked =
             task.status === 'running' || (task.status === 'queued' && task.queueRank != null)
-          const chips = rowChipState(hasTranscript)
+          const chips = rowChipState(hasTranscript, language)
+          const hotwordTitle =
+            chips.hotwordsDisabledReason === 'align'
+              ? s.hotwordIgnoredOnAlign
+              : chips.hotwordsDisabledReason === 'language'
+                ? s.hotwordUnsupportedLanguage
+                : undefined
           const startKind = rowStartKind({
             hasTranscript,
             status: task.status,
@@ -318,7 +339,7 @@ export function TaskList({
                 {/* 路径默认不占行（文件名已经在上面）；同名不同目录时才显示 */}
                 {duplicateName && <div className="meta">{task.input}</div>}
               </div>
-              {/* 右：术语 chips + 状态 + 动作（与旧版一致：术语贴着右侧，动作在最右） */}
+              {/* 右：热词 chips + 状态 + 动作（与旧版一致：热词贴着右侧，动作在最右） */}
               <div className="controls">
                 <div className="row-chips">
                   {chips.showLanguage && (
@@ -350,13 +371,16 @@ export function TaskList({
                   {chips.showHotwords && (
                     <SelectMenu
                       className={`row-chip group-chip ${chips.hotwordsEnabled && !boundGroup ? 'muted' : ''}`}
-                      value={task.hotwordGroupId ?? ''}
+                      value={hotwordLanguageOk ? (task.hotwordGroupId ?? '') : ''}
                       options={[
                         { id: '', label: s.hotwordNone },
-                        ...hotwordGroups.map((g) => ({ id: g.id, label: g.name }))
+                        ...hotwordGroups.map((g) => ({
+                          id: g.id,
+                          label: hotwordGroupLabel(g.name, s.emptyGroup)
+                        }))
                       ]}
-                      ariaLabel={boundGroup ? boundGroup.name : s.hotwordNone}
-                      title={chips.hotwordsEnabled ? undefined : s.hotwordIgnoredOnAlign}
+                      ariaLabel={boundGroupLabel ?? s.hotwordNone}
+                      title={hotwordTitle}
                       disabled={locked || !chips.hotwordsEnabled}
                       onChange={(id) => onSetHotwordGroup(task.id, id || null)}
                       footer={(close) => (

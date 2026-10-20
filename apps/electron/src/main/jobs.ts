@@ -22,8 +22,9 @@ import { countCues } from '../shared/cue-count'
 import { appendRecord, loadRecords, localDay, summarize } from './stats-ledger'
 import { logError, logWarn, writeTaskLog } from './log'
 import { m } from './i18n'
-import { loadHotwords, wordsCsv } from './hotword'
+import { loadHotwords, newTaskGroup, wordsCsv } from './hotword'
 import { resolveRunOutcome } from '../shared/run-result'
+import { hotwordGroupForLanguage } from '../shared/language'
 import {
   CTC_ALIGNER_ID,
   failedTranscriptInfo,
@@ -127,6 +128,9 @@ export class JobManager extends EventEmitter {
   setLanguage(id: string, language: string): TaskSnapshot[] {
     return this.patch(id, (t) => {
       t.language = language
+      // 热词只接中文与英文：换到别的语言时，绑定一起清成「无」，
+      // 免得界面显示无热词、任务里却还挂着一个永远不生效的组。
+      t.hotwordGroupId = hotwordGroupForLanguage(language, t.hotwordGroupId)
     })
   }
 
@@ -140,7 +144,9 @@ export class JobManager extends EventEmitter {
   /** 行内绑热词组（null = 不绑）。 */
   setHotwordGroup(id: string, groupId: string | null): TaskSnapshot[] {
     return this.patch(id, (t) => {
-      t.hotwordGroupId = groupId
+      // 语言不支持时把这次绑定也吞掉：IPC 可能来自一份过期快照，
+      // 不能让界面的禁用成为唯一防线。
+      t.hotwordGroupId = hotwordGroupForLanguage(t.language, groupId)
     })
   }
 
@@ -154,10 +160,9 @@ export class JobManager extends EventEmitter {
   async add(items: Array<string | AddTaskInput>): Promise<TaskSnapshot[]> {
     const settings = loadSettings()
     const hw = loadHotwords()
-    const defaultGroup =
-      hw.default_group_enabled && hw.default_group
-        ? hw.default_group
-        : null
+    const language = settings.language || 'zh'
+    // 默认组没词时 newTaskGroup 返回 null：新任务从第一刻起就是「无热词」。
+    const defaultGroup = newTaskGroup(hw)
     for (const raw of items) {
       const item: AddTaskInput = typeof raw === 'string' ? { media: raw } : raw
       const p = item.media
@@ -171,8 +176,9 @@ export class JobManager extends EventEmitter {
         status: 'queued',
         progress: '',
         progressPct: 0,
-        hotwordGroupId: defaultGroup,
-        language: settings.language || 'zh',
+        // 默认语言本来就是中文/英文时才带默认组；日语等语言直接「无热词」。
+        hotwordGroupId: hotwordGroupForLanguage(language, defaultGroup),
+        language,
         vocalSeparation: !!settings.vocal_separation
       }
       if (item.transcript) {
@@ -452,7 +458,8 @@ export class JobManager extends EventEmitter {
       for (const t of this.tasks) {
         if (t.id === src.id || t.status === 'running') continue
         t.language = src.language
-        t.hotwordGroupId = src.hotwordGroupId
+        // 目标行换成源行的语言后，再决定热词绑定是否保留。
+        t.hotwordGroupId = hotwordGroupForLanguage(t.language, src.hotwordGroupId)
         t.vocalSeparation = src.vocalSeparation
       }
       this.emitUpdate()

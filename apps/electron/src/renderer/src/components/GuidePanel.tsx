@@ -173,6 +173,7 @@ function TabBody({ tab, s }: { tab: GuideTab; s: Copy }) {
   if (tab === 'hotwords') {
     return (
       <div className="guide-copy">
+        <Entry title={s.guideHwInputTitle} body={s.guideHwInput} />
         <Entry title={s.groups} body={s.guideHwGroups} />
         <Entry title={s.defaultGroupShort} body={s.guideHwDefault} />
         <Entry title={s.hotwords} body={s.guideHwRow} />

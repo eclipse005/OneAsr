@@ -217,7 +217,7 @@ button:focus-visible {
    左右晃；居中是因为靠左会在右边留一大块空（而且 caret 顶到最右也不好看）。
    宽度按"完整装下默认文案"取：语言装得下 English、词库装得下「热词：无」。
    更长的词库名会被截断（title 里有全名）——定宽与"永不截断"本来就只能二选一。 */
-/* 语言、术语、人声分离、文稿同一宽度，四个胶囊对齐成一排。
+/* 语言、热词、人声分离、文稿同一宽度，四个胶囊对齐成一排。
    装得下 English、人声分离、「+ 文稿」。更长的词库名和英文 Vocal separation / + Transcript 截断，全称在 title。
    不要用 .hw-chip：那是设置页里的词条胶囊（32px 圆角），套到行上会比旁边高一圈。 */
 .row-chip.lang-chip,
@@ -328,8 +328,8 @@ html[lang='en'] .row-chip.transcript-chip {
 .btn-mini:hover { border-color: var(--danger); color: var(--danger); }
 .task-card {
   position: relative;
-  /* 左：文件名 + 大小·时长·耗时·状态；右：术语 chips + 动作（错误另起一行，grid-column 拉通）。
-     右侧是 auto 列，所以术语多长都不会影响文件名那一列。
+  /* 左：文件名 + 大小·时长·耗时·状态；右：热词 chips + 动作（错误另起一行，grid-column 拉通）。
+     右侧是 auto 列，所以热词多长都不会影响文件名那一列。
      左列保底 240px：右列那四个 chip 加三个动作要 508px，窗口一窄就先把左列压扁，
      状态那几个字会被裁掉半个（实测 700px 宽时状态只剩 17px、600px 时整条没了）。
      左列留够，右列的 chip 自己换行（.row-chips 有 wrap），状态永远完整。 */
@@ -879,6 +879,10 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   color: var(--muted); font-size: 0.9rem; text-align: center;
   border-style: dashed;
 }
+.hw-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.hw-empty-example { font-size: 0.78rem; color: var(--muted-soft); }
 .hw-chip {
   display: inline-flex; align-items: center; gap: 6px;
   height: 32px; padding: 0 8px 0 12px; border-radius: 999px;
@@ -1430,7 +1434,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 
 /* ── 文稿：行内入口 + 匹配面板 ─────────────────────────────────────── */
-/* 宽度跟语言、术语、人声分离同一档，见上面的 94px。没文稿是「+ 文稿」，挂上之后仍是「文稿」，只改颜色。 */
+/* 宽度跟语言、热词、人声分离同一档，见上面的 94px。没文稿是「+ 文稿」，挂上之后仍是「文稿」，只改颜色。 */
 .row-chip.transcript-chip.has {
   border-color: var(--accent);
   color: var(--logo);
