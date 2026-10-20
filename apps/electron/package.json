@@ -1,6 +1,6 @@
 {
   "name": "oneasr-electron",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "description": "OneAsr modern Electron UI (reuses oneasr-cli)",
   "author": "OneAsr",
   "main": "./out/main/index.js",
