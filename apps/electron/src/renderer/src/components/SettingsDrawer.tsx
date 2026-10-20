@@ -166,6 +166,20 @@ function modelSlotReady(
   return !!slot?.ready && slot.id === modelId && slot.dir === dir
 }
 
+/** 快速校验（已下载模型点「重新下载」）不该闪一下下载态；超过 delay 才显示。 */
+function useDelayedBusy(active: boolean, delay = 400): boolean {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    if (!active) {
+      setVisible(false)
+      return
+    }
+    const timer = window.setTimeout(() => setVisible(true), delay)
+    return () => window.clearTimeout(timer)
+  }, [active, delay])
+  return visible
+}
+
 function ModelPathField({
   label,
   value,
@@ -175,6 +189,7 @@ function ModelPathField({
   ready,
   download,
   downloading,
+  showBusy,
   browseLabel,
   downloadLabel,
   redownloadLabel,
@@ -193,6 +208,7 @@ function ModelPathField({
   ready: boolean
   download: DownloadState | null
   downloading: boolean
+  showBusy: boolean
   browseLabel: string
   downloadLabel: string
   redownloadLabel: string
@@ -204,7 +220,7 @@ function ModelPathField({
   onCancel: () => void
 }) {
   const active = download?.model === modelId
-  const isDown = active && downloading
+  const isDown = active && downloading && showBusy
   const isErr = active && download?.state === 'error'
   const pct = active ? Math.round(download?.pct ?? 0) : 0
   // 下载到当前显示的目录且已成功：在保存前也先显示「重新下载」，
@@ -226,11 +242,18 @@ function ModelPathField({
       <label>{label}</label>
       <div className="model-path-stack">
         <div className="path-input compact">
-          <input
-            className="text-input mono"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-          />
+          <div className="path-field">
+            <input
+              className="text-input mono"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+            />
+            {isDown ? (
+              <span className="dl-bar model-path-bar" aria-hidden>
+                <i style={{ width: `${pct}%` }} />
+              </span>
+            ) : null}
+          </div>
           <button
             type="button"
             className="icon-btn"
@@ -264,11 +287,6 @@ function ModelPathField({
             </button>
           )}
         </div>
-        {isDown ? (
-          <span className="dl-bar model-path-bar" aria-hidden>
-            <i style={{ width: `${pct}%` }} />
-          </span>
-        ) : null}
       </div>
     </div>
   )
@@ -333,6 +351,8 @@ export function SettingsDrawer({
   const pane = usePaneMotion()
   // 只有"进行中"才算忙碌：终态（完成/失败/取消）不能让其它模型的按钮一直禁用
   const downloading = download?.state === 'downloading' || download?.state === 'verifying'
+  // 已就绪的模型点「重新下载」只是快速校验；400ms 内结束就不闪下载态。
+  const showBusy = useDelayedBusy(downloading)
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   useEffect(() => {
     setActiveTab(initialTab)
@@ -636,6 +656,7 @@ export function SettingsDrawer({
                   ready={modelSlotReady(status, 'asr', asrId(size, quant), draft.asr_model_dir)}
                   download={download}
                   downloading={downloading}
+                  showBusy={showBusy}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
@@ -676,6 +697,7 @@ export function SettingsDrawer({
                   ready={modelSlotReady(status, 'aligner', draft.aligner_model, draft.aligner_model_dir)}
                   download={download}
                   downloading={downloading}
+                  showBusy={showBusy}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
@@ -709,6 +731,7 @@ export function SettingsDrawer({
                   ready={modelSlotReady(status, 'demucs', 'htdemucs_ft', draft.demucs_model_dir)}
                   download={download}
                   downloading={downloading}
+                  showBusy={showBusy}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
@@ -728,6 +751,7 @@ export function SettingsDrawer({
                   ready={modelSlotReady(status, 'sensevoice', 'SenseVoiceSmall', draft.sensevoice_model_dir || '')}
                   download={download}
                   downloading={downloading}
+                  showBusy={showBusy}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
