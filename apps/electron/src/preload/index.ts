@@ -31,7 +31,7 @@ const api: OneAsrApi = {
   getStatus: () => ipcRenderer.invoke('models:status'),
   startDownload: (model: string, targetDir?: string) =>
     ipcRenderer.invoke('download:start', model, targetDir),
-  cancelDownload: () => ipcRenderer.invoke('download:cancel'),
+  cancelDownload: (model: string) => ipcRenderer.invoke('download:cancel', model),
   getDownloadState: () => ipcRenderer.invoke('download:state'),
   onDownloadUpdated: (cb) => {
     const listener = (_: Electron.IpcRendererEvent, state: DownloadState): void => cb(state)

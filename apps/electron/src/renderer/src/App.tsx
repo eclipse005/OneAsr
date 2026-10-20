@@ -86,7 +86,8 @@ export default function App() {
   const [settingsAck, setSettingsAck] = useState(false)
   const ackTimer = useRef<number | undefined>(undefined)
 
-  const [download, setDownload] = useState<DownloadState | null>(null)
+  const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
+  const notifiedDownloads = useRef(new Set<string>())
 
   const lang = useMemo(
     () => resolveUiLang(draft?.ui_language || settings?.ui_language || 'system'),
@@ -255,7 +256,9 @@ export default function App() {
       setTasks(next)
     })
     const offStats = window.oneasr.onStatsUpdated((next) => setStats(next))
-    const offDownload = window.oneasr.onDownloadUpdated((state) => setDownload(state))
+    const offDownload = window.oneasr.onDownloadUpdated((state) =>
+      setDownloads((prev) => ({ ...prev, [state.model]: state }))
+    )
     return () => {
       offTasks()
       offStats()
@@ -263,17 +266,27 @@ export default function App() {
     }
   }, [refreshModels, refreshStats])
 
-  // 下载跑完/失败时刷新模型清单与状态点，并给一次提示（CLI 的人读行不进 UI）
-  const downloadPhase = download?.state
+  // 多个模型可同时下载：每个模型各自进入终态时刷新一次清单并提示。
   useEffect(() => {
-    if (downloadPhase !== 'done' && downloadPhase !== 'error') return
-    if (downloadPhase === 'done') notify('success', s.downloadDone)
-    else if (download?.message === 'cancelled') notify('info', s.cancelled)
-    else if (download?.message) notify('error', `${s.downloadFailed}：${download.message}`)
-    else notify('error', s.downloadFailed)
-    void refreshModels()
+    let refresh = false
+    for (const state of Object.values(downloads)) {
+      if (state.state !== 'done' && state.state !== 'error') {
+        // 重试/重新下载会先回到进行中，清掉上一轮的提示标记
+        notifiedDownloads.current.delete(state.model)
+        continue
+      }
+      const sig = `${state.model}:${state.state}:${state.message ?? ''}`
+      if (notifiedDownloads.current.has(sig)) continue
+      notifiedDownloads.current.add(sig)
+      if (state.state === 'done') notify('success', s.downloadDone)
+      else if (state.message === 'cancelled') notify('info', s.cancelled)
+      else if (state.message) notify('error', `${s.downloadFailed}：${state.message}`)
+      else notify('error', s.downloadFailed)
+      refresh = true
+    }
+    if (refresh) void refreshModels()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [downloadPhase])
+  }, [downloads])
 
   /**
    * 启动被门禁挡下时把原因弹出来。**文案是 Rust 给的**（status --json 的
@@ -665,9 +678,9 @@ export default function App() {
             lang={lang}
             draft={draft}
             status={status}
-            download={download}
+            downloads={downloads}
             onDownloadStart={(id, dir) => void window.oneasr.startDownload(id, dir)}
-            onDownloadCancel={() => void window.oneasr.cancelDownload()}
+            onDownloadCancel={(id) => void window.oneasr.cancelDownload(id)}
             dirty={dirty}
             hotwordDraft={hotwordDraft}
             initialTab={settingsTab}

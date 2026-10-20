@@ -37,8 +37,8 @@ export interface OneAsrApi {
   /** 模型状态/就绪/门禁/清单：CLI 的 `status --json` 原样转发 */
   getStatus: () => Promise<StatusSnapshot | null>
   startDownload: (model: string, targetDir?: string) => Promise<{ ok: boolean; code?: string }>
-  cancelDownload: () => Promise<void>
-  getDownloadState: () => Promise<DownloadState | null>
+  cancelDownload: (model: string) => Promise<void>
+  getDownloadState: () => Promise<DownloadState[]>
   onDownloadUpdated: (cb: (state: DownloadState) => void) => () => void
   openModelsFolder: () => Promise<void>
   pickFiles: () => Promise<DialogFilesResult>

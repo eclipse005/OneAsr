@@ -409,12 +409,12 @@ function registerIpc(): void {
     const r = await runCliJson<StatusSnapshot>(['status', '--json'], 20000)
     return r.ok ? r.data : null
   })
-  // 下载：一次一个，进度从 CLI 的 stdout 机器行来
+  // 下载：不同模型并行，进度从各自的 CLI stdout 机器行来
   ipcMain.handle('download:start', (_e, model: string, targetDir?: string) =>
     downloads.start(model, targetDir)
   )
-  ipcMain.handle('download:cancel', () => {
-    downloads.cancel()
+  ipcMain.handle('download:cancel', (_e, model: string) => {
+    downloads.cancel(model)
   })
   ipcMain.handle('download:state', () => downloads.state())
   ipcMain.handle('models:openFolder', async () => {

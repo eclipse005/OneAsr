@@ -1112,18 +1112,34 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   margin: 0; font-size: 0.78rem; font-weight: 650; color: var(--text);
 }
 .dl-all { margin: 0; font-size: 0.78rem; color: var(--muted); }
-.dl-bar { flex: 1; height: 3px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
-.dl-bar > i { display: block; height: 100%; background: var(--accent); transition: width var(--dur-layer) var(--ease-out); }
-
 .model-path-stack {
   display: flex; flex-direction: column; gap: 4px; min-width: 0;
 }
-/* 进度条叠在输入框底边，不参与行高：下载开始/结束时行不会上下跳。 */
-.path-field { position: relative; flex: 1; min-width: 0; display: flex; }
-.path-field .text-input { flex: 1; min-width: 0; }
-.model-path-bar {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  height: 2px; border-radius: 0 0 8px 8px; pointer-events: none;
+/* 下载时路径框本身就是进度条：淡青绿填充从左向右长，不另开一条细条，也不占行高。 */
+.path-field {
+  position: relative; flex: 1; min-width: 0; display: flex;
+  background: #fff; border-radius: 8px; overflow: hidden;
+}
+.path-field .text-input {
+  flex: 1; min-width: 0; position: relative; z-index: 1;
+}
+.path-field.is-downloading .text-input {
+  background: transparent;
+  border-color: var(--accent);
+  padding-right: 72px;
+}
+.path-progress {
+  position: absolute; top: 1px; bottom: 1px; left: 1px;
+  background: var(--accent-soft); border-radius: 7px;
+  pointer-events: none;
+  transition: width var(--dur-layer) var(--ease-out);
+}
+.path-progress-label {
+  position: absolute; right: 8px; top: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center;
+  color: var(--logo); font-size: 0.72rem; font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .field-hint.quiet { color: var(--muted); font-weight: 500; }

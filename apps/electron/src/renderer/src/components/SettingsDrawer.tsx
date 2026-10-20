@@ -188,8 +188,6 @@ function ModelPathField({
   modelId,
   ready,
   download,
-  downloading,
-  showBusy,
   browseLabel,
   downloadLabel,
   redownloadLabel,
@@ -207,8 +205,6 @@ function ModelPathField({
   modelId: string
   ready: boolean
   download: DownloadState | null
-  downloading: boolean
-  showBusy: boolean
   browseLabel: string
   downloadLabel: string
   redownloadLabel: string
@@ -217,16 +213,18 @@ function ModelPathField({
   retryLabel: string
   cancelLabel: string
   onDownload: (id: string, targetDir?: string) => void
-  onCancel: () => void
+  onCancel: (id: string) => void
 }) {
-  const active = download?.model === modelId
-  const isDown = active && downloading && showBusy
-  const isErr = active && download?.state === 'error'
-  const pct = active ? Math.round(download?.pct ?? 0) : 0
+  // 每个模型一份状态，可以同时下多个；同一行的快速校验不闪下载态。
+  const busy = download?.state === 'downloading' || download?.state === 'verifying'
+  const showBusy = useDelayedBusy(busy)
+  const isDown = busy && showBusy
+  const isErr = download?.state === 'error'
+  const pct = Math.round(download?.pct ?? 0)
   // 下载到当前显示的目录且已成功：在保存前也先显示「重新下载」，
   // 否则用户会以为刚下完的按钮还是「下载」。
   const downloadedHere =
-    active && download?.state === 'done' && (!download.dir || download.dir === value)
+    download?.state === 'done' && (!download.dir || download.dir === value)
   const readyNow = ready || downloadedHere
   let actionLabel = readyNow ? redownloadLabel : downloadLabel
   if (isErr) actionLabel = retryLabel
@@ -242,15 +240,18 @@ function ModelPathField({
       <label>{label}</label>
       <div className="model-path-stack">
         <div className="path-input compact">
-          <div className="path-field">
+          <div className={`path-field${isDown ? ' is-downloading' : ''}`}>
+            {isDown ? (
+              <span className="path-progress" style={{ width: `${pct}%` }} aria-hidden />
+            ) : null}
             <input
               className="text-input mono"
               value={value}
               onChange={(e) => onChange(e.target.value)}
             />
             {isDown ? (
-              <span className="dl-bar model-path-bar" aria-hidden>
-                <i style={{ width: `${pct}%` }} />
+              <span className="path-progress-label" aria-hidden>
+                {progressLabel}
               </span>
             ) : null}
           </div>
@@ -267,9 +268,10 @@ function ModelPathField({
             <button
               type="button"
               className="icon-btn"
-              title={cancelTitle}
+              /* title 不跟着 pct 改：原生 tooltip 会因 title 变化重新弹出，鼠标没动也闪。 */
+              title={cancelLabel}
               aria-label={cancelTitle}
-              onClick={onCancel}
+              onClick={() => onCancel(modelId)}
             >
               <span className="icon-glyph i-stop" aria-hidden />
             </button>
@@ -277,7 +279,7 @@ function ModelPathField({
             <button
               type="button"
               className={`icon-btn ${readyNow && !isErr ? '' : 'primary'}`}
-              disabled={downloading}
+              disabled={busy}
               title={actionLabel}
               aria-label={actionLabel}
               onClick={() => onDownload(modelId, value)}
@@ -296,7 +298,7 @@ export function SettingsDrawer({
   lang,
   draft,
   status,
-  download,
+  downloads,
   onDownloadStart,
   onDownloadCancel,
   dirty,
@@ -319,10 +321,10 @@ export function SettingsDrawer({
   draft: Settings
   /** CLI 的 status --json：就绪判据、门禁、可选模型清单都在里面 */
   status: StatusSnapshot | null
-  /** 当前下载进度（null = 没在下） */
-  download: DownloadState | null
+  /** 每个模型各自的下载状态；不同模型可以同时下 */
+  downloads: Record<string, DownloadState>
   onDownloadStart: (id: string, targetDir?: string) => void
-  onDownloadCancel: () => void
+  onDownloadCancel: (id: string) => void
   dirty: boolean
   /** 刚保存成功：主按钮短暂保持主色并显示「已保存」 */
   savedAck?: boolean
@@ -349,10 +351,6 @@ export function SettingsDrawer({
   const s = t(lang)
   const surface = useSurfaceMotion()
   const pane = usePaneMotion()
-  // 只有"进行中"才算忙碌：终态（完成/失败/取消）不能让其它模型的按钮一直禁用
-  const downloading = download?.state === 'downloading' || download?.state === 'verifying'
-  // 已就绪的模型点「重新下载」只是快速校验；400ms 内结束就不闪下载态。
-  const showBusy = useDelayedBusy(downloading)
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   useEffect(() => {
     setActiveTab(initialTab)
@@ -654,9 +652,7 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('asr_model_dir', asrId(size, quant))}
                   modelId={asrId(size, quant)}
                   ready={modelSlotReady(status, 'asr', asrId(size, quant), draft.asr_model_dir)}
-                  download={download}
-                  downloading={downloading}
-                  showBusy={showBusy}
+                  download={downloads[asrId(size, quant)] ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
@@ -695,9 +691,7 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('aligner_model_dir', draft.aligner_model)}
                   modelId={draft.aligner_model}
                   ready={modelSlotReady(status, 'aligner', draft.aligner_model, draft.aligner_model_dir)}
-                  download={download}
-                  downloading={downloading}
-                  showBusy={showBusy}
+                  download={downloads[draft.aligner_model] ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
@@ -729,9 +723,7 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('demucs_model_dir')}
                   modelId="htdemucs_ft"
                   ready={modelSlotReady(status, 'demucs', 'htdemucs_ft', draft.demucs_model_dir)}
-                  download={download}
-                  downloading={downloading}
-                  showBusy={showBusy}
+                  download={downloads.htdemucs_ft ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}
@@ -749,9 +741,7 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('sensevoice_model_dir')}
                   modelId="SenseVoiceSmall"
                   ready={modelSlotReady(status, 'sensevoice', 'SenseVoiceSmall', draft.sensevoice_model_dir || '')}
-                  download={download}
-                  downloading={downloading}
-                  showBusy={showBusy}
+                  download={downloads.SenseVoiceSmall ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
                   redownloadLabel={s.redownload}

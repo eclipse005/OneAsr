@@ -16,24 +16,24 @@ import { logError } from './log'
  *   [download] state=<downloading|verifying|done|error> model=<id> done=<n> total=<n> pct=<n> [speed=<n>] [dir="<path>"]
  * 人类可读的双语行在 stderr，不参与解析。
  *
- * 一次只跑一个（旧版的 start_model_download 也是这个门禁）；取消 = kill 子进程，
- * 下载器写的是临时文件 + Range 续传，下次重跑会接着下。
+ * 不同模型可以同时下载：每个模型一条 CLI 子进程、一份状态；同一个模型重复点仍被挡住。
+ * 取消 = kill 该模型的子进程；下载器写的是临时文件 + Range 续传，下次重跑会接着下。
  */
 export class DownloadManager extends EventEmitter {
-  private child: ChildProcess | null = null
-  private current: DownloadState | null = null
+  private readonly children = new Map<string, ChildProcess>()
+  private readonly current = new Map<string, DownloadState>()
 
-  state(): DownloadState | null {
-    return this.current
+  /** 本次运行里各模型的最新状态（含已完成/失败，供重开设置时回显）。 */
+  state(): DownloadState[] {
+    return Array.from(this.current.values())
   }
 
-  /** 上一次的进度（渲染层重新打开设置时要用）。 */
   isBusy(): boolean {
-    return this.child !== null
+    return this.children.size > 0
   }
 
   start(model: string, targetDir?: string): { ok: boolean; code?: 'busy' | 'spawn' } {
-    if (this.child) return { ok: false, code: 'busy' }
+    if (this.children.has(model)) return { ok: false, code: 'busy' }
     const cli = resolveCli()
     const args = [
       'download',
@@ -45,7 +45,7 @@ export class DownloadManager extends EventEmitter {
       dataRoot()
     ]
     if (targetDir) args.push('--model-dir', targetDir)
-    this.current = {
+    const initial: DownloadState = {
       model,
       state: 'verifying',
       doneBytes: 0,
@@ -53,7 +53,8 @@ export class DownloadManager extends EventEmitter {
       pct: 0,
       dir: undefined
     }
-    this.emit('updated', this.current)
+    this.current.set(model, initial)
+    this.emit('updated', initial)
 
     let child: ChildProcess
     try {
@@ -64,19 +65,21 @@ export class DownloadManager extends EventEmitter {
       })
     } catch (error) {
       logError(`download spawn failed: ${cli}`, error)
-      this.current = { ...this.current, state: 'error', message: String(error) }
-      this.emit('updated', this.current)
+      const failed = { ...initial, state: 'error' as const, message: String(error) }
+      this.current.set(model, failed)
+      this.emit('updated', failed)
       return { ok: false, code: 'spawn' }
     }
-    this.child = child
+    this.children.set(model, child)
 
     const stdoutLines = new LineBuffer()
     let stderr = ''
     const onStdoutLine = (line: string): void => {
       const parsed = parseEvent(line)
       if (!parsed) return
-      this.current = { ...parsed, dir: parsed.dir ?? this.current?.dir }
-      this.emit('updated', this.current)
+      const next = { ...parsed, dir: parsed.dir ?? this.current.get(model)?.dir }
+      this.current.set(model, next)
+      this.emit('updated', next)
     }
     child.stdout?.on('data', (b) => stdoutLines.push(b.toString('utf8'), onStdoutLine))
     child.stderr?.on('data', (b) => {
@@ -85,57 +88,60 @@ export class DownloadManager extends EventEmitter {
 
     child.on('close', (code) => {
       stdoutLines.flush(onStdoutLine)
-      this.child = null
-      const prev = this.current
-      if (prev && prev.state !== 'done' && prev.state !== 'error') {
-        // 没收到终态就退出了：按退出码判定（0 = 已存在/完成，其它 = 失败/被取消）
-        this.current = {
-          ...prev,
-          state: code === 0 ? 'done' : 'error',
-          pct: code === 0 ? 100 : prev.pct,
-          message:
-            code === 0
-              ? undefined
-              : prev.message ?? (stderr.trim().slice(-300) || `exit ${code}`)
-        }
-        this.emit('updated', this.current)
+      this.children.delete(model)
+      const prev = this.current.get(model)
+      if (!prev || prev.state === 'done' || prev.state === 'error') return
+      // 没收到终态就退出了：按退出码判定（0 = 已存在/完成，其它 = 失败/被取消）
+      const next: DownloadState = {
+        ...prev,
+        state: code === 0 ? 'done' : 'error',
+        pct: code === 0 ? 100 : prev.pct,
+        message:
+          code === 0
+            ? undefined
+            : prev.message ?? (stderr.trim().slice(-300) || `exit ${code}`)
       }
+      this.current.set(model, next)
+      this.emit('updated', next)
     })
     child.on('error', (error) => {
-      this.child = null
+      this.children.delete(model)
       logError('download child error', error)
-      if (this.current) {
-        this.current = { ...this.current, state: 'error', message: String(error) }
-        this.emit('updated', this.current)
-      }
+      const prev = this.current.get(model)
+      if (!prev || prev.state === 'done' || prev.state === 'error') return
+      const next = { ...prev, state: 'error' as const, message: String(error) }
+      this.current.set(model, next)
+      this.emit('updated', next)
     })
     return { ok: true }
   }
 
-  cancel(): void {
-    if (!this.child) return
+  cancel(model: string): void {
+    const child = this.children.get(model)
+    if (!child) return
     try {
-      this.child.kill('SIGTERM')
+      child.kill('SIGTERM')
     } catch {
       /* ignore */
     }
-    if (this.current) {
-      this.current = { ...this.current, state: 'error', message: 'cancelled' }
-      this.emit('updated', this.current)
-    }
+    const prev = this.current.get(model)
+    if (!prev) return
+    const next = { ...prev, state: 'error' as const, message: 'cancelled' }
+    this.current.set(model, next)
+    this.emit('updated', next)
   }
 
   /** 退出前收尾，别留孤儿。 */
   shutdown(): void {
-    if (this.child) {
+    for (const child of Array.from(this.children.values())) {
       try {
-        this.child.kill('SIGTERM')
-        this.child.kill('SIGKILL')
+        child.kill('SIGTERM')
+        child.kill('SIGKILL')
       } catch {
         /* ignore */
       }
     }
-    this.child = null
+    this.children.clear()
   }
 }
 
