@@ -56,9 +56,10 @@ button:focus-visible {
   /* 右侧不留内边距：窗口按钮像系统的一样贴到窗口边缘 */
   padding: 0 0 0 16px;
   -webkit-app-region: drag;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255,255,255,0.92);
-  backdrop-filter: blur(12px);
+  /* 用纯白与系统 Window Controls Overlay 同色（overlay 是不透明矩形，
+     半透明标题栏会在右侧显出一块白框）；底边线也交给 .toolbar 的 border-top，
+     因为 overlay 会盖住标题栏自己的 border-bottom，把线切断。 */
+  background: #fff;
 }
 /* 窗口按钮由系统画，这里给它让位：
    Windows / Linux = 右上角 Window Controls Overlay（3 × 46px）；macOS = 左上角红绿灯。 */
@@ -84,7 +85,10 @@ button:focus-visible {
 
 .toolbar {
   display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  padding: 12px 16px; background: var(--panel);
+  /* 顶边线必须画在标题栏之外：44px 高度正好是 overlay 的覆盖范围。 */
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 .clear-anchor { position: relative; }
 .clear-pop {
