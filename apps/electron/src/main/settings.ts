@@ -37,12 +37,68 @@ function detectAppRoot(): string | undefined {
   return undefined
 }
 
-/** 环境变量优先（Linux 上运行目录与代码目录分离时仍然靠它），其次自动探测。 */
-export const DEFAULT_APP_ROOT =
-  process.env.ONEASR_APP_ROOT || detectAppRoot() || '/workspace/oneasr-runtime'
+/**
+ * 打包后的资源根：electron-builder 把 CLI / ffmpeg 放在 resources/runtime。
+ * `process.defaultApp` 为 true 是开发期（electron .），此时仍从源码树探测。
+ */
+const PACKAGED = !process.defaultApp && Boolean(process.resourcesPath)
+const INSTALL_ROOT = PACKAGED ? path.dirname(process.execPath) : undefined
 
-export function settingsPath(appRoot = DEFAULT_APP_ROOT): string {
-  return path.join(appRoot, 'settings.json')
+/** 应用/工具目录：CLI 与 bin/ffmpeg 的落点（安装目录里的 resources/runtime）。 */
+export const DEFAULT_APP_ROOT =
+  process.env.ONEASR_APP_ROOT ||
+  (PACKAGED
+    ? path.join(process.resourcesPath!, 'runtime')
+    : detectAppRoot() || '/workspace/oneasr-runtime')
+
+let userDataDir: string | undefined
+let cachedDataRoot: string | undefined
+
+/** main 在 app ready 后调用一次：这是只读安装目录之外的兜底数据目录。 */
+export function setUserDataDir(dir: string): void {
+  userDataDir = dir
+  cachedDataRoot = undefined
+}
+
+/** 目录可写吗？Windows 的 access(W_OK) 不可靠，直接试建一个临时文件。 */
+function isWritableDir(dir: string): boolean {
+  const probe = path.join(dir, `.oneasr-write-test-${process.pid}-${Date.now()}`)
+  try {
+    fs.writeFileSync(probe, '')
+    fs.unlinkSync(probe)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 数据目录：settings.json / models / output / runs / hotword / stats / 日志。
+ *
+ * - 开发期就是仓库根（保持现有 npm run dev 行为）
+ * - 打包后优先应用所在的安装目录（Windows per-user 安装、Linux tar.gz 解压目录）
+ * - 只读安装位置（Linux /opt、macOS .app）或 macOS 一律用 userData
+ *
+ * 安装目录与数据目录分开，是 Linux .deb / macOS .app 能正常下载模型、保存设置的前提。
+ */
+export function dataRoot(): string {
+  if (cachedDataRoot) return cachedDataRoot
+  let root: string
+  if (process.env.ONEASR_DATA_DIR) {
+    root = process.env.ONEASR_DATA_DIR
+  } else if (!PACKAGED) {
+    root = DEFAULT_APP_ROOT
+  } else if (process.platform !== 'darwin' && INSTALL_ROOT && isWritableDir(INSTALL_ROOT)) {
+    root = INSTALL_ROOT
+  } else {
+    root = userDataDir || DEFAULT_APP_ROOT
+  }
+  cachedDataRoot = root
+  return root
+}
+
+export function settingsPath(root = dataRoot()): string {
+  return path.join(root, 'settings.json')
 }
 
 /**
@@ -50,8 +106,8 @@ export function settingsPath(appRoot = DEFAULT_APP_ROOT): string {
  * 真正的默认值/规范化归 Rust：CLI 每次加载都会 normalize，并会把模型目录
  * 按 app/data root 重新解析——所以这里只需要给出「字段齐全的空壳」。
  */
-export function defaultSettings(appRoot = DEFAULT_APP_ROOT): Settings {
-  const models = path.join(appRoot, 'models')
+export function defaultSettings(root = dataRoot()): Settings {
+  const models = path.join(root, 'models')
   return {
     asr_model: 'Qwen3-ASR-0.6B-hf',
     asr_model_dir: path.join(models, 'Qwen3-ASR-0.6B-hf'),
@@ -65,7 +121,7 @@ export function defaultSettings(appRoot = DEFAULT_APP_ROOT): Settings {
     ui_language: 'system',
     subtitle_length_preset: 'standard',
     chunk_target_seconds: 60,
-    output_dir: path.join(appRoot, 'output'),
+    output_dir: path.join(root, 'output'),
     save_next_to_source: true,
     output_srt: true,
     output_txt: false,
@@ -81,9 +137,9 @@ export function defaultSettings(appRoot = DEFAULT_APP_ROOT): Settings {
 }
 
 /** 读 settings.json（只做 merge，不做规则；规范化归 Rust）。 */
-export function loadSettings(appRoot = DEFAULT_APP_ROOT): Settings {
-  const base = defaultSettings(appRoot)
-  const p = settingsPath(appRoot)
+export function loadSettings(root = dataRoot()): Settings {
+  const base = defaultSettings(root)
+  const p = settingsPath(root)
   if (!fs.existsSync(p)) return base
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<Settings>
@@ -99,8 +155,8 @@ export function loadSettings(appRoot = DEFAULT_APP_ROOT): Settings {
 }
 
 /** 写 settings.json：与磁盘上已有的字段合并（保住壳还不认识的字段）。 */
-export function saveSettings(settings: Settings, appRoot = DEFAULT_APP_ROOT): Settings {
-  const p = settingsPath(appRoot)
+export function saveSettings(settings: Settings, root = dataRoot()): Settings {
+  const p = settingsPath(root)
   let existing: Record<string, unknown> = {}
   if (fs.existsSync(p)) {
     try {
@@ -111,7 +167,7 @@ export function saveSettings(settings: Settings, appRoot = DEFAULT_APP_ROOT): Se
   }
   const out = { ...existing, ...settings }
   writeFileAtomicSync(p, JSON.stringify(out, null, 2) + '\n')
-  return loadSettings(appRoot)
+  return loadSettings(root)
 }
 
 /** oneasr-cli 落点：运行目录优先，其次开发期的 target/release|debug（免去手工拷）。 */

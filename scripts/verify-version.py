@@ -23,6 +23,7 @@ release.yml 在打包**之前**再跑一次。
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -32,6 +33,7 @@ from _verify_common import utf8_when_redirected
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CARGO_TOML = ROOT / "Cargo.toml"
 READMES = ("README.md", "README.zh-CN.md")
+ELECTRON_PKG = ROOT / "apps" / "electron" / "package.json"
 
 # 一份发布必须挂上这 5 个产物；两份 README 的下载表都要覆盖它们。
 ARTIFACT_SUFFIXES = (
@@ -111,6 +113,23 @@ def check_readme(name: str, version: str, problems: list[str]) -> None:
         problems.append(f"{name}: 残留了旧版本产物名 OneAsr_{found}_…")
 
 
+def check_electron_package(version: str, problems: list[str]) -> None:
+    """Electron package.json 的版本必须和 Cargo.toml 一致（打包产物名/安装器用它）。"""
+    if not ELECTRON_PKG.is_file():
+        problems.append("apps/electron/package.json: 文件不存在")
+        return
+    try:
+        data = json.loads(ELECTRON_PKG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        problems.append(f"apps/electron/package.json 读不了：{err}")
+        return
+    found = data.get("version")
+    if found != version:
+        problems.append(
+            f"apps/electron/package.json 版本是 {found!r}，但 Cargo.toml 是 {version}"
+        )
+
+
 def main() -> int:
     utf8_when_redirected()
     parser = argparse.ArgumentParser(description="校验版本号一致性")
@@ -132,11 +151,12 @@ def main() -> int:
 
     for readme in READMES:
         check_readme(readme, version, problems)
+    check_electron_package(version, problems)
 
     if problems:
         fail(problems)
 
-    print(f"版本一致性校验通过：{version}（Cargo.toml / README.md / README.zh-CN.md"
+    print(f"版本一致性校验通过：{version}（Cargo.toml / README.md / README.zh-CN.md / apps/electron/package.json"
           + (f" / tag {args.tag}" if args.tag else "") + "）", file=sys.stderr)
     # 唯一写入 stdout 的东西就是版本号。
     print(version)

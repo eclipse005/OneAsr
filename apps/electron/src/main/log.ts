@@ -61,6 +61,11 @@ function buildContext(root: string): string {
 /** 启动时调用一次：定位日志、铺垫会话上下文（此时不写盘）。 */
 export function initLog(appRoot: string): void {
   appRootDir = appRoot
+  try {
+    fs.mkdirSync(appRoot, { recursive: true })
+  } catch {
+    /* 日志目录建不出来也不能挡住启动 */
+  }
   logFile = diagnosticLogPaths(appRoot)[0]
   sessionContext = buildContext(appRoot)
 }

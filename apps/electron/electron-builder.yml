@@ -1,0 +1,55 @@
+# Electron 发布配置。版本号来自 apps/electron/package.json（由 verify-version.py
+# 与 Cargo.toml 对齐）；安装目录/数据目录见 src/main/settings.ts。
+appId: com.eclipse005.oneasr
+productName: OneAsr
+copyright: OneAsr
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+
+extraResources:
+  # CLI + ffmpeg：运行期由 settings.ts 定位到 resources/runtime
+  - from: runtime
+    to: runtime
+  - from: ../../assets/icons
+    to: icons
+
+asar: true
+npmRebuild: false
+# 使用 npm 已装好的 Electron，避免打包时再从未知网络下载一份
+# （本地/CI 都是先 npm ci，版本由 package-lock 钉住）。
+electronDist: node_modules/electron/dist
+
+win:
+  target:
+    - target: dir
+      arch:
+        - x64
+  icon: ../../assets/icons/app-icon.ico
+
+linux:
+  target:
+    - target: deb
+      arch:
+        - x64
+    - target: tar.gz
+      arch:
+        - x64
+  category: AudioVideo
+  executableName: oneasr
+  icon: ../../assets/icons/app-icon.png
+
+mac:
+  target:
+    - target: dir
+      arch:
+        - arm64
+  category: public.app-category.video
+  icon: ../../assets/icons/app-icon.png
+  identity: null
+  hardenedRuntime: false

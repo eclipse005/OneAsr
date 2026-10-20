@@ -1,5 +1,5 @@
 import { spawn } from 'child_process'
-import { DEFAULT_APP_ROOT, resolveCli } from './settings'
+import { DEFAULT_APP_ROOT, dataRoot, resolveCli } from './settings'
 import { logError } from './log'
 import { mainLang } from './i18n'
 import type { CliCapabilities } from '../shared/types'
@@ -10,10 +10,10 @@ import type { CliCapabilities } from '../shared/types'
  * `ONEASR_UI_LANG` 让 CLI 的运行期错误/摘要与界面语言一致；没有它，
  * 中文系统 + 英文界面时错误会以系统语言出现。
  */
-export function cliEnv(appRoot = DEFAULT_APP_ROOT): NodeJS.ProcessEnv {
+export function cliEnv(root = dataRoot()): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    ONEASR_DATA_DIR: appRoot,
+    ONEASR_DATA_DIR: root,
     ONEASR_UI_LANG: mainLang()
   }
 }

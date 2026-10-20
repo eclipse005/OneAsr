@@ -13,9 +13,9 @@
 # 推上来的 tag 完全一致，不一致就直接失败（以前这里直接取 tag 名当版本号，
 # 从不核对 Cargo.toml，能构建出一个文件名与内容不符的产物）。
 #
-# feat/electron-ui 分支已经删掉 GPUI 壳，但 Electron 打包还没迁进来：
-# preflight job 会在 crates/oneasr 不存在时直接失败，避免打出一套空包。
-# 打包迁移完成后删掉 preflight，并把三个平台的 Pack 步骤换成 Electron 产物。
+# 本分支使用 Electron 壳（GPUI 壳已删除），三平台打包由 scripts/pack-electron.*
+# 完成：Electron 应用 + oneasr-cli + 校验过的 ffmpeg。master 仍保留 GPUI 发版脚本，
+# 两条线各自独立；合并后 master 也会走这套 Electron 产物。
 #
 # 打包脚本不再接受版本号参数：它们自己从 Cargo.toml 读，无法被调用方改错。
 name: Release
@@ -65,26 +65,20 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "OneAsr $V"
 
-  # 这条分支的发布链路还没有 Electron 打包。缺 GPUI 壳时直接失败，比让三个
-  # 平台各自在 Pack 步骤报“找不到 oneasr”更早、更清楚。
-  preflight:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Refuse to build without a packaging target
-        run: |
-          if [[ ! -f crates/oneasr/Cargo.toml ]]; then
-            echo "::error::This branch has no GPUI shell and Electron packaging is not implemented yet. Refusing to build an incomplete release."
-            exit 1
-          fi
-
   windows:
-    needs: [version, preflight]
+    needs: version
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/electron/package-lock.json
+      - name: Install Electron deps
+        working-directory: apps/electron
+        run: npm ci
       - id: toolchain
         name: Read pinned toolchain
         shell: bash
@@ -101,7 +95,7 @@ jobs:
       # 脚本不接受版本参数，所以这里也不可能传错版本。
       - name: Pack
         shell: pwsh
-        run: ./scripts/pack-release.ps1
+        run: ./scripts/pack-electron.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_windows_setup.exe
@@ -114,11 +108,19 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [version, preflight]
+    needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/electron/package-lock.json
+      - name: Install Electron deps
+        working-directory: apps/electron
+        run: npm ci
       - name: Native deps
         run: |
           sudo apt-get update
@@ -127,7 +129,7 @@ jobs:
             libssl-dev libasound2-dev \
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libvulkan-dev libx11-dev libxrandr-dev libxcb1-dev \
-            libzstd-dev
+            libzstd-dev fakeroot
       - id: toolchain
         name: Read pinned toolchain
         shell: bash
@@ -140,8 +142,8 @@ jobs:
           shared-key: release-linux
       - name: Pack
         run: |
-          chmod +x scripts/pack-unix.sh
-          ./scripts/pack-unix.sh --os linux --arch x64
+          chmod +x scripts/pack-electron.sh
+          ./scripts/pack-electron.sh --os linux --arch x64
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_linux_x64.deb
@@ -154,11 +156,19 @@ jobs:
           if-no-files-found: error
 
   macos:
-    needs: [version, preflight]
+    needs: version
     runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/electron/package-lock.json
+      - name: Install Electron deps
+        working-directory: apps/electron
+        run: npm ci
       - id: toolchain
         name: Read pinned toolchain
         shell: bash
@@ -171,8 +181,8 @@ jobs:
           shared-key: release-macos
       - name: Pack
         run: |
-          chmod +x scripts/pack-unix.sh
-          ./scripts/pack-unix.sh --os macos --arch arm64
+          chmod +x scripts/pack-electron.sh
+          ./scripts/pack-electron.sh --os macos --arch arm64
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: OneAsr_${{ needs.version.outputs.version }}_macos.dmg

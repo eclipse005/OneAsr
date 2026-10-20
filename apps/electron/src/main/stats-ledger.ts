@@ -1,14 +1,14 @@
 import fs from 'fs'
 import path from 'path'
 import type { DayStat, StatsRecord, StatsSnapshot, TaskStatus } from '../shared/types'
-import { DEFAULT_APP_ROOT } from './settings'
+import { dataRoot } from './settings'
 
-export function ledgerPath(appRoot = DEFAULT_APP_ROOT): string {
-  return path.join(appRoot, 'stats.jsonl')
+export function ledgerPath(root = dataRoot()): string {
+  return path.join(root, 'stats.jsonl')
 }
 
-export function loadRecords(appRoot = DEFAULT_APP_ROOT): StatsRecord[] {
-  const p = ledgerPath(appRoot)
+export function loadRecords(root = dataRoot()): StatsRecord[] {
+  const p = ledgerPath(root)
   if (!fs.existsSync(p)) return []
   const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/)
   const out: StatsRecord[] = []
@@ -25,8 +25,8 @@ export function loadRecords(appRoot = DEFAULT_APP_ROOT): StatsRecord[] {
   return out
 }
 
-export function appendRecord(rec: StatsRecord, appRoot = DEFAULT_APP_ROOT): void {
-  const p = ledgerPath(appRoot)
+export function appendRecord(rec: StatsRecord, root = dataRoot()): void {
+  const p = ledgerPath(root)
   fs.mkdirSync(path.dirname(p), { recursive: true })
   fs.appendFileSync(p, JSON.stringify(rec) + '\n', 'utf8')
 }

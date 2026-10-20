@@ -11,7 +11,15 @@ import {
 } from 'electron'
 import { join } from 'path'
 import fs from 'fs'
-import { DEFAULT_APP_ROOT, defaultSettings, loadSettings, resolveCli, saveSettings } from './settings'
+import {
+  DEFAULT_APP_ROOT,
+  dataRoot,
+  defaultSettings,
+  loadSettings,
+  resolveCli,
+  saveSettings,
+  setUserDataDir
+} from './settings'
 import { probeCliCapabilities, runCliJson } from './cli'
 import { JobManager } from './jobs'
 import { DownloadManager } from './downloads'
@@ -34,10 +42,10 @@ app.commandLine.appendSwitch('no-sandbox')
 // 任务栏 / 窗口图标：与旧版共享 assets/icons/app-icon.ico。
 // 旧版用 winresource 把图标嵌进 exe，Electron 必须在运行时显式交给窗口。
 // AppUserModelID 让任务栏把窗口归到 OneAsr 名下，而不是并进 electron.exe。
+app.setName('OneAsr')
 app.setAppUserModelId('com.eclipse005.oneasr')
 
-// 诊断日志：`{app_root}/oneasr-error.log`（会话上下文先缓存，出问题才落盘）
-initLog(DEFAULT_APP_ROOT)
+// 诊断日志在 app ready 后初始化到 data root（打包后可能不是安装目录）。
 installProcessHandlers()
 
 /** 定位仓库里那份图标：源码树里跑与将来打包后的 resources 两种落点都试。 */
@@ -382,9 +390,10 @@ function createWindow(): void {
 function registerIpc(): void {
   ipcMain.handle('app:info', async () => ({
     appRoot: DEFAULT_APP_ROOT,
+    dataRoot: dataRoot(),
     cliPath: resolveCli(),
     display: process.env.DISPLAY,
-    version: '0.2.0-electron',
+    version: app.getVersion(),
     cli: await probeCliCapabilities()
   }))
 
@@ -409,7 +418,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('download:state', () => downloads.state())
   ipcMain.handle('models:openFolder', async () => {
-    const dir = join(DEFAULT_APP_ROOT, 'models')
+    const dir = join(dataRoot(), 'models')
     await shell.openPath(dir)
   })
 
@@ -551,6 +560,10 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  // 打包后安装目录可能只读（Linux /opt、macOS .app）；数据先落到 userData，
+  // 再初始化日志/设置/模型目录。
+  setUserDataDir(app.getPath('userData'))
+  initLog(dataRoot())
   registerIpc()
   // macOS 的 Dock 图标不认 BrowserWindow.icon：打包后由 .app 里的 AppIcon.icns 决定
   // （scripts/pack-unix.sh 用 iconutil 生成），未打包开发期这里先顶上同一份图标。

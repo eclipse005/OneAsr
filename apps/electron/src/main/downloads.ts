@@ -1,7 +1,7 @@
 import { ChildProcess, spawn } from 'child_process'
 import { EventEmitter } from 'events'
 import type { DownloadState } from '../shared/types'
-import { DEFAULT_APP_ROOT, resolveCli } from './settings'
+import { DEFAULT_APP_ROOT, dataRoot, resolveCli } from './settings'
 import { cliEnv } from './cli'
 import { LineBuffer } from '../shared/line-buffer'
 import { logError } from './log'
@@ -42,7 +42,7 @@ export class DownloadManager extends EventEmitter {
       '--app-root',
       DEFAULT_APP_ROOT,
       '--data-root',
-      DEFAULT_APP_ROOT
+      dataRoot()
     ]
     if (targetDir) args.push('--model-dir', targetDir)
     this.current = {
@@ -59,7 +59,7 @@ export class DownloadManager extends EventEmitter {
     try {
       child = spawn(cli, args, {
         cwd: DEFAULT_APP_ROOT,
-        env: cliEnv(),
+        env: cliEnv(dataRoot()),
         windowsHide: true
       })
     } catch (error) {

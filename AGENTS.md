@@ -5,8 +5,9 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 对齐默认走 CTC（omniASR-CTC-300M-v2），Qwen3-ForcedAligner 仅作兼容老档保留。
 
 > **分支约定**：`master` 是 GPUI 线；`feat/electron-ui` 是 Electron 线，已删掉
-> gpui 壳（`crates/oneasr` 与 `vendor/gpui`）。两条线不要互相合并，除非明确要
-> 让 Electron 取代 GPUI。
+> gpui 壳（`crates/oneasr` 与 `vendor/gpui`）。两条线**各自都能发版**：
+> master 走 GPUI 打包，electron-ui 走 Electron 打包；合并前互不影响。
+> 合并后 Electron 产物取代 GPUI，但这是显式的发版链路切换。
 
 ## 常用命令
 
@@ -40,9 +41,13 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - 门禁的断骨验证：`python3 scripts/bonebreak-verify-i18n.py` —— 把每处检查逐个还原，
   确认对应用例真的变红。**改过 `verify-i18n.py` 之后必跑**；它不进 CI（锚点是源码
   片段，实现一重构工具就会自己过期），是维护者手工用的
+- 打包（Electron 线）：`./scripts/pack-electron.ps1`（Windows）/
+  `./scripts/pack-electron.sh --os linux --arch x64` /
+  `./scripts/pack-electron.sh --os macos --arch arm64`。版本号从 `Cargo.toml` 读，
+  `apps/electron/package.json` 必须与它一致；Electron 应用、CLI、校验过的 ffmpeg
+  一起进产物。Windows 出 setup.exe + portable zip，Linux 出 deb + tar.gz，macOS 出 dmg
 - 打包（master / GPUI 线）：`./scripts/pack-release.ps1` / `./scripts/pack-unix.sh --os macos --arch arm64`
-  —— 版本号从 `Cargo.toml` 读，没有版本参数。**本分支尚未迁移 Electron 打包**：
-  两个脚本与 `release.yml` 的 preflight 会在缺 GPUI 壳时显式失败，不要在本分支打 tag
+  —— 版本号同样从 `Cargo.toml` 读，没有版本参数
 - 漏洞检查（钉住的公告库快照，先铺缓存再跑）：`pwsh -File scripts/prepare-advisory-db.ps1` 然后
   `cargo deny check advisories sources` —— 首次还需要 `git submodule update --init vendor/advisory-db`；
   更新公告库是显式动作，没有定时任务（见「发版注意」）
@@ -75,7 +80,7 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
   的 Python，不进 CI；`--check` 只核对不写盘。改了资产要连 manifest 一起提交，
   单测会拿 sha256 对账）
 - `.github/workflows/` —— `ci.yml`（格式 / clippy+core 测试 / Electron 检查 / 版本+双语 / 供应链）
-  与 `release.yml`（tag 触发的 GPUI 打包发版；本分支的 preflight 会显式拒绝）
+  与 `release.yml`（tag 触发：本分支打 Electron 包，master 打 GPUI 包）
 - `rust-toolchain.toml` —— 工具链的唯一来源；`deny.toml` —— 依赖漏洞与来源规则
 - `docs/release-notes/` —— 每个版本的发布说明（见下）
 - `docs/lessons.md` —— 从已合并的改动里学到的规则：每条带**为什么**与**证据**
@@ -136,12 +141,14 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 远端与本地都只剩 `master`。另有长期并行的 `feat/electron-ui` 分支，CI 的
 `on.push.branches` 已包含它。）
 
-> **feat/electron-ui 不发版**：gpui 壳已删除、Electron 打包尚未迁移。
-> `release.yml` 的 preflight 与两个打包脚本会在缺 `crates/oneasr` 时显式失败。
-> 下面的发布流程属于 `master`（GPUI 线）；Electron 线等打包迁移完成后再改写。
+> **两条线都能发版，但要各打各的 tag**：`master` 的 `release.yml` 仍打 GPUI 包；
+> `feat/electron-ui` 的 `release.yml` 打 Electron 包（`pack-electron.*`）。
+> 标签是全局的，不要用同一个版本号在两条线各发一次；Electron 线发版时先升
+> `Cargo.toml` 与两份 README，再打一个只属于 Electron 版本的 tag。
 
 版本号只有一个出处：`Cargo.toml` 的 `[workspace.package] version`（CLI 与日志都读它）。
-Electron 的 `package.json` 目前是壳自己的开发版本，打包迁移时再统一到这一处。
+`apps/electron/package.json` 的版本必须与它一致（`verify-version.py` 会断言；
+electron-builder 用这个版本生成安装包和目录名）。
 打包脚本不再接收、也不再写回版本号；tag 与两份 README 必须跟它一致，CI 负责断言。
 
 1. 改 `Cargo.toml` 的 `[workspace.package] version`；若动了依赖，跑一次 `cargo check` 刷新 `Cargo.lock`
@@ -154,9 +161,11 @@ Electron 的 `package.json` 目前是壳自己的开发版本，打包迁移时�
    `cargo test --locked -p oneasr-core`、
    `cd apps/electron && npm run verify`、
    `python3 scripts/test_verify_i18n.py`、
-   `python3 scripts/verify-version.py --tag v<版本>`、`python3 scripts/verify-i18n.py`
-5. `git commit` → `git push origin master` → `git tag v<版本>` → `git push origin v<版本>`
-6. tag 触发 `.github/workflows/release.yml`：三平台打包 + 自动建 release 并挂上全部产物
+   `python3 scripts/verify-version.py --tag v<版本>`、`python3 scripts/verify-i18n.py`；
+   Electron 线还要跑 `cd apps/electron && npm ci`（打包脚本依赖已安装的 electron-builder）
+5. `git commit` → 推当前线（`git push origin master` 或 `git push origin feat/electron-ui`）
+   → `git tag v<版本>` → `git push origin v<版本>`
+6. tag 触发当前线的 `.github/workflows/release.yml`：三平台打包 + 自动建 release 并挂上全部产物
    （打包前先跑同一个 `verify-version.py --tag`，tag 与 `Cargo.toml` 不一致就直接失败）
 7. 验证：`gh release view v<版本>`，确认 5 个产物都在、说明正文正确
 
@@ -188,7 +197,7 @@ CI 在 `push: master` / `push: feat/electron-ui` 与 PR 上跑，直接提交到
 
 - macOS 包未签名（没有 Apple 开发者账号），DMG 里必须带安装说明与安装脚本。**仓库里的源文件用英文名**：
   `installer/macos/install-notes.txt` 与 `installer/macos/fix-and-open.command`（`.gitattributes` 锁 LF）；
-  `scripts/pack-unix.sh` 校验的正是这两个名字，缺一个就直接报错退出，这是有意设计。
+  两个打包脚本（`pack-unix.sh` / `pack-electron.sh`）校验的正是这两个名字，缺一个就直接报错退出，这是有意设计。
   中文名只出现在 **DMG 内**——打包时复制成 `安装说明.txt` 与 `安装 OneAsr.command`，
   英文用户靠说明文件开头一行指引。两份文件都已双语（说明文件英文在前中文在后；
   脚本弹窗按系统语言自动切换）
@@ -206,7 +215,7 @@ CI 在 `push: master` / `push: feat/electron-ui` 与 PR 上跑，直接提交到
 - 老的 `tools` release **留在原地别删**：≤v1.1.0 的打包脚本指向它，删掉历史版本就没法重新打包了。
   新脚本不再读它
 - 上面这套「来源声明 + 哈希」在 `scripts/ffmpeg-checksums.txt` 里是**单一出处**（`# base-url <URL>`
-  一行机器可读），两个打包脚本与 CI 的 `verify-ffmpeg-manifest.py` 都从那里读
+  一行机器可读），GPUI 的 `pack-*`、Electron 的 `fetch-ffmpeg.mjs` 与 CI 的 `verify-ffmpeg-manifest.py` 都从那里读
 - 已知待办：这批 ffmpeg 的 configure 行带 `--enable-nonfree`，FFmpeg 官方 LICENSE.md 写明这样的
   产物不可再分发。换 LGPL 构建**只动清单一个文件**（base-url + 哈希），不用改打包脚本
 - `scripts/pack-release.ps1` 必须带 UTF-8 BOM：Windows PowerShell 5.1 没有 BOM 时按 ANSI 代码页

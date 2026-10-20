@@ -245,6 +245,7 @@ export interface CliCapabilities {
 
 export interface AppInfo {
   appRoot: string
+  dataRoot?: string
   cliPath: string
   display: string | undefined
   version: string

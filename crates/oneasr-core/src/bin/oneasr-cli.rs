@@ -2402,12 +2402,31 @@ fn data_root_arg(args: &[String]) -> Result<Option<PathBuf>, i32> {
 /// 必须在任何 `Settings::default()` / 路径解析**之前**调用——数据目录在进程内
 /// 只解析一次（`oneasr_core::paths`）。
 fn pin_data_root(args: &[String], app_root: &Path) -> Result<PathBuf, i32> {
-    let dir = match data_root_arg(args)? {
-        Some(dir) => dir,
-        None => app_root.to_path_buf(),
-    };
+    let explicit = data_root_arg(args)?;
+    let from_env = env::var_os("ONEASR_DATA_DIR").map(PathBuf::from);
+    let dir = choose_data_root(explicit, from_env, app_root);
+    // --data-root 已经在 data_root_arg 里验过；环境变量也要给出同样的错误。
+    if dir.exists() && !dir.is_dir() {
+        eprintln!("{}", i18n::cli_data_root_not_dir(&dir));
+        return Err(1);
+    }
     oneasr_core::paths::set_data_root_override(dir.clone());
     Ok(dir)
+}
+
+/// 数据目录优先级：`--data-root` > `ONEASR_DATA_DIR` > `--app-root`。
+///
+/// 以前环境变量在文档里写着“等价于 --data-root”，但 `pin_data_root` 直接用
+/// app_root 兜底，把它覆盖掉了 —— 打包后 app root 是只读的 resources/runtime，
+/// 设置/模型于是落到了错误目录。纯函数，便于钉住优先级。
+fn choose_data_root(
+    explicit: Option<PathBuf>,
+    from_env: Option<PathBuf>,
+    app_root: &Path,
+) -> PathBuf {
+    explicit
+        .or(from_env)
+        .unwrap_or_else(|| app_root.to_path_buf())
 }
 
 fn ensure_ffmpeg(app_root: &Path) -> Result<(), i32> {
@@ -3656,6 +3675,22 @@ mod tests {
         assert_eq!(report.asr.dir, custom);
         assert!(!report.asr.ready);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 数据目录优先级：显式 flag > 环境变量 > app root（文档承诺的同一条）。
+    ///
+    /// 断骨锚点：把 `choose_data_root` 改回只用 app_root，第二、三条变红。
+    #[test]
+    fn data_root_prefers_flag_then_env_then_app_root() {
+        let app = PathBuf::from("app");
+        let env = PathBuf::from("env-data");
+        let flag = PathBuf::from("flag-data");
+        assert_eq!(
+            choose_data_root(Some(flag.clone()), Some(env.clone()), &app),
+            flag
+        );
+        assert_eq!(choose_data_root(None, Some(env.clone()), &app), env);
+        assert_eq!(choose_data_root(None, None, &app), app);
     }
 
     /// `--script` 只认三个值；拼错是用法错（2），不能静默退回 original。

@@ -13,7 +13,7 @@ import type {
   TranscriptEditResult,
   TranscriptInfo
 } from '../shared/types'
-import { DEFAULT_APP_ROOT, loadSettings, outputFlags, resolveCli } from './settings'
+import { DEFAULT_APP_ROOT, dataRoot, loadSettings, outputFlags, resolveCli } from './settings'
 import { cliEnv, runCliJson } from './cli'
 import { parseCliEvent } from './cli-events'
 import { LineBuffer } from '../shared/line-buffer'
@@ -621,6 +621,7 @@ export class JobManager extends EventEmitter {
     }
     const settings = loadSettings()
     const appRoot = DEFAULT_APP_ROOT
+    const dataRootDir = dataRoot()
     const cli = resolveCli(appRoot)
     const staged = this.transcripts.get(task.id)
     const transcriptRun = !!staged && !staged.info.error
@@ -635,9 +636,9 @@ export class JobManager extends EventEmitter {
       const textPath = useSource
         ? staged.info.path!
         : (tempTranscript = writeTempTranscript(staged.text))
-      args = this.buildAlignArgs(task, settings, appRoot, textPath)
+      args = this.buildAlignArgs(task, settings, appRoot, dataRootDir, textPath)
     } else {
-      args = this.buildArgs(task, settings, appRoot)
+      args = this.buildArgs(task, settings, appRoot, dataRootDir)
     }
     const cleanupTempTranscript = (): void => {
       if (!tempTranscript) return
@@ -656,7 +657,7 @@ export class JobManager extends EventEmitter {
     const cmdline = [cli, ...args].map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
     const child = spawn(cli, args, {
       cwd: appRoot,
-      env: cliEnv(appRoot),
+      env: cliEnv(dataRootDir),
       windowsHide: true,
       // POSIX：独立进程组，取消/退出时才能把 ffmpeg 这类后代一起收掉
       detached: process.platform !== 'win32'
@@ -867,6 +868,7 @@ export class JobManager extends EventEmitter {
     task: TaskSnapshot,
     settings: Settings,
     appRoot: string,
+    dataRootDir: string,
     textPath: string
   ): string[] {
     const args = [
@@ -879,7 +881,7 @@ export class JobManager extends EventEmitter {
       '--app-root',
       appRoot,
       '--data-root',
-      appRoot,
+      dataRootDir,
       '--language',
       task.language || settings.language || 'zh',
       '--backend',
@@ -911,7 +913,8 @@ export class JobManager extends EventEmitter {
   private buildArgs(
     task: TaskSnapshot,
     settings: Settings,
-    appRoot: string
+    appRoot: string,
+    dataRootDir: string
   ): string[] {
     const args = [
       'transcribe',
@@ -921,7 +924,7 @@ export class JobManager extends EventEmitter {
       '--app-root',
       appRoot,
       '--data-root',
-      appRoot,
+      dataRootDir,
       '--language',
       task.language || settings.language || 'zh',
       '--backend',
@@ -965,7 +968,7 @@ export class JobManager extends EventEmitter {
     // Hotwords: pass if CLI accepts (ignored if unknown on older builds — may error)
     // Prefer oneasr-cli-hotword when present and group selected
     if (task.hotwordGroupId) {
-      const store = loadHotwords(appRoot)
+      const store = loadHotwords(dataRootDir)
       const g = store.groups.find((x) => x.id === task.hotwordGroupId)
       const csv = wordsCsv(g)
       if (csv) {

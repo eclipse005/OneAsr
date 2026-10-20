@@ -1,18 +1,21 @@
 ; OneAsr Windows installer (Inno Setup 6)
-; Single product package — wgpu GPU + CPU in one binary.
-; Stage payload: scripts/pack-release.ps1 → dist\OneAsr\
+; Electron app + bundled CLI/ffmpeg.
+; Stage payload: scripts/pack-electron.ps1 (MyStageDir define)
 ;
-;   iscc /DMyAppVersion=0.1.0 installer\OneAsr.iss
+;   iscc /DMyAppVersion=0.1.0 /DMyStageDir=..\dist\stage-... installer\OneAsr.iss
 
 #define MyAppName "OneAsr"
+#ifndef MyStageDir
+  #error MyStageDir is not defined. Build through scripts/pack-electron.ps1.
+#endif
 ; 版本号只有一个出处：根 Cargo.toml 的 [workspace.package] version。
 ; 打包脚本读它，再用 /DMyAppVersion=<ver> 传进来。这里不再给默认值 ——
 ; 以前缺参数会静默按 0.1.0 打包，产物名与仓库版本对不上却照样成功。
 #ifndef MyAppVersion
-  #error MyAppVersion is not defined. Build through scripts/pack-release.ps1 (it reads Cargo.toml), or pass /DMyAppVersion=<version> to ISCC explicitly.
+  #error MyAppVersion is not defined. Build through scripts/pack-electron.ps1 (it reads Cargo.toml), or pass /DMyAppVersion=<version> to ISCC explicitly.
 #endif
 #define MyAppPublisher "OneAsr"
-#define MyAppExeName "oneasr.exe"
+#define MyAppExeName "OneAsr.exe"
 #define MyAppId "{{A7C3E2B1-4D5F-4A8E-9C1D-2E3F4A5B6C7D}"
 
 [Setup]
@@ -53,7 +56,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\OneAsr\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyStageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{app}\models"; Flags: uninsalwaysuninstall

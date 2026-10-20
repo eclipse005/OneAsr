@@ -1,11 +1,11 @@
 import fs from 'fs'
 import path from 'path'
 import { writeFileAtomicSync } from './atomic'
+import { dataRoot } from './settings'
 import type { HotwordGroup, HotwordStore } from '../shared/types'
-import { DEFAULT_APP_ROOT } from './settings'
 
-export function hotwordPath(appRoot = DEFAULT_APP_ROOT): string {
-  return path.join(appRoot, 'hotword.json')
+export function hotwordPath(root = dataRoot()): string {
+  return path.join(root, 'hotword.json')
 }
 
 export function defaultHotwordStore(): HotwordStore {
@@ -18,8 +18,8 @@ export function defaultHotwordStore(): HotwordStore {
   }
 }
 
-export function loadHotwords(appRoot = DEFAULT_APP_ROOT): HotwordStore {
-  const p = hotwordPath(appRoot)
+export function loadHotwords(root = dataRoot()): HotwordStore {
+  const p = hotwordPath(root)
   // 读是读、写是写：没有文件就返回默认库，不在读取路径上落盘。
   // 落盘只发生在用户保存时（saveHotwords）。
   if (!fs.existsSync(p)) return defaultHotwordStore()
@@ -46,7 +46,7 @@ export function loadHotwords(appRoot = DEFAULT_APP_ROOT): HotwordStore {
   }
 }
 
-export function saveHotwords(store: HotwordStore, appRoot = DEFAULT_APP_ROOT): HotwordStore {
+export function saveHotwords(store: HotwordStore, root = dataRoot()): HotwordStore {
   const normalized: HotwordStore = {
     ...store,
     groups:
@@ -56,7 +56,7 @@ export function saveHotwords(store: HotwordStore, appRoot = DEFAULT_APP_ROOT): H
     top_k: Math.max(1, Math.min(200, store.top_k || 40)),
     threshold: Math.max(0, Math.min(1, store.threshold ?? 0.7))
   }
-  const p = hotwordPath(appRoot)
+  const p = hotwordPath(root)
   writeFileAtomicSync(p, JSON.stringify(normalized, null, 2) + '\n')
   return normalized
 }
