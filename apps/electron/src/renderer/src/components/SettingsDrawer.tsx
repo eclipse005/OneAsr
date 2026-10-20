@@ -259,7 +259,8 @@ function ModelPathField({
               aria-label={actionLabel}
               onClick={() => onDownload(modelId, value)}
             >
-              <span className="icon-glyph i-retry" aria-hidden />
+              {/* 已就绪 → 重新下载；缺失 → 下载；失败 → 重试（同一枚循环箭头）。 */}
+              <span className={`icon-glyph ${readyNow || isErr ? 'i-retry' : 'i-download'}`} aria-hidden />
             </button>
           )}
         </div>

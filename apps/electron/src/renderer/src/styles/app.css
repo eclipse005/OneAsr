@@ -483,6 +483,7 @@ html[lang='en'] .badge-slot { width: 100px; }
 .i-play { -webkit-mask: url('@assets/icons/play.svg') center / contain no-repeat; mask: url('@assets/icons/play.svg') center / contain no-repeat; }
 .i-stop { -webkit-mask: url('@assets/icons/stop.svg') center / contain no-repeat; mask: url('@assets/icons/stop.svg') center / contain no-repeat; }
 .i-folder { -webkit-mask: url('@assets/icons/folder.svg') center / contain no-repeat; mask: url('@assets/icons/folder.svg') center / contain no-repeat; }
+.i-download { -webkit-mask: url('@assets/icons/download.svg') center / contain no-repeat; mask: url('@assets/icons/download.svg') center / contain no-repeat; }
 .i-retry { -webkit-mask: url('@assets/icons/redownload.svg') center / contain no-repeat; mask: url('@assets/icons/redownload.svg') center / contain no-repeat; }
 .i-trash { -webkit-mask: url('@assets/icons/trash.svg') center / contain no-repeat; mask: url('@assets/icons/trash.svg') center / contain no-repeat; }
 .i-plus { -webkit-mask: url('@assets/icons/plus.svg') center / contain no-repeat; mask: url('@assets/icons/plus.svg') center / contain no-repeat; }
