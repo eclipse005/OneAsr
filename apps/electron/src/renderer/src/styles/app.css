@@ -23,6 +23,7 @@
   --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.12);
   --radius: 14px;
   --radius-sm: 10px;
+  --titlebar-h: 44px;
   --font: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-micro: 120ms;
@@ -52,7 +53,7 @@ button:focus-visible {
 .app { display: flex; flex-direction: column; height: 100%; }
 
 .titlebar {
-  display: flex; align-items: center; height: 44px;
+  display: flex; align-items: center; height: var(--titlebar-h);
   /* 右侧不留内边距：窗口按钮像系统的一样贴到窗口边缘 */
   padding: 0 0 0 16px;
   -webkit-app-region: drag;
@@ -528,12 +529,14 @@ html[lang='en'] .badge-slot { width: 100px; }
 .dot.ok { background: var(--accent); box-shadow: 0 0 0 3px rgba(13,148,136,0.18); }
 
 /* 浮窗不压暗、也不模糊背景：靠边框 + 阴影跟后面的界面分开。
-   一来没必要，二来压暗时标题栏那三个系统按钮还是亮的，反而割裂。 */
+   一来没必要，二来压暗时标题栏那三个系统按钮还是亮的，反而割裂。
+   浮窗从标题栏下方开始：右上角 138×44 的系统按钮区永远在最上层，
+   面板一旦伸进那 44px，圆角和右上角就会被 overlay 的白色矩形吃掉。 */
 .overlay {
-  position: fixed; inset: 0; z-index: 40;
+  position: fixed; inset: var(--titlebar-h) 0 0; z-index: 40;
   background: transparent;
   display: flex; justify-content: center; align-items: center;
-  padding: 24px;
+  padding: 16px 24px 24px;
 }
 
 /* 所有浮窗一个尺寸：900 × 640（窗口再小就按视口收），换标签页/换面板都不跳动。
@@ -542,7 +545,8 @@ html[lang='en'] .badge-slot { width: 100px; }
   width: 900px;
   height: 640px;
   max-width: min(900px, calc(100vw - 24px));
-  max-height: min(640px, 92vh);
+  /* 40px = .overlay 的上下 padding；可用高度要扣掉标题栏。 */
+  max-height: min(640px, calc(100vh - var(--titlebar-h) - 40px));
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -925,11 +929,11 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 @media (max-width: 720px) {
   .hw-layout { grid-template-columns: 1fr; min-height: 0; }
   .hw-params { grid-template-columns: 1fr; }
-  .modal-shell { width: 100%; max-height: 92vh; height: auto; }
+  .modal-shell { width: 100%; max-height: calc(100vh - var(--titlebar-h) - 40px); height: auto; }
   .modal-shell.settings-shell {
     width: min(900px, 100%);
-    height: min(640px, 92vh);
-    max-height: 92vh;
+    height: min(640px, calc(100vh - var(--titlebar-h) - 40px));
+    max-height: calc(100vh - var(--titlebar-h) - 40px);
     overflow: hidden;
   }
 }
