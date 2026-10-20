@@ -65,7 +65,12 @@ export class DownloadManager extends EventEmitter {
       })
     } catch (error) {
       logError(`download spawn failed: ${cli}`, error)
-      const failed = { ...initial, state: 'error' as const, message: String(error) }
+      const failed = {
+        ...initial,
+        state: 'error' as const,
+        message: String(error),
+        finishedAt: Date.now()
+      }
       this.current.set(model, failed)
       this.emit('updated', failed)
       return { ok: false, code: 'spawn' }
@@ -77,7 +82,12 @@ export class DownloadManager extends EventEmitter {
     const onStdoutLine = (line: string): void => {
       const parsed = parseEvent(line)
       if (!parsed) return
-      const next = { ...parsed, dir: parsed.dir ?? this.current.get(model)?.dir }
+      const next = {
+        ...parsed,
+        dir: parsed.dir ?? this.current.get(model)?.dir,
+        finishedAt:
+          parsed.state === 'done' || parsed.state === 'error' ? Date.now() : undefined
+      }
       this.current.set(model, next)
       this.emit('updated', next)
     }
@@ -99,7 +109,8 @@ export class DownloadManager extends EventEmitter {
         message:
           code === 0
             ? undefined
-            : prev.message ?? (stderr.trim().slice(-300) || `exit ${code}`)
+            : prev.message ?? (stderr.trim().slice(-300) || `exit ${code}`),
+        finishedAt: Date.now()
       }
       this.current.set(model, next)
       this.emit('updated', next)
@@ -109,7 +120,12 @@ export class DownloadManager extends EventEmitter {
       logError('download child error', error)
       const prev = this.current.get(model)
       if (!prev || prev.state === 'done' || prev.state === 'error') return
-      const next = { ...prev, state: 'error' as const, message: String(error) }
+      const next = {
+        ...prev,
+        state: 'error' as const,
+        message: String(error),
+        finishedAt: Date.now()
+      }
       this.current.set(model, next)
       this.emit('updated', next)
     })
@@ -126,7 +142,12 @@ export class DownloadManager extends EventEmitter {
     }
     const prev = this.current.get(model)
     if (!prev) return
-    const next = { ...prev, state: 'error' as const, message: 'cancelled' }
+    const next = {
+      ...prev,
+      state: 'error' as const,
+      message: 'cancelled',
+      finishedAt: Date.now()
+    }
     this.current.set(model, next)
     this.emit('updated', next)
   }

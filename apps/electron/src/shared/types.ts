@@ -140,6 +140,8 @@ export interface DownloadState {
   speed?: number
   dir?: string
   message?: string
+  /** 终态（done/error）产生的时刻；用来和 status 快照比较谁更新。 */
+  finishedAt?: number
 }
 
 export interface TaskSnapshot {

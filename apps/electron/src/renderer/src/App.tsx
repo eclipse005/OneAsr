@@ -41,6 +41,7 @@ export default function App() {
   const [draft, setDraft] = useState<Settings | null>(null)
   /** CLI 的 status --json 快照：就绪、门禁、catalog 全在里面 */
   const [status, setStatus] = useState<StatusSnapshot | null>(null)
+  const [statusAt, setStatusAt] = useState(0)
   const [cliOutdated, setCliOutdated] = useState(false)
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
@@ -229,6 +230,7 @@ export default function App() {
     const pending = statusQuery.current
     const next = await pending
     setStatus(next)
+    setStatusAt(Date.now())
     return next
   }, [])
 
@@ -678,6 +680,7 @@ export default function App() {
             lang={lang}
             draft={draft}
             status={status}
+            statusAt={statusAt}
             downloads={downloads}
             onDownloadStart={(id, dir) => void window.oneasr.startDownload(id, dir)}
             onDownloadCancel={(id) => void window.oneasr.cancelDownload(id)}

@@ -156,6 +156,15 @@ function alignerKind(model: string): 'ctc' | 'qwen' {
   return model.toLowerCase().includes('qwen') ? 'qwen' : 'ctc'
 }
 
+/** CLI 报的目录可能用 `/`，设置里可能用 `\`；Windows 路径还要忽略大小写。 */
+function samePath(a: string, b: string): boolean {
+  const trim = (p: string) => p.replace(/\/+$/, '')
+  if (window.oneasr.platform === 'win32') {
+    return trim(a).replace(/\\/g, '/').toLowerCase() === trim(b).replace(/\\/g, '/').toLowerCase()
+  }
+  return trim(a) === trim(b)
+}
+
 function modelSlotReady(
   status: StatusSnapshot | null,
   family: 'asr' | 'aligner' | 'demucs' | 'sensevoice',
@@ -163,7 +172,18 @@ function modelSlotReady(
   dir: string
 ): boolean {
   const slot = status?.models[family]
-  return !!slot?.ready && slot.id === modelId && slot.dir === dir
+  return !!slot?.ready && slot.id === modelId && samePath(slot.dir, dir)
+}
+
+/** status 明确说“这个模型在这个目录”缺失时，旧的 done 下载态要作废。 */
+function modelSlotMissing(
+  status: StatusSnapshot | null,
+  family: 'asr' | 'aligner' | 'demucs' | 'sensevoice',
+  modelId: string,
+  dir: string
+): boolean {
+  const slot = status?.models[family]
+  return !!slot && slot.id === modelId && samePath(slot.dir, dir) && !slot.ready
 }
 
 /** 快速校验（已下载模型点「重新下载」）不该闪一下下载态；超过 delay 才显示。 */
@@ -187,6 +207,8 @@ function ModelPathField({
   onBrowse,
   modelId,
   ready,
+  statusMissing,
+  statusAt,
   download,
   browseLabel,
   downloadLabel,
@@ -204,6 +226,9 @@ function ModelPathField({
   onBrowse: () => void
   modelId: string
   ready: boolean
+  /** status 明确说这个模型缺失：不要让旧的 done 下载态把图标顶成“重新下载” */
+  statusMissing: boolean
+  statusAt: number
   download: DownloadState | null
   browseLabel: string
   downloadLabel: string
@@ -221,10 +246,14 @@ function ModelPathField({
   const isDown = busy && showBusy
   const isErr = download?.state === 'error'
   const pct = Math.round(download?.pct ?? 0)
-  // 下载到当前显示的目录且已成功：在保存前也先显示「重新下载」，
-  // 否则用户会以为刚下完的按钮还是「下载」。
+  // 下载到当前显示的目录且已成功：先显示「重新下载」，别让用户以为没下成。
+  // status 说同一路径缺失时，只有 done 比这份 status 快照更晚才信 done；
+  // 用户删掉模型再刷新后 status 更新，旧的 done 就不再顶图标。
+  const doneAfterStatus = !!download?.finishedAt && download.finishedAt > statusAt
   const downloadedHere =
-    download?.state === 'done' && (!download.dir || download.dir === value)
+    download?.state === 'done' &&
+    (!download.dir || samePath(download.dir, value)) &&
+    (!statusMissing || doneAfterStatus)
   const readyNow = ready || downloadedHere
   let actionLabel = readyNow ? redownloadLabel : downloadLabel
   if (isErr) actionLabel = retryLabel
@@ -298,6 +327,7 @@ export function SettingsDrawer({
   lang,
   draft,
   status,
+  statusAt,
   downloads,
   onDownloadStart,
   onDownloadCancel,
@@ -321,6 +351,8 @@ export function SettingsDrawer({
   draft: Settings
   /** CLI 的 status --json：就绪判据、门禁、可选模型清单都在里面 */
   status: StatusSnapshot | null
+  /** 上一次 status 快照的时间；和下载完成时间比谁更新 */
+  statusAt: number
   /** 每个模型各自的下载状态；不同模型可以同时下 */
   downloads: Record<string, DownloadState>
   onDownloadStart: (id: string, targetDir?: string) => void
@@ -652,6 +684,8 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('asr_model_dir', asrId(size, quant))}
                   modelId={asrId(size, quant)}
                   ready={modelSlotReady(status, 'asr', asrId(size, quant), draft.asr_model_dir)}
+                  statusMissing={modelSlotMissing(status, 'asr', asrId(size, quant), draft.asr_model_dir)}
+                  statusAt={statusAt}
                   download={downloads[asrId(size, quant)] ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
@@ -691,6 +725,8 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('aligner_model_dir', draft.aligner_model)}
                   modelId={draft.aligner_model}
                   ready={modelSlotReady(status, 'aligner', draft.aligner_model, draft.aligner_model_dir)}
+                  statusMissing={modelSlotMissing(status, 'aligner', draft.aligner_model, draft.aligner_model_dir)}
+                  statusAt={statusAt}
                   download={downloads[draft.aligner_model] ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
@@ -723,6 +759,8 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('demucs_model_dir')}
                   modelId="htdemucs_ft"
                   ready={modelSlotReady(status, 'demucs', 'htdemucs_ft', draft.demucs_model_dir)}
+                  statusMissing={modelSlotMissing(status, 'demucs', 'htdemucs_ft', draft.demucs_model_dir)}
+                  statusAt={statusAt}
                   download={downloads.htdemucs_ft ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
@@ -741,6 +779,8 @@ export function SettingsDrawer({
                   onBrowse={() => onPickModel('sensevoice_model_dir')}
                   modelId="SenseVoiceSmall"
                   ready={modelSlotReady(status, 'sensevoice', 'SenseVoiceSmall', draft.sensevoice_model_dir || '')}
+                  statusMissing={modelSlotMissing(status, 'sensevoice', 'SenseVoiceSmall', draft.sensevoice_model_dir || '')}
+                  statusAt={statusAt}
                   download={downloads.SenseVoiceSmall ?? null}
                   browseLabel={s.browse}
                   downloadLabel={s.download}
