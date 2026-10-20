@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { LANG_OPTIONS, t, UiLang } from '../i18n'
 import type { DownloadState, HotwordStore, Settings, StatusSnapshot } from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
-import { ConfirmStrip } from './ConfirmStrip'
+import { ConfirmDialog } from './ConfirmDialog'
 import { SelectMenu } from './Popover'
 import { useEscClose } from '../esc'
 import { usePaneMotion, useSurfaceMotion } from '../motion'
@@ -884,7 +884,7 @@ export function SettingsDrawer({
 
         <AnimatePresence>
           {deleteGroup && (
-            <ConfirmStrip
+            <ConfirmDialog
               key="delete-group"
               danger
               message={s.confirmDeleteGroup}
@@ -898,7 +898,7 @@ export function SettingsDrawer({
             />
           )}
           {confirmDiscard && !deleteGroup && (
-            <ConfirmStrip
+            <ConfirmDialog
               key="discard"
               message={s.confirmDiscard}
               cancelLabel={s.cancel}

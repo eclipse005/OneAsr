@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ConfirmStrip } from './ConfirmStrip'
+import { ConfirmDialog } from './ConfirmDialog'
 import { useEscClose } from '../esc'
 import { useSurfaceMotion } from '../motion'
 import { t, transcriptRate, transcriptSummary, type UiLang } from '../i18n'
@@ -337,7 +337,7 @@ export function TranscriptPanel({
 
         <AnimatePresence>
           {confirmClose && (
-            <ConfirmStrip
+            <ConfirmDialog
               key="discard-transcript"
               message={s.transcriptConfirmDiscard}
               cancelLabel={s.cancel}

@@ -543,6 +543,7 @@ html[lang='en'] .badge-slot { width: 100px; }
 /* 所有浮窗一个尺寸：900 × 640（窗口再小就按视口收），换标签页/换面板都不跳动。
    宽高由内容分区自己消化，不允许整块滚动。 */
 .modal-shell {
+  position: relative;
   width: 900px;
   height: 640px;
   max-width: min(900px, calc(100vw - 24px));
@@ -575,16 +576,23 @@ html[lang='en'] .badge-slot { width: 100px; }
   flex-shrink: 0;
 }
 .modal-footer .hint { flex: 1; color: var(--warn); font-size: 0.82rem; font-weight: 600; }
-/* 有未保存改动时的关闭确认：贴在面板底部，不另开一层模态 */
-.confirm-clip { overflow: hidden; flex-shrink: 0; }
-.confirm-strip {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-top: 1px solid var(--line);
-  background: var(--warn-soft); color: var(--warn); font-size: 0.84rem; font-weight: 600;
-  flex-shrink: 0;
+/* 关闭未保存的浮窗：在浮窗内部居中确认，遮罩只盖当前面板，不再多出一条底栏。 */
+.modal-confirm-backdrop {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.18);
 }
-.confirm-strip.is-danger { background: #fff5f5; color: var(--danger); }
-.confirm-strip > span { flex: 1; }
+.modal-confirm {
+  width: min(380px, 100%);
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel); box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; gap: 16px;
+}
+.modal-confirm p { margin: 0; color: var(--text); font-weight: 600; line-height: 1.5; }
+.modal-confirm.is-danger p { color: var(--danger); }
+.modal-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* 使用指南：三块实物示意，而不是一串编号说明。示意行不可点。 */
 .guide-body { justify-content: flex-start; gap: 12px; overflow: auto; }
