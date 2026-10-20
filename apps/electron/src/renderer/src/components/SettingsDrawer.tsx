@@ -7,17 +7,26 @@ import { ConfirmStrip } from './ConfirmStrip'
 import { SelectMenu } from './Popover'
 import { useEscClose } from '../esc'
 import { usePaneMotion, useSurfaceMotion } from '../motion'
-import { formatSize, gib } from '../lib/format'
+import { formatSize } from '../lib/format'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  on,
+  onChange,
+  'aria-label': ariaLabel
+}: {
+  on: boolean
+  onChange: (v: boolean) => void
+  'aria-label'?: string
+}) {
   return (
     <button
       type="button"
       className={`toggle ${on ? 'on' : ''}`}
       role="switch"
       aria-checked={on}
+      aria-label={ariaLabel}
       onClick={() => onChange(!on)}
     />
   )
@@ -147,6 +156,112 @@ function alignerKind(model: string): 'ctc' | 'qwen' {
   return model.toLowerCase().includes('qwen') ? 'qwen' : 'ctc'
 }
 
+function catalogReady(catalog: { id: string; ready: boolean }[] | undefined, id: string): boolean {
+  return !!catalog?.find((c) => c.id === id)?.ready
+}
+
+function ModelPathField({
+  label,
+  value,
+  onChange,
+  onBrowse,
+  modelId,
+  ready,
+  download,
+  downloading,
+  browseLabel,
+  downloadLabel,
+  redownloadLabel,
+  downloadingLabel,
+  verifyingLabel,
+  retryLabel,
+  cancelLabel,
+  onDownload,
+  onCancel
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  onBrowse: () => void
+  modelId: string
+  ready: boolean
+  download: DownloadState | null
+  downloading: boolean
+  browseLabel: string
+  downloadLabel: string
+  redownloadLabel: string
+  downloadingLabel: string
+  verifyingLabel: string
+  retryLabel: string
+  cancelLabel: string
+  onDownload: (id: string) => void
+  onCancel: () => void
+}) {
+  const active = download?.model === modelId
+  const isDown = active && downloading
+  const isErr = active && download?.state === 'error'
+  const pct = active ? Math.round(download?.pct ?? 0) : 0
+  let actionLabel = ready ? redownloadLabel : downloadLabel
+  if (isErr) actionLabel = retryLabel
+  const progressLabel =
+    download?.state === 'verifying'
+      ? verifyingLabel
+      : pct > 0
+        ? `${pct}%`
+        : downloadingLabel
+  const cancelTitle = isDown ? `${cancelLabel} · ${progressLabel}` : cancelLabel
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <div className="model-path-stack">
+        <div className="path-input compact">
+          <input
+            className="text-input mono"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          <button
+            type="button"
+            className="icon-btn"
+            title={browseLabel}
+            aria-label={browseLabel}
+            onClick={onBrowse}
+          >
+            <span className="icon-glyph i-folder" aria-hidden />
+          </button>
+          {isDown ? (
+            <button
+              type="button"
+              className="icon-btn"
+              title={cancelTitle}
+              aria-label={cancelTitle}
+              onClick={onCancel}
+            >
+              <span className="icon-glyph i-stop" aria-hidden />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`icon-btn ${ready && !isErr ? '' : 'primary'}`}
+              disabled={downloading}
+              title={actionLabel}
+              aria-label={actionLabel}
+              onClick={() => onDownload(modelId)}
+            >
+              <span className="icon-glyph i-retry" aria-hidden />
+            </button>
+          )}
+        </div>
+        {isDown ? (
+          <span className="dl-bar model-path-bar" aria-hidden>
+            <i style={{ width: `${pct}%` }} />
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function SettingsDrawer({
   lang,
   draft,
@@ -167,7 +282,8 @@ export function SettingsDrawer({
   onPickDir,
   onPickModel,
   onOpenModels,
-  onRefreshModels
+  onRefreshModels,
+  cliOutdated = false
 }: {
   lang: UiLang
   draft: Settings
@@ -194,13 +310,12 @@ export function SettingsDrawer({
   onPickModel: (field: 'asr_model_dir' | 'aligner_model_dir' | 'demucs_model_dir' | 'sensevoice_model_dir') => void
   onOpenModels: () => void
   onRefreshModels: () => void
+  /** CLI 缺 status/transcript 时为 true */
+  cliOutdated?: boolean
 }) {
   const s = t(lang)
   const surface = useSurfaceMotion()
   const pane = usePaneMotion()
-  /** 没装的模型；下载中的那条也在里面（它本来就是缺的） */
-  // 缺哪些模型由 CLI 的 catalog 说（目录名也来自 Rust，壳不再硬编码）
-  const missingModels = (status?.catalog ?? []).filter((m) => !m.ready)
   // 只有"进行中"才算忙碌：终态（完成/失败/取消）不能让其它模型的按钮一直禁用
   const downloading = download?.state === 'downloading' || download?.state === 'verifying'
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
@@ -301,7 +416,10 @@ export function SettingsDrawer({
             ))}
           </nav>
 
-          <div className={`settings-pane${activeTab === 'hotwords' ? ' is-hotwords' : ''}`} data-shot={`settings-pane-${activeTab}`}>
+          <div
+            className={`settings-pane${activeTab === 'hotwords' ? ' is-hotwords' : ''}${activeTab === 'models' ? ' is-models' : ''}`}
+            data-shot={`settings-pane-${activeTab}`}
+          >
             <AnimatePresence mode="wait" initial={false}>
             <motion.div key={activeTab} className="settings-pane-inner" {...pane}>
             {activeTab === 'general' && (
@@ -424,8 +542,13 @@ export function SettingsDrawer({
 
             {activeTab === 'models' && (
               <>
+                {cliOutdated && (
+                  <p className="cli-outdated-banner" role="status">
+                    {s.cliOutdated}
+                  </p>
+                )}
                 <div className="models-toolbar">
-                  <div className="models-status">
+                  <div className="models-status" onClick={onRefreshModels} title={s.refreshModelsStatus}>
                     <Pill ok={!!status?.models.asr.ready} label={s.asr} ready={s.ready} missing={s.missing} />
                     <Pill
                       ok={!!status?.models.aligner.ready}
@@ -441,104 +564,76 @@ export function SettingsDrawer({
                     />
                   </div>
                   <div className="models-actions">
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenModels}>
-                      {s.openModels}
+                    <button
+                      type="button"
+                      className="icon-btn models-refresh-btn"
+                      onClick={onRefreshModels}
+                      title={s.refreshModelsStatus}
+                      aria-label={s.refreshModelsStatus}
+                    >
+                      <span className="models-refresh-glyph" aria-hidden>
+                        ↻
+                      </span>
                     </button>
-                    <button type="button" className="btn btn-ghost btn-icon" onClick={onRefreshModels} aria-label="Refresh">
-                      ↻
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={onOpenModels}>
+                      {s.openModels}
                     </button>
                   </div>
                 </div>
 
-                {/* 模型下载：只列缺的（都齐了就用一行带过）——固定高度的面板不能被撑爆 */}
-                <div className="dl-block">
-                  <div className="dl-head">{s.downloadSection}</div>
-                  {missingModels.length === 0 && !download ? (
-                    <p className="dl-all">{s.allModelsReady}</p>
-                  ) : (
-                    <div className="dl-list">
-                      {missingModels.map((m) => {
-                        const active = download?.model === m.id
-                        const pct = active ? Math.round(download?.pct ?? 0) : 0
-                        return (
-                          <div className="dl-row" key={m.id}>
-                            <span className="dl-name">{m.id}</span>
-                            {active && downloading && (
-                              <span className="dl-progress">
-                                <span className="dl-bar">
-                                  <i style={{ width: `${pct}%` }} />
-                                </span>
-                                <span className="dl-meta">
-                                  {download?.state === 'verifying'
-                                    ? s.verifying
-                                    : `${pct}% · ${gib(download?.doneBytes ?? 0)} / ${gib(download?.totalBytes ?? 0)}`}
-                                </span>
-                              </span>
-                            )}
-                            {active && downloading ? (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={onDownloadCancel}
-                              >
-                                {s.cancelDownload}
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                disabled={downloading}
-                                onClick={() => onDownloadStart(m.id)}
-                              >
-                                {downloading ? s.downloading : s.download}
-                              </button>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-                <div className="pane-divider" />
-                <div className="field">
-                  <label>{s.asrSize}</label>
-                  <Seg
-                    value={size}
-                    onChange={(id) => setAsr(id as '0.6B' | '1.7B', quant)}
-                    options={[
-                      { id: '0.6B', label: '0.6B' },
-                      { id: '1.7B', label: '1.7B' }
-                    ]}
-                  />
-                </div>
-                <div className="field">
-                  <label>{s.quantization}</label>
-                  <Seg
-                    value={quant}
-                    onChange={(id) => setAsr(size, id as 'fp16' | 'int8')}
-                    options={[
-                      { id: 'fp16', label: s.fp16 },
-                      { id: 'int8', label: s.int8 }
-                    ]}
-                  />
-                </div>
-                <div className="field">
-                  <label>{s.asrPath}</label>
-                  <div className="path-input compact">
-                    <input
-                      className="text-input mono"
-                      value={draft.asr_model_dir}
-                      onChange={(e) => set('asr_model_dir', e.target.value)}
+                <div className="size-quant-row">
+                  <div className="size-quant-half">
+                    <label>{s.asrSize}</label>
+                    <Seg
+                      value={size}
+                      onChange={(id) => setAsr(id as '0.6B' | '1.7B', quant)}
+                      options={[
+                        { id: '0.6B', label: '0.6B' },
+                        { id: '1.7B', label: '1.7B' }
+                      ]}
                     />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onPickModel('asr_model_dir')}
-                    >
-                      {s.browse}
-                    </button>
+                  </div>
+                  <div className="size-quant-half">
+                    <label>{s.quantization}</label>
+                    <Seg
+                      value={quant}
+                      onChange={(id) => setAsr(size, id as 'fp16' | 'int8')}
+                      options={[
+                        { id: 'fp16', label: s.fp16 },
+                        { id: 'int8', label: s.int8 }
+                      ]}
+                    />
                   </div>
                 </div>
+                <ModelPathField
+                  label={s.asrPath}
+                  value={draft.asr_model_dir}
+                  onChange={(v) => {
+                    const id = asrId(size, quant)
+                    onChange({
+                      ...draft,
+                      asr_model_dir: v,
+                      asr_dirs: { ...draft.asr_dirs, [id]: v }
+                    })
+                  }}
+                  onBrowse={() => onPickModel('asr_model_dir')}
+                  modelId={asrId(size, quant)}
+                  ready={catalogReady(status?.catalog, asrId(size, quant))}
+                  download={download}
+                  downloading={downloading}
+                  browseLabel={s.browse}
+                  downloadLabel={s.download}
+                  redownloadLabel={s.redownload}
+                  downloadingLabel={s.downloading}
+                  verifyingLabel={s.verifying}
+                  retryLabel={s.modelRetry}
+                  cancelLabel={s.cancelDownload}
+                  onDownload={onDownloadStart}
+                  onCancel={onDownloadCancel}
+                />
+
+                <div className="pane-divider" />
+
                 <div className="field">
                   <label>{s.alignerKind}</label>
                   <Seg
@@ -550,61 +645,84 @@ export function SettingsDrawer({
                     ]}
                   />
                 </div>
-                <div className="field">
-                  <label>{s.alignerPath}</label>
-                  <div className="path-input compact">
-                    <input
-                      className="text-input mono"
-                      value={draft.aligner_model_dir}
-                      onChange={(e) => set('aligner_model_dir', e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onPickModel('aligner_model_dir')}
-                    >
-                      {s.browse}
-                    </button>
-                  </div>
-                </div>
+                <ModelPathField
+                  label={s.alignerPath}
+                  value={draft.aligner_model_dir}
+                  onChange={(v) => {
+                    const id = draft.aligner_model
+                    onChange({
+                      ...draft,
+                      aligner_model_dir: v,
+                      aligner_dirs: { ...draft.aligner_dirs, [id]: v }
+                    })
+                  }}
+                  onBrowse={() => onPickModel('aligner_model_dir')}
+                  modelId={draft.aligner_model}
+                  ready={catalogReady(status?.catalog, draft.aligner_model)}
+                  download={download}
+                  downloading={downloading}
+                  browseLabel={s.browse}
+                  downloadLabel={s.download}
+                  redownloadLabel={s.redownload}
+                  downloadingLabel={s.downloading}
+                  verifyingLabel={s.verifying}
+                  retryLabel={s.modelRetry}
+                  cancelLabel={s.cancelDownload}
+                  onDownload={onDownloadStart}
+                  onCancel={onDownloadCancel}
+                />
+
+                <div className="pane-divider" />
+
                 <div className="pref-row">
                   <span className="pref-label">{s.vocalSep}</span>
-                  <Toggle on={draft.vocal_separation} onChange={(v) => set('vocal_separation', v)} />
-                </div>
-                <div className="field">
-                  <label>{s.demucsPath}</label>
-                  <div className="path-input compact">
-                    <input
-                      className="text-input mono"
-                      value={draft.demucs_model_dir}
-                      onChange={(e) => set('demucs_model_dir', e.target.value)}
+                  <div className="hw-default-toggle" title={s.vocalSepDefault}>
+                    <span className="pref-label">{s.vocalSepDefaultShort}</span>
+                    <Toggle
+                      on={draft.vocal_separation}
+                      onChange={(v) => set('vocal_separation', v)}
+                      aria-label={s.vocalSepDefault}
                     />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onPickModel('demucs_model_dir')}
-                    >
-                      {s.browse}
-                    </button>
                   </div>
                 </div>
-                <div className="field">
-                  <label>{s.sensevoicePath}</label>
-                  <div className="path-input compact">
-                    <input
-                      className="text-input mono"
-                      value={draft.sensevoice_model_dir || ''}
-                      onChange={(e) => set('sensevoice_model_dir', e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onPickModel('sensevoice_model_dir')}
-                    >
-                      {s.browse}
-                    </button>
-                  </div>
-                </div>
+                <ModelPathField
+                  label={s.demucsPath}
+                  value={draft.demucs_model_dir}
+                  onChange={(v) => set('demucs_model_dir', v)}
+                  onBrowse={() => onPickModel('demucs_model_dir')}
+                  modelId="htdemucs_ft"
+                  ready={catalogReady(status?.catalog, 'htdemucs_ft')}
+                  download={download}
+                  downloading={downloading}
+                  browseLabel={s.browse}
+                  downloadLabel={s.download}
+                  redownloadLabel={s.redownload}
+                  downloadingLabel={s.downloading}
+                  verifyingLabel={s.verifying}
+                  retryLabel={s.modelRetry}
+                  cancelLabel={s.cancelDownload}
+                  onDownload={onDownloadStart}
+                  onCancel={onDownloadCancel}
+                />
+                <ModelPathField
+                  label={s.sensevoicePath}
+                  value={draft.sensevoice_model_dir || ''}
+                  onChange={(v) => set('sensevoice_model_dir', v)}
+                  onBrowse={() => onPickModel('sensevoice_model_dir')}
+                  modelId="SenseVoiceSmall"
+                  ready={catalogReady(status?.catalog, 'SenseVoiceSmall')}
+                  download={download}
+                  downloading={downloading}
+                  browseLabel={s.browse}
+                  downloadLabel={s.download}
+                  redownloadLabel={s.redownload}
+                  downloadingLabel={s.downloading}
+                  verifyingLabel={s.verifying}
+                  retryLabel={s.modelRetry}
+                  cancelLabel={s.cancelDownload}
+                  onDownload={onDownloadStart}
+                  onCancel={onDownloadCancel}
+                />
               </>
             )}
 

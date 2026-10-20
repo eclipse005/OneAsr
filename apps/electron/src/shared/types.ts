@@ -236,11 +236,19 @@ export interface HotwordStore {
   threshold: number
 }
 
+export interface CliCapabilities {
+  status: boolean
+  transcript: boolean
+  /** status 或 transcript 任一缺失即为过旧 */
+  outdated: boolean
+}
+
 export interface AppInfo {
   appRoot: string
   cliPath: string
   display: string | undefined
   version: string
+  cli?: CliCapabilities
 }
 
 export type ToastKind = 'info' | 'success' | 'error' | 'warn'

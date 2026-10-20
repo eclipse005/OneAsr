@@ -63,3 +63,10 @@ apps/electron/out/
 apps/electron/dist/
 # tsc --noEmit 也会写这个（tsconfig.web.json 是 composite），别让它每次冒出来
 apps/electron/*.tsbuildinfo
+
+# Electron 截图：只入库 shots/ 根下命名规范的 png；实验目录 / fixtures / overnight 本地留
+apps/electron/shots/review-*/
+apps/electron/shots/overnight-*/
+apps/electron/shots/models-*/
+# 本地演示夹具（含 ~2.5MB wav），不进仓
+apps/electron/shots/review-fixtures/

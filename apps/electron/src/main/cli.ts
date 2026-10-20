@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import { DEFAULT_APP_ROOT, resolveCli } from './settings'
 import { logError } from './log'
+import type { CliCapabilities } from '../shared/types'
 
 /**
  * 调 oneasr-cli 并解析它 **stdout 上的 JSON**。
@@ -76,4 +77,95 @@ export function runCliJson<T>(args: string[], timeoutMs = 60000): Promise<CliRes
       }
     })
   })
+}
+
+export function runCliCapture(
+  args: string[],
+  timeoutMs = 8000
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const cli = resolveCli()
+    let child
+    try {
+      child = spawn(cli, args, {
+        cwd: DEFAULT_APP_ROOT,
+        env: { ...process.env, ONEASR_DATA_DIR: DEFAULT_APP_ROOT },
+        windowsHide: true
+      })
+    } catch (error) {
+      resolve({ code: -1, stdout: '', stderr: String(error) })
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try {
+        child.kill('SIGTERM')
+        child.kill('SIGKILL')
+      } catch {
+        /* ignore */
+      }
+      resolve({ code: -1, stdout, stderr: stderr || `cli timeout after ${timeoutMs}ms` })
+    }, timeoutMs)
+    child.stdout?.on('data', (b) => {
+      stdout += b.toString('utf8')
+    })
+    child.stderr?.on('data', (b) => {
+      stderr += b.toString('utf8')
+    })
+    child.on('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code: -1, stdout, stderr: String(error) })
+    })
+    child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code, stdout, stderr })
+    })
+  })
+}
+
+/**
+ * 探测壳依赖的 CLI 子命令是否存在。
+ * 不要把 `--help` 里的碎片当错误：只认「unknown command」或帮助正文里有没有该子命令。
+ */
+let capsCache: CliCapabilities | null = null
+
+export async function probeCliCapabilities(): Promise<CliCapabilities> {
+  if (capsCache) return capsCache
+  const help = await runCliCapture(['help'], 6000)
+  const text = `${help.stdout}\n${help.stderr}`
+  let statusOk = /\bstatus\b/.test(text) && !/unknown command:\s*status/i.test(text)
+  let transcriptOk =
+    /transcript\s+inspect/.test(text) ||
+    (/\btranscript\b/.test(text) && !/unknown command:\s*transcript/i.test(text))
+  if (!statusOk) {
+    const r = await runCliCapture(['status', '--json'], 8000)
+    const err = `${r.stdout}\n${r.stderr}`
+    statusOk =
+      !/unknown command:\s*status/i.test(err) &&
+      (r.code === 0 || r.stdout.trim().startsWith('{'))
+  }
+  if (!transcriptOk) {
+    const r = await runCliCapture(['transcript'], 6000)
+    const err = `${r.stdout}\n${r.stderr}`
+    transcriptOk = !/unknown command:\s*transcript/i.test(err)
+  }
+  capsCache = {
+    status: statusOk,
+    transcript: transcriptOk,
+    outdated: !(statusOk && transcriptOk)
+  }
+  return capsCache
+}
+
+/** 测试或换 CLI 路径后清缓存。 */
+export function clearCliCapabilitiesCache(): void {
+  capsCache = null
 }

@@ -246,8 +246,8 @@ html[lang='en'] .row-chip.lang-chip,
 html[lang='en'] .row-chip.group-chip,
 html[lang='en'] .row-chip.sep-chip,
 html[lang='en'] .row-chip.transcript-chip {
-  width: 122px;
-  max-width: 122px;
+  width: 108px;
+  max-width: 108px;
 }
 .row-chip .caret { color: var(--muted); font-size: 0.6rem; line-height: 1; }
 .row-chip .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -629,8 +629,8 @@ html[lang='en'] .badge-slot { width: 100px; }
   box-shadow: none;
 }
 .section h4 {
-  margin: 0; font-size: 0.68rem; letter-spacing: 0.07em;
-  text-transform: uppercase; color: var(--accent); font-weight: 800;
+  margin: 0; font-size: 0.84rem; letter-spacing: 0;
+  text-transform: none; color: var(--text); font-weight: 650;
 }
 .field {
   display: grid; grid-template-columns: 108px 1fr;
@@ -640,11 +640,12 @@ html[lang='en'] .badge-slot { width: 100px; }
 .field > label { color: var(--muted); font-size: 0.84rem; line-height: 1.3; }
 .field.stack { grid-template-columns: 1fr; gap: 4px; }
 .status-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.75rem; font-weight: 650; padding: 2px 8px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.75rem; font-weight: 550; padding: 2px 8px; border-radius: 6px;
+  border: 1px solid var(--line-soft); background: #fff; color: var(--muted);
 }
-.status-pill.ready { background: var(--accent-soft); color: var(--logo); }
-.status-pill.missing { background: var(--danger-soft); color: var(--danger); }
+.status-pill.ready { color: var(--logo); border-color: var(--accent-soft); background: var(--accent-mist); }
+.status-pill.missing { color: var(--warn); border-color: #fed7aa; background: var(--warn-soft); }
 .status-pill.optional { background: var(--row-hover); color: var(--muted); }
 
 select, .text-input, textarea.text-input {
@@ -664,10 +665,15 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   font-size: 0.78rem;
   overflow: hidden; text-overflow: ellipsis;
 }
+/* 路径行图标按钮对齐 30px 输入框，比任务行 32 略小 */
+.path-input .icon-btn {
+  width: 30px; height: 30px; border-radius: 8px;
+}
 .text-input.mono {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 .btn-sm { height: 30px; padding: 0 10px; border-radius: 8px; font-size: 0.82rem; }
+.btn-xs { height: 24px; padding: 0 8px; border-radius: 6px; font-size: 0.75rem; }
 .btn-icon {
   width: 30px; height: 30px; padding: 0; border-radius: 8px;
   font-size: 1rem; line-height: 1;
@@ -820,7 +826,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 12px; border-bottom: 1px solid var(--line-soft);
   font-size: 0.78rem; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.06em;
+  text-transform: none; letter-spacing: 0;
 }
 .hw-group-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
 .hw-group-item {
@@ -1091,31 +1097,78 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .pref-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .log-size { font-variant-numeric: tabular-nums; }
 
-/* 模型下载区（只列缺的；固定高度面板里要紧凑） */
-.dl-block { display: flex; flex-direction: column; gap: 6px; }
-.dl-head {
-  font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase;
-  color: var(--accent); font-weight: 800;
+/* 模型路径行：与其它设置 field 同风格 */
+.pane-section { display: flex; flex-direction: column; gap: 4px; }
+.pane-section-title {
+  margin: 0; font-size: 0.78rem; font-weight: 650; color: var(--text);
 }
-.dl-all { margin: 0; font-size: 0.8rem; color: var(--muted); }
-.dl-list { display: flex; flex-direction: column; gap: 4px; }
-.dl-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; min-height: 26px; }
-.dl-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.dl-progress { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.dl-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.dl-all { margin: 0; font-size: 0.78rem; color: var(--muted); }
+.dl-bar { flex: 1; height: 3px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
 .dl-bar > i { display: block; height: 100%; background: var(--accent); transition: width var(--dur-layer) var(--ease-out); }
-.dl-meta { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-/* Models toolbar */
+.model-path-stack {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+}
+.model-path-bar { width: 100%; height: 3px; }
+
+.field-hint.quiet { color: var(--muted); font-weight: 500; }
+
+.cli-outdated-banner {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #fed7aa;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+/* Models toolbar — 克制的就绪 pill */
 .models-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
   padding: 0 0 2px;
+  flex: none;
 }
-.models-status { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
-.models-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.models-status { display: flex; flex-wrap: nowrap; gap: 4px; flex: 1; min-width: 0; cursor: pointer; }
+.models-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+/* 顶栏刷新：克制尺寸 + 文案 tooltip；用 ↻ 字形，避免与路径行 redownload.svg 撞车 */
+.models-actions .models-refresh-btn {
+  width: 24px; height: 24px; border-radius: 6px; color: var(--muted);
+}
+.models-actions .models-refresh-btn:hover:not(:disabled) { color: var(--text); }
+.models-refresh-glyph {
+  font-size: 13px; line-height: 1; font-weight: 600;
+}
+.size-quant-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  min-width: 0;
+}
+.size-quant-half {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 10px;
+  align-items: center;
+  min-width: 0;
+}
+.size-quant-half > label {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+/* Seg stays content-width inside half columns (no width:100% / flex:1). */
+.settings-pane.is-models .status-pill {
+  font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; font-weight: 550;
+}
+.settings-pane.is-models .pane-divider { margin: 2px 0; }
 
 /* Hotwords embedded in settings — vertical stack */
 .hw-embed {
@@ -1404,7 +1457,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .transcript-warn { font-size: 0.78rem; line-height: 1.55; color: var(--warn); font-weight: 650; }
 .transcript-error { font-size: 0.78rem; line-height: 1.55; color: var(--danger); word-break: break-word; }
 .transcript-rate { font-size: 0.78rem; line-height: 1.5; color: var(--muted); }
-.transcript-rate.bad { color: var(--danger); font-weight: 650; }
+.transcript-rate.bad { color: var(--warn); font-weight: 650; }
 /* 动作按钮沉到侧栏底部，与编辑器底边齐平 */
 .transcript-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 .transcript-editor-wrap {

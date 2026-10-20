@@ -41,6 +41,7 @@ export default function App() {
   const [draft, setDraft] = useState<Settings | null>(null)
   /** CLI 的 status --json 快照：就绪、门禁、catalog 全在里面 */
   const [status, setStatus] = useState<StatusSnapshot | null>(null)
+  const [cliOutdated, setCliOutdated] = useState(false)
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
   const [hotwords, setHotwords] = useState<HotwordStore | null>(null)
@@ -152,7 +153,10 @@ export default function App() {
   useEffect(() => {
     const api = {
       setUiLang: (code: string) => {
+        // 同时改 draft 与 settings：打开设置会从 settings 克隆 draft，
+        // 只改 draft 会被冲掉，截图脚本的 en 集就会全变回中文。
         setDraft((d) => (d ? { ...d, ui_language: code } : d))
+        setSettings((s) => (s ? { ...s, ui_language: code } : s))
       },
       open: async (name: 'settings' | 'hotwords' | 'stats' | 'guide' | 'none') => {
         if (name === 'stats') {
@@ -238,6 +242,12 @@ export default function App() {
       setDraft(loaded)
       setTasks(await window.oneasr.listTasks())
       setHotwords(await window.oneasr.getHotwords())
+      try {
+        const info = await window.oneasr.getAppInfo()
+        setCliOutdated(!!info.cli?.outdated)
+      } catch {
+        /* ignore */
+      }
       await refreshModels()
       await refreshStats()
     })()
@@ -645,6 +655,7 @@ export default function App() {
         status={status}
         tasks={tasks}
         message={statusMsg}
+        cliOutdated={cliOutdated}
         onOpenModels={() => void openSettingsFn('models')}
         onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => notify('success', s.copied))}
       />
@@ -706,6 +717,7 @@ export default function App() {
             }
             onOpenModels={() => void window.oneasr.openModelsFolder()}
             onRefreshModels={() => void refreshModels()}
+            cliOutdated={cliOutdated}
           />
         )}
       </AnimatePresence>

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
-const shotDir = path.join(root, 'shots')
+const shotDir = process.env.ONEASR_SHOT_DIR || path.join(root, 'shots')
 fs.mkdirSync(shotDir, { recursive: true })
 
 const electronBin = path.join(root, 'node_modules', 'electron', 'cli.js')
@@ -21,6 +21,8 @@ const env = {
   ONEASR_AUTO_SHOT_EXIT: '1',
   ONEASR_SHOT_DIR: shotDir
 }
+// shotDir already applied above; keep env consistent
+
 
 console.log('Taking shots →', shotDir)
 const child = spawn(process.execPath, [electronBin, mainJs], {

@@ -10,7 +10,8 @@ export function StatusBar({
   tasks,
   message,
   onCopyMessage,
-  onOpenModels
+  onOpenModels,
+  cliOutdated = false
 }: {
   lang: UiLang
   /** CLI 的 status --json 快照：就绪、门禁、后端全在里面，壳只显示 */
@@ -21,12 +22,14 @@ export function StatusBar({
   /** 最近一条提示：toast 会消失，这里留 3~6 秒并且可点击复制（长路径/报错不至于看了就丢） */
   message?: { kind: string; text: string } | null
   onCopyMessage?: (text: string) => void
+  /** CLI 缺 status/transcript 时优先提示更新引擎，不要把 help 碎片当错误 */
+  cliOutdated?: boolean
 }) {
   const s = t(lang)
   const chipMotion = useLayerMotion()
   // 就绪与否 = Rust 的 can_start（含「只导 TXT 就不要求对齐」这类细则），失败时 title 给原因
-  const ready = !!status?.can_start.ok
-  const notReadyReason = status?.can_start.reason ?? undefined
+  const ready = !cliOutdated && !!status?.can_start.ok
+  const notReadyReason = cliOutdated ? s.cliOutdated : (status?.can_start.reason ?? undefined)
   // 模型短名不铺在状态栏上；悬停「模型就绪」能看到，设置 → 模型里也有
   const detail = [
     notReadyReason,
@@ -52,7 +55,7 @@ export function StatusBar({
         title={detail}
         onClick={onOpenModels}
       >
-        {ready ? s.modelsReady : s.modelsNotReady}
+        {cliOutdated ? s.cliOutdatedShort : ready ? s.modelsReady : s.modelsNotReady}
       </button>
       {(running > 0 || queued > 0) && (
         <>

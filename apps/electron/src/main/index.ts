@@ -12,7 +12,7 @@ import {
 import { join } from 'path'
 import fs from 'fs'
 import { DEFAULT_APP_ROOT, defaultSettings, loadSettings, resolveCli, saveSettings } from './settings'
-import { runCliJson } from './cli'
+import { probeCliCapabilities, runCliJson } from './cli'
 import { JobManager } from './jobs'
 import { DownloadManager } from './downloads'
 import {
@@ -113,6 +113,49 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
     console.log('SHOT', file)
   }
   await waitApi()
+  const shotOnly = process.env.ONEASR_SHOT_ONLY || ''
+  if (shotOnly === 'models') {
+    for (const lang of ['zh', 'en'] as const) {
+      await win.webContents.executeJavaScript(
+        `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
+      )
+      await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('settings')`)
+      await win.webContents.executeJavaScript(
+        `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
+      )
+      await sleep(200)
+      await win.webContents.executeJavaScript(
+        `document.querySelector('[data-shot="settings-tab-models"]')?.click()`
+      )
+      await sleep(350)
+      await capture(`${lang}-02b-settings-models`)
+      const scrollInfo = await win.webContents.executeJavaScript(`(() => {
+        const pane = document.querySelector('[data-shot="settings-pane-models"]');
+        if (!pane) return null;
+        const cs = getComputedStyle(pane);
+        const inner = pane.querySelector('.settings-pane-inner');
+        const ics = inner ? getComputedStyle(inner) : null;
+        const kids = [...(inner?.children || [])].map((el) => ({
+          tag: el.className?.toString?.().slice(0, 48) || el.tagName,
+          h: Math.round(el.getBoundingClientRect().height)
+        }));
+        return {
+          pane: { sh: pane.scrollHeight, ch: pane.clientHeight, overflow: cs.overflowY },
+          inner: inner ? { sh: inner.scrollHeight, ch: inner.clientHeight, overflow: ics.overflowY } : null,
+          fits: pane.scrollHeight <= pane.clientHeight + 1,
+          kids
+        };
+      })()`)
+      console.log('MODELS_PANE_SCROLL', lang, JSON.stringify(scrollInfo))
+      await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
+      await sleep(200)
+    }
+    if (process.env.ONEASR_AUTO_SHOT_EXIT === '1') {
+      app.quit()
+    }
+    return
+  }
+  if (shotOnly !== 'transcript' && shotOnly !== 'tasks') {
   for (const lang of ['zh', 'en'] as const) {
     await win.webContents.executeJavaScript(
       `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
@@ -128,11 +171,22 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
       await win.webContents.executeJavaScript(
         `window.__oneasrShotApi.open(${JSON.stringify(panel)})`
       )
+      // open() 会从 settings 克隆 draft；再钉一次语言，避免 en 截图串成中文
+      await win.webContents.executeJavaScript(
+        `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
+      )
+      await sleep(200)
       await capture(`${lang}-${file}`)
       if (panel === 'settings') {
+        await capture(`${lang}-02a-settings-general`)
+        await win.webContents.executeJavaScript(
+          `document.querySelector('[data-shot="settings-tab-output"]')?.click()`
+        )
+        await capture(`${lang}-02e-settings-output`)
         await win.webContents.executeJavaScript(
           `document.querySelector('[data-shot="settings-tab-models"]')?.click()`
         )
+        await sleep(350)
         await capture(`${lang}-02b-settings-models`)
         await win.webContents.executeJavaScript(
           `document.querySelector('[data-shot="settings-tab-hotwords"]')?.click()`
@@ -152,6 +206,72 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
       }
       await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
       await sleep(250)
+    }
+  }
+  } // end !transcript-only panels
+  // 有任务 / 文稿面板：用 review-fixtures（demo.wav + 同名 demo.txt）
+  for (const lang of ['zh', 'en'] as const) {
+    await win.webContents.executeJavaScript(
+      `window.__oneasrShotApi.setUiLang(${JSON.stringify(lang)})`
+    )
+    await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
+    // 本地截图夹具：相对主进程产物 out/main → apps/electron/shots/…
+    // 勿写死 /workspace/…（Windows / 其它机器路径不同）
+    const demo = join(DEFAULT_APP_ROOT, 'shots-demo.wav')
+    const demoAlt = join(__dirname, '..', '..', 'shots', 'review-fixtures', 'demo.wav')
+    const media = fs.existsSync(demoAlt) ? demoAlt : demo
+    const transcript = media.replace(/\.wav$/i, '.txt')
+    if (fs.existsSync(media)) {
+      await win.webContents.executeJavaScript(
+        `window.oneasr.addTasks([${JSON.stringify(media)}]).then(() => true)`
+      )
+      await sleep(800)
+      await capture(`${lang}-06-main-with-tasks`)
+      // 挂上同名文稿后再点芯片，才能真正打开文稿面板（否则会走选文件对话框）
+      if (fs.existsSync(transcript)) {
+        const attached = await win.webContents.executeJavaScript(`(async () => {
+          const tasks = await window.oneasr.listTasks();
+          const id = tasks[0]?.id;
+          if (!id) return { ok: false, error: 'no task' };
+          await window.oneasr.setTaskTranscript(id, ${JSON.stringify(transcript)});
+          // 等 React 收到 tasks:updated，芯片出现 .has
+          for (let i = 0; i < 40; i++) {
+            const has = !!document.querySelector('.row-chip.transcript-chip.has');
+            if (has) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          document.querySelector('.row-chip.transcript-chip.has')?.click();
+          // 等文稿面板挂上（TranscriptPanel → .transcript-shell / .transcript-editor）
+          for (let i = 0; i < 50; i++) {
+            if (document.querySelector('.transcript-shell, .transcript-editor')) return { ok: true, id };
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          return {
+            ok: false,
+            id,
+            hasChip: !!document.querySelector('.row-chip.transcript-chip.has'),
+            error: 'transcript panel not visible'
+          };
+        })()`)
+        console.log('SHOT_TRANSCRIPT_ATTACH', lang, attached)
+        await sleep(600)
+      } else {
+        console.warn('SHOT_NO_TRANSCRIPT_FIXTURE', transcript)
+        await win.webContents.executeJavaScript(
+          `document.querySelector('.row-chip.transcript-chip')?.click()`
+        )
+        await sleep(500)
+      }
+      await capture(`${lang}-07-transcript-panel`)
+      await win.webContents.executeJavaScript(`window.__oneasrShotApi.open('none')`)
+      // 关文稿面板：清 transcriptId
+      await win.webContents.executeJavaScript(`(async () => {
+        // 点面板关闭按钮（若有）
+        document.querySelector('[data-shot="transcript-close"], .transcript-close, .tp-close')?.click();
+        await window.oneasr.clearTasks();
+        return true;
+      })()`)
+      await sleep(300)
     }
   }
   console.log('SHOTS_DONE', outDir)
@@ -213,8 +333,8 @@ function createWindow(): void {
     .then((info) => addSessionContext('gpu', JSON.stringify(info).slice(0, 800)))
     .catch(() => undefined)
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 900,
+    height: 640,
     minWidth: 900,
     minHeight: 620,
     ...windowChrome(),
@@ -259,11 +379,12 @@ function createWindow(): void {
 }
 
 function registerIpc(): void {
-  ipcMain.handle('app:info', () => ({
+  ipcMain.handle('app:info', async () => ({
     appRoot: DEFAULT_APP_ROOT,
     cliPath: resolveCli(),
     display: process.env.DISPLAY,
-    version: '0.2.0-electron'
+    version: '0.2.0-electron',
+    cli: await probeCliCapabilities()
   }))
 
   ipcMain.handle('settings:get', () => loadSettings())
