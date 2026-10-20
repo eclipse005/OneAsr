@@ -91,20 +91,6 @@ button:focus-visible {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
-.clear-anchor { position: relative; }
-.clear-pop {
-  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30;
-  width: 232px; padding: 12px;
-  display: flex; flex-direction: column; gap: 10px;
-  background: #fff; border: 1px solid var(--line); border-radius: 12px;
-  box-shadow: var(--shadow-lg);
-}
-.clear-pop p {
-  margin: 0; white-space: pre-line;
-  color: var(--text); font-size: 0.84rem; font-weight: 650; line-height: 1.45;
-}
-.clear-pop-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.clear-pop-actions .btn { height: 30px; padding: 0 12px; }
 .btn-danger-ghost.open {
   border-color: var(--danger); background: var(--danger-soft); color: var(--danger);
 }
@@ -583,6 +569,10 @@ html[lang='en'] .badge-slot { width: 100px; }
   padding: 24px;
   background: rgba(15, 23, 42, 0.18);
 }
+.modal-confirm-backdrop.is-fixed {
+  position: fixed; top: var(--titlebar-h); left: 0; right: 0; bottom: 0;
+  z-index: 60;
+}
 .modal-confirm {
   width: min(380px, 100%);
   padding: 18px 20px 16px;
@@ -590,7 +580,7 @@ html[lang='en'] .badge-slot { width: 100px; }
   background: var(--panel); box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; gap: 16px;
 }
-.modal-confirm p { margin: 0; color: var(--text); font-weight: 600; line-height: 1.5; }
+.modal-confirm p { margin: 0; color: var(--text); font-weight: 600; line-height: 1.5; white-space: pre-line; }
 .modal-confirm.is-danger p { color: var(--danger); }
 .modal-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 

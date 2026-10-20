@@ -717,8 +717,9 @@ export function transcriptsPaired(lang: UiLang, n: number): string {
 }
 
 export function confirmClearTasks(lang: UiLang, n: number): string {
-  return lang === 'zh'
-    ? `清空这 ${n} 条任务？\n正在运行的会留下。`
+  if (lang === 'zh') return `清空这 ${n} 条任务？\n正在运行的会留下。`
+  return n === 1
+    ? 'Clear this task?\nA task that is running now stays.'
     : `Clear these ${n} tasks?\nA task that is running now stays.`
 }
 

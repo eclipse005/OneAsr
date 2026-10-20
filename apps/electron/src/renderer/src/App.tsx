@@ -5,6 +5,7 @@ import { SettingsDrawer, type SettingsTab } from './components/SettingsDrawer'
 import { StatsPanel } from './components/StatsPanel'
 import { StatusBar } from './components/StatusBar'
 import { TaskList } from './components/TaskList'
+import { ConfirmDialog } from './components/ConfirmDialog'
 import { TitleBar } from './components/TitleBar'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { useEscClose } from './esc'
@@ -16,7 +17,7 @@ import {
   transcriptsUnpaired,
   unsupportedCount
 } from './i18n'
-import { useLayerMotion, useSurfaceMotion } from './motion'
+import { useSurfaceMotion } from './motion'
 import { isBulkStartCandidate } from '../../shared/start-policy'
 import { closeOverlay, openOverlay, type OverlayKind } from '../../shared/overlay'
 import { fileName, pairPicked, pairingItems } from './lib/pairing'
@@ -82,7 +83,6 @@ export default function App() {
   const [picking, setPicking] = useState(false)
   /** 清空会丢掉整表，先在按钮旁边确认。单行移除不确认。 */
   const [clearOpen, setClearOpen] = useState(false)
-  const clearRef = useRef<HTMLDivElement>(null)
   /** 设置刚保存成功：主按钮短暂显示「已保存」，反馈留在刚才点的地方 */
   const [settingsAck, setSettingsAck] = useState(false)
   const ackTimer = useRef<number | undefined>(undefined)
@@ -185,18 +185,7 @@ export default function App() {
   }, [openSettingsFn])
 
   const dropzoneMotion = useSurfaceMotion()
-  const clearPopMotion = useLayerMotion()
   useEscClose(() => setClearOpen(false), clearOpen)
-
-  useEffect(() => {
-    if (!clearOpen) return
-    const onDown = (event: MouseEvent): void => {
-      if (clearRef.current?.contains(event.target as Node)) return
-      setClearOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [clearOpen])
 
   const notify = useCallback((kind: 'info' | 'success' | 'warn' | 'error', message: string) => {
     setStatusMsg({ kind, text: message })
@@ -555,33 +544,16 @@ export default function App() {
           <span className="btn-glyph i-play" aria-hidden />
           {s.startAll}
         </button>
-        <div className="clear-anchor" ref={clearRef}>
-          <button
-            type="button"
-            className={`btn btn-ghost btn-danger-ghost ${clearOpen ? 'open' : ''}`}
-            disabled={!tasks.length}
-            aria-expanded={clearOpen}
-            onClick={() => setClearOpen((open) => !open)}
-          >
-            <span className="btn-glyph i-trash" aria-hidden />
-            {s.clear}
-          </button>
-          <AnimatePresence>
-            {clearOpen && (
-              <motion.div className="clear-pop" role="group" aria-label={s.clear} {...clearPopMotion}>
-                <p>{confirmClearTasks(lang, tasks.length)}</p>
-                <div className="clear-pop-actions">
-                  <button type="button" className="btn btn-ghost" onClick={() => setClearOpen(false)}>
-                    {s.cancel}
-                  </button>
-                  <button type="button" className="btn btn-danger" onClick={() => void confirmClear()}>
-                    {s.clear}
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+        <button
+          type="button"
+          className={`btn btn-ghost btn-danger-ghost ${clearOpen ? 'open' : ''}`}
+          disabled={!tasks.length}
+          aria-expanded={clearOpen}
+          onClick={() => setClearOpen((open) => !open)}
+        >
+          <span className="btn-glyph i-trash" aria-hidden />
+          {s.clear}
+        </button>
         <div className="grow" />
         <button
           className="btn btn-ghost"
@@ -791,6 +763,20 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {clearOpen && (
+          <ConfirmDialog
+            key="clear-tasks"
+            fixed
+            danger
+            message={confirmClearTasks(lang, tasks.length)}
+            cancelLabel={s.cancel}
+            confirmLabel={s.clear}
+            onCancel={() => setClearOpen(false)}
+            onConfirm={() => void confirmClear()}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }

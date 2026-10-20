@@ -11,7 +11,8 @@ export function ConfirmDialog({
   confirmLabel,
   onCancel,
   onConfirm,
-  danger = false
+  danger = false,
+  fixed = false
 }: {
   message: string
   cancelLabel: string
@@ -19,10 +20,12 @@ export function ConfirmDialog({
   onCancel: () => void
   onConfirm: () => void
   danger?: boolean
+  /** 主窗口没有 .modal-shell 作定位上下文时用固定遮罩（标题栏下方）。 */
+  fixed?: boolean
 }) {
   const layer = useLayerMotion()
   return (
-    <div className="modal-confirm-backdrop" onClick={onCancel}>
+    <div className={`modal-confirm-backdrop${fixed ? ' is-fixed' : ''}`} onClick={onCancel}>
       <motion.div
         className={`modal-confirm ${danger ? 'is-danger' : ''}`}
         role="alertdialog"
