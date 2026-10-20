@@ -167,6 +167,8 @@ export const zh = {
   guideDemucs: '人声分离权重所在的目录。',
   guideSense: '用了热词时，会先用这个模型听一遍，再挑出要提示给识别的词。这一行没有热词时不会加载它。',
   guideDownload: '这里只列出还没就绪的模型。下载时，大小已经对得上的文件会跳过，缺的或大小不对的才会重新获取。',
+  guideModelPathsTitle: '路径与保存',
+  guideModelPaths: '每个模型各用各的路径：ASR 尺寸、对齐器、Demucs、SenseVoice 互不覆盖。改动点保存后才用于转写；下载会落到对应行当前显示的路径。',
   guideHwGroups: '热词按组保存。一组里是希望识别时更不容易听错的专名和术语。',
   guideHwDefault: '打开自动启用后，新任务会带上当前的默认组。关掉时新任务不带热词，但记住哪一组是默认。已经在列表里的行不变。',
   guideHwRow: '热词只影响这一行的转写，而且只对中文和英文。挂了文稿去做打轴时不用热词。',
@@ -276,7 +278,6 @@ export const zh = {
   demucsPurpose: '人声分离',
   sensePurpose: '粗转',
   modelRetry: '重试',
-  modelPathsHint: '每个模型各用各的路径；改动保存后用于转写，下载会落到当前显示的路径。',
   sparklineAria: '近 30 天处理时长趋势',
 } as const
 
@@ -447,6 +448,8 @@ export const en: Dict = {
   guideDemucs: 'Folder for the vocal-separation weights.',
   guideSense: 'When a row uses hotwords, this model listens first and picks which terms to hint to recognition. It is not loaded when the row has no hotwords.',
   guideDownload: 'Only models that are not ready are listed. Files that are already the right size are skipped. Missing or wrong-size files are fetched.',
+  guideModelPathsTitle: 'Paths and saving',
+  guideModelPaths: 'Each model keeps its own folder: ASR sizes, aligner, Demucs, and SenseVoice do not overwrite one another. Changes apply to transcription after Save; downloads go to the folder shown on that row.',
   guideHwGroups: 'Hotwords are saved in groups. A group is names and terms you want the recogniser to catch.',
   guideHwDefault: 'With Auto-enable on, new tasks take the default group. Turning it off leaves new tasks without hotwords and still remembers which group was the default. Rows already in the list stay as they are.',
   guideHwRow: 'A row’s hotwords affect only that transcription, and only for Chinese or English. Aligning a transcript does not use hotwords.',
@@ -556,7 +559,6 @@ export const en: Dict = {
   demucsPurpose: 'Vocals',
   sensePurpose: 'Hotword ASR',
   modelRetry: 'Retry',
-  modelPathsHint: 'Each model keeps its own path. Save to use it for transcription; downloads go to the path shown above.',
   sparklineAria: '30-day media trend',
 }
 

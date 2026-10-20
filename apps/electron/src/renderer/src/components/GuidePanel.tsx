@@ -158,6 +158,7 @@ function TabBody({ tab, s }: { tab: GuideTab; s: Copy }) {
   if (tab === 'models') {
     return (
       <div className="guide-copy">
+        <Entry title={s.guideModelPathsTitle} body={s.guideModelPaths} />
         <Entry title={s.asrSize} body={s.guideAsr} />
         <Entry title={s.quantization} body={s.guideQuant} />
         <Entry title={s.asrPath} body={s.guideAsrPath} />

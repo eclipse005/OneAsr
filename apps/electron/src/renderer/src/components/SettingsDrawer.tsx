@@ -561,7 +561,6 @@ export function SettingsDrawer({
                     {s.cliOutdated}
                   </p>
                 )}
-                <p className="field-hint">{s.modelPathsHint}</p>
                 <div className="models-toolbar">
                   <div className="models-status" onClick={onRefreshModels} title={s.refreshModelsStatus}>
                     <Pill ok={!!status?.models.asr.ready} label={s.asr} ready={s.ready} missing={s.missing} />
