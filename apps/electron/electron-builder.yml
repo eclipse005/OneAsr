@@ -21,8 +21,9 @@ extraResources:
 
 asar: true
 npmRebuild: false
-# 使用 npm 已装好的 Electron，避免打包时再从未知网络下载一份
-# （本地/CI 都是先 npm ci，版本由 package-lock 钉住）。
+# 使用打包脚本预先装好的 Electron，避免 electron-builder 再下载一份。
+# Electron 44 的 npm 包不再自动下载二进制，pack-electron.* 会先跑 install.js；
+# 这里一旦指定 electronDist，builder 就不会自己补装，所以那一步不能省。
 electronDist: node_modules/electron/dist
 
 win:

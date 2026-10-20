@@ -55,6 +55,13 @@ if (-not (Test-Path -LiteralPath (Join-Path $AppDir "node_modules\electron-build
   throw "apps\electron dependencies are missing. Run: cd apps\electron && npm ci"
 }
 
+# Electron 44 起 npm 包不再带 postinstall（只剩 install-electron 入口），
+# 而 electron-builder 一旦指定 electronDist 就不会自己下载 —— 打包前必须显式装一次。
+# install.js 幂等：已装好且版本一致时直接退出。
+Write-Host "==> ensure Electron binary"
+node (Join-Path $AppDir "node_modules\electron\install.js")
+if ($LASTEXITCODE -ne 0) { throw "Electron binary install failed (exit $LASTEXITCODE)" }
+
 Write-Host "==> OneAsr Electron pack  version=$Version"
 
 if (-not $SkipBuild) {

@@ -46,6 +46,12 @@ fi
   exit 1
 }
 
+# Electron 44 起 npm 包不再带 postinstall（只剩 install-electron 入口），
+# 而 electron-builder 一旦指定 electronDist 就不会自己下载 —— 打包前必须显式装一次。
+# install.js 幂等：已装好且版本一致时直接退出。
+echo "==> ensure Electron binary"
+node "$APP_DIR/node_modules/electron/install.js"
+
 echo "==> OneAsr Electron pack  version=$VERSION  os=$OS  arch=$ARCH"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
