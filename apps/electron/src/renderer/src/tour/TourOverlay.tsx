@@ -1,14 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { EASE_OUT, useSurfaceMotion } from '../motion'
-import { placeBubble } from './place'
 import { readTargetRect } from './wait'
-import type { TourAdvance, TourPlacement } from './types'
+import type { TourAdvance } from './types'
 import { attachTourTargetClickListener } from './tourTargetClick'
 
 const PAD = 8
-const DEFAULT_BUBBLE_W = 320
-const DEFAULT_BUBBLE_H = 168
+/** 与 CSS --titlebar-h / main TITLEBAR_HEIGHT 一致。遮罩不得盖住标题栏：
+ *  系统 Window Controls Overlay 画在网页之上，压暗标题栏会留下一块刺眼的白按钮区。 */
+const TITLEBAR_H = 44
 
 type Props = {
   active: boolean
@@ -18,7 +18,6 @@ type Props = {
   stepIndex: number
   stepTotal: number
   advance: TourAdvance
-  placement?: TourPlacement
   nextLabel: string
   /** click-or-next 时「下一步」可改成「跳过此步」 */
   skipStepLabel?: string
@@ -44,7 +43,6 @@ export function TourOverlay({
   stepIndex,
   stepTotal,
   advance,
-  placement = 'auto',
   nextLabel,
   skipStepLabel,
   skipLabel,
@@ -60,8 +58,6 @@ export function TourOverlay({
   onTargetClick
 }: Props) {
   const [rect, setRect] = useState<DOMRect | null>(null)
-  const [bubbleSize, setBubbleSize] = useState({ w: DEFAULT_BUBBLE_W, h: DEFAULT_BUBBLE_H })
-  const bubbleRef = useRef<HTMLDivElement | null>(null)
   const surface = useSurfaceMotion()
 
   // 跟随目标：resize / scroll / 布局变化
@@ -86,23 +82,6 @@ export function TourOverlay({
     }
   }, [active, selector])
 
-  // 量真实气泡尺寸，避免估算偏小导致盖住目标
-  useLayoutEffect(() => {
-    if (!active) return
-    const el = bubbleRef.current
-    if (!el) return
-    const measure = (): void => {
-      const r = el.getBoundingClientRect()
-      if (r.width > 0 && r.height > 0) {
-        setBubbleSize({ w: Math.ceil(r.width), h: Math.ceil(r.height) })
-      }
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [active, title, body, stepIndex])
-
   // 点高亮目标推进：capture + 延后回调。
   // SettingsDrawer modal-shell stopPropagation 会挡住 document 冒泡监听；
   // capture 才能收到标签点击。延后到 setTimeout(0) 让目标自己的 onClick
@@ -120,24 +99,18 @@ export function TourOverlay({
 
   const hole = useMemo(() => {
     if (!rect) return null
+    // 洞可以贴到标题栏下沿，但不要伸进系统按钮区（避免洞边缘画在 overlay 上）
+    const top = Math.max(TITLEBAR_H, rect.top - PAD)
+    const left = Math.max(0, rect.left - PAD)
+    const bottom = rect.bottom + PAD
+    const right = rect.right + PAD
     return {
-      top: Math.max(0, rect.top - PAD),
-      left: Math.max(0, rect.left - PAD),
-      width: rect.width + PAD * 2,
-      height: rect.height + PAD * 2
+      top,
+      left,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top)
     }
   }, [rect])
-
-  const bubblePos = useMemo(() => {
-    if (!rect) {
-      return {
-        top: Math.max(12, window.innerHeight / 2 - bubbleSize.h / 2),
-        left: Math.max(12, window.innerWidth / 2 - bubbleSize.w / 2),
-        side: 'bottom' as const
-      }
-    }
-    return placeBubble(rect, placement, bubbleSize.w, bubbleSize.h)
-  }, [rect, placement, bubbleSize.w, bubbleSize.h])
 
   // click：只点目标，不显示下一步；click-or-next / next：显示
   const showNext = advance === 'next' || advance === 'click-or-next' || isLast
@@ -161,12 +134,17 @@ export function TourOverlay({
           exit={{ opacity: 0, transition: { duration: 0.12, ease: EASE_OUT } }}
           transition={{ duration: 0.18, ease: EASE_OUT }}
         >
-          {/* 四块遮罩围出洞：洞里 pointer-events:none，点得穿到真控件 */}
+          {/* 四块遮罩围出洞；一律从标题栏下方开始，避免压暗后与系统 WCO 白块割裂 */}
           {hole ? (
             <>
               <div
                 className="tour-mask"
-                style={{ top: 0, left: 0, right: 0, height: hole.top }}
+                style={{
+                  top: TITLEBAR_H,
+                  left: 0,
+                  right: 0,
+                  height: Math.max(0, hole.top - TITLEBAR_H)
+                }}
               />
               <div
                 className="tour-mask"
@@ -208,17 +186,19 @@ export function TourOverlay({
               />
             </>
           ) : (
-            // 无目标（done）或尚未量到：全遮罩，不留假洞
-            <div className="tour-mask tour-mask-full" />
+            // 无目标（done）或尚未量到：遮罩仍避开标题栏
+            <div
+              className="tour-mask"
+              style={{ top: TITLEBAR_H, left: 0, right: 0, bottom: 0 }}
+            />
           )}
 
+          {/* 讲解卡固定右下角，只有聚光环跟着目标走 */}
           <motion.div
-            ref={bubbleRef}
-            className={`tour-bubble side-${bubblePos.side}`}
+            className="tour-bubble tour-bubble-dock"
             role="dialog"
             aria-modal="false"
             aria-label={title}
-            style={{ top: bubblePos.top, left: bubblePos.left }}
             key={`${title}-${stepIndex}`}
             {...surface}
           >

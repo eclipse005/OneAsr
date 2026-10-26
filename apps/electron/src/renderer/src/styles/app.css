@@ -1599,7 +1599,9 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 /* 窗口级确认条贴在状态栏上方，和浮窗里的是同一条 */
 
 
-/* ── 交互引导（独立层，可与 SettingsDrawer 共存；高于 .overlay 的 40） ── */
+/* ── 交互引导（独立层，可与 SettingsDrawer 共存；高于 .overlay 的 40） ──
+   遮罩从标题栏下方开始（见 TourOverlay TITLEBAR_H）：系统 WCO 不透明白块
+   若压暗标题栏会留一块刺眼亮区，和 .overlay 注释同一原因。 */
 .tour-root {
   position: fixed;
   inset: 0;
@@ -1612,14 +1614,15 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   pointer-events: auto;
   z-index: 90;
 }
-.tour-mask-full { inset: 0; }
 .tour-spotlight {
   position: fixed;
   z-index: 91;
-  border-radius: 10px;
+  /* 圆角选区环；小按钮看起来接近圆，大面板仍是圆角矩形 */
+  border-radius: 12px;
   box-shadow:
-    0 0 0 2px var(--accent),
-    0 0 0 6px rgba(13, 148, 136, 0.28);
+    0 0 0 2.5px var(--accent),
+    0 0 0 7px rgba(13, 148, 136, 0.30),
+    0 0 24px rgba(13, 148, 136, 0.22);
   pointer-events: none;
   background: transparent;
 }
@@ -1636,6 +1639,13 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* 讲解卡统一钉在右下角（避开状态栏），每步同一套 chrome；只有聚光环移动 */
+.tour-bubble.tour-bubble-dock {
+  top: auto;
+  left: auto;
+  right: 20px;
+  bottom: 52px; /* ~状态栏 min-height 36 + 边距 */
 }
 .tour-bubble-head {
   display: flex;

@@ -296,7 +296,6 @@ export function TourProvider({
         stepIndex={Math.max(0, stepIndex)}
         stepTotal={Math.max(1, steps.length)}
         advance={step?.advance ?? 'next'}
-        placement={step?.placement}
         nextLabel={s.tourNext}
         skipStepLabel={s.tourSkipStep}
         skipLabel={s.tourSkip}

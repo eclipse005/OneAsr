@@ -50,6 +50,7 @@ export type TourStep = {
   /** i18n key suffix under tour* */
   titleKey: string
   bodyKey: string
+  /** @deprecated 讲解卡已固定右下角，此字段忽略 */
   placement?: TourPlacement
   advance: TourAdvance
   /** 步骤是否出现；默认 true */

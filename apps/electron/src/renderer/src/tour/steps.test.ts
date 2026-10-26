@@ -71,10 +71,10 @@ describe('tour steps', () => {
     expect(ids.indexOf('toolbar-settings-cli')).toBeLessThan(ids.indexOf('settings-models'))
   })
 
-  it('模型/热词/输出面板气泡优先左侧，避免盖住内容', () => {
-    const ids = visibleSteps({ ...base, modelsReady: true })
+  it('模型/热词/输出面板步仍在引导路径中（讲解卡已统一钉右下角，placement 不再约束）', () => {
+    const ids = visibleSteps({ ...base, modelsReady: true }).map((s) => s.id)
     for (const id of ['settings-models', 'settings-hotwords', 'settings-output'] as const) {
-      expect(ids.find((s) => s.id === id)?.placement).toBe('left')
+      expect(ids).toContain(id)
     }
   })
 
