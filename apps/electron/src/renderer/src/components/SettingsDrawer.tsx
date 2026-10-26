@@ -218,7 +218,8 @@ function ModelPathField({
   retryLabel,
   cancelLabel,
   onDownload,
-  onCancel
+  onCancel,
+  dataTour
 }: {
   label: string
   value: string
@@ -239,6 +240,7 @@ function ModelPathField({
   cancelLabel: string
   onDownload: (id: string, targetDir?: string) => void
   onCancel: (id: string) => void
+  dataTour?: string
 }) {
   // 每个模型一份状态，可以同时下多个；同一行的快速校验不闪下载态。
   const busy = download?.state === 'downloading' || download?.state === 'verifying'
@@ -265,7 +267,7 @@ function ModelPathField({
         : downloadingLabel
   const cancelTitle = isDown ? `${cancelLabel} · ${progressLabel}` : cancelLabel
   return (
-    <div className="field">
+    <div className="field" data-tour={dataTour}>
       <label>{label}</label>
       <div className="model-path-stack">
         <div className="path-input compact">
@@ -460,7 +462,7 @@ export function SettingsDrawer({
         <div className="modal-header">
           <h3>{s.settings}</h3>
           <div style={{ flex: 1 }} />
-          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={tryClose}>
+          <button type="button" data-shot="close-modal" data-tour="settings-close" className="btn btn-ghost" onClick={tryClose}>
             {s.close}
           </button>
         </div>
@@ -472,6 +474,7 @@ export function SettingsDrawer({
                 key={tab.id}
                 type="button"
                 data-shot={`settings-tab-${tab.id}`}
+                data-tour={`settings-tab-${tab.id}`}
                 className={`settings-nav-item ${activeTab === tab.id ? 'active' : ''}`}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
                 onClick={() => setActiveTab(tab.id)}
@@ -484,6 +487,7 @@ export function SettingsDrawer({
           <div
             className={`settings-pane${activeTab === 'hotwords' ? ' is-hotwords' : ''}${activeTab === 'models' ? ' is-models' : ''}`}
             data-shot={`settings-pane-${activeTab}`}
+            data-tour={`settings-pane-${activeTab}`}
           >
             <AnimatePresence mode="wait" initial={false}>
             <motion.div key={activeTab} className="settings-pane-inner" {...pane}>
@@ -671,6 +675,7 @@ export function SettingsDrawer({
                   </div>
                 </div>
                 <ModelPathField
+                  dataTour="model-download-asr"
                   label={s.asrPath}
                   value={draft.asr_model_dir}
                   onChange={(v) => {

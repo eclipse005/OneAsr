@@ -8,6 +8,7 @@ import { TaskList } from './components/TaskList'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { TitleBar } from './components/TitleBar'
 import { TranscriptPanel } from './components/TranscriptPanel'
+import { GuideMenu, TourProvider, useTour } from './tour'
 import { useEscClose } from './esc'
 import {
   confirmClearTasks,
@@ -522,7 +523,29 @@ export default function App() {
     if (next.some((task) => task.status === 'running')) notify('info', s.clearedKeptRunning)
   }
 
+  const closeSettingsFn = useCallback(() => {
+    if (settings) setDraft(structuredClone(settings))
+    if (hotwords) setHotwordDraft(structuredClone(hotwords))
+    setOverlay((cur) => closeOverlay(cur, 'settings'))
+    setSettingsTab('general')
+  }, [settings, hotwords])
+
+  const tourHost = useMemo(
+    () => ({
+      modelsReady,
+      hasTasks: tasks.length > 0,
+      settingsOpen,
+      openSettings: async (tab: SettingsTab = 'models') => {
+        await openSettingsFn(tab)
+      },
+      closeSettings: () => closeSettingsFn(),
+      closeGuide: () => setOverlay((cur) => closeOverlay(cur, 'guide'))
+    }),
+    [modelsReady, tasks.length, settingsOpen, openSettingsFn, closeSettingsFn]
+  )
+
   return (
+    <TourProvider lang={lang} host={tourHost} statusReady={status != null || statusAt > 0}>
     <div
       className="app"
       onDragEnter={onDragEnter}
@@ -532,7 +555,12 @@ export default function App() {
     >
       <TitleBar lang={lang} />
       <div className="toolbar">
-        <button className="btn btn-primary" disabled={picking} onClick={() => void addFiles()}>
+        <button
+          className="btn btn-primary"
+          data-tour="toolbar-add"
+          disabled={picking}
+          onClick={() => void addFiles()}
+        >
           <span className="btn-glyph i-plus" aria-hidden />
           {s.add}
         </button>
@@ -555,17 +583,14 @@ export default function App() {
           {s.clear}
         </button>
         <div className="grow" />
-        <button
-          className="btn btn-ghost"
-          data-shot="guide"
-          onClick={() => setOverlay((cur) => openOverlay(cur, 'guide'))}
-        >
-          <span className="btn-glyph i-help" aria-hidden />
-          {s.guide}
-        </button>
+        <GuideTourButton
+          lang={lang}
+          onOpenManual={() => setOverlay((cur) => openOverlay(cur, 'guide'))}
+        />
         <button
           className="btn btn-ghost"
           data-shot="stats"
+          data-tour="toolbar-stats"
           onClick={() => {
             void refreshStats()
             setOverlay((cur) => openOverlay(cur, 'stats'))
@@ -577,6 +602,7 @@ export default function App() {
         <button
           className="btn btn-ghost"
           data-shot="settings"
+          data-tour="toolbar-settings"
           onClick={() => void openSettingsFn('general')}
         >
           <span className="btn-glyph i-gear" aria-hidden />
@@ -588,6 +614,7 @@ export default function App() {
         {tasks.length === 0 ? (
           <motion.div
             className={`dropzone ${dragging ? 'active' : ''}`}
+            data-tour="dropzone"
             {...dropzoneMotion}
           >
             <div className="icon">
@@ -678,12 +705,7 @@ export default function App() {
                 notify('success', s.restored)
               })
             }}
-            onClose={() => {
-              if (settings) setDraft(structuredClone(settings))
-              if (hotwords) setHotwordDraft(structuredClone(hotwords))
-              setOverlay((cur) => closeOverlay(cur, 'settings'))
-              setSettingsTab('general')
-            }}
+            onClose={closeSettingsFn}
             onPickDir={() =>
               void window.oneasr.pickDirectory(draft.output_dir).then((r) => {
                 if (!r.ok) {
@@ -778,5 +800,25 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+    </TourProvider>
+  )
+}
+
+/** 指南菜单必须在 TourProvider 内，才能调 start() */
+function GuideTourButton({
+  lang,
+  onOpenManual
+}: {
+  lang: import('./i18n').UiLang
+  onOpenManual: () => void
+}) {
+  const tour = useTour()
+  return (
+    <GuideMenu
+      lang={lang}
+      tourActive={tour.active}
+      onStartTour={() => tour.start()}
+      onOpenManual={onOpenManual}
+    />
   )
 }

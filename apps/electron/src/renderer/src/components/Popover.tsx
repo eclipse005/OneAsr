@@ -159,7 +159,8 @@ export function SelectMenu({
   className,
   disabled,
   title,
-  footer
+  footer,
+  dataTour
 }: {
   value: string
   options: { id: string; label: string }[]
@@ -170,6 +171,7 @@ export function SelectMenu({
   title?: string
   /** 菜单底部的额外动作（例如「应用到全部行」），点完会关菜单 */
   footer?: (close: () => void) => React.ReactNode
+  dataTour?: string
 }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -187,6 +189,7 @@ export function SelectMenu({
         aria-haspopup="listbox"
         aria-expanded={anchor != null}
         aria-label={ariaLabel}
+        data-tour={dataTour}
         onClick={(e) =>
           setAnchor((cur) => (cur ? null : e.currentTarget.getBoundingClientRect()))
         }

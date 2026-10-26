@@ -35,13 +35,15 @@ function IconButton({
   label,
   tone = 'ghost',
   disabled,
-  onClick
+  onClick,
+  dataTour
 }: {
   icon: 'play' | 'stop' | 'folder' | 'retry' | 'trash'
   label: string
   tone?: 'ghost' | 'primary' | 'danger'
   disabled?: boolean
   onClick: () => void
+  dataTour?: string
 }) {
   return (
     <button
@@ -50,6 +52,7 @@ function IconButton({
       title={label}
       aria-label={label}
       disabled={disabled}
+      data-tour={dataTour}
       onClick={onClick}
     >
       <span className={`icon-glyph i-${icon}`} aria-hidden />
@@ -179,7 +182,7 @@ export function TaskList({
   return (
     <div className="task-list">
       <AnimatePresence initial={false}>
-        {tasks.map((task) => {
+        {tasks.map((task, taskIndex) => {
           // 运行中锁定行内操作（与旧版一致）
           const locked = task.status === 'running'
           const doneWithOutput = task.status === 'done' && !!task.outputPath
@@ -349,6 +352,7 @@ export function TaskList({
                       options={LANG_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
                       ariaLabel={s.recognitionLanguage}
                       disabled={locked || !chips.languageEnabled}
+                      dataTour={taskIndex === 0 ? 'task-lang' : undefined}
                       onChange={(id) => onSetLanguage(task.id, id)}
                       footer={(close) => (
                         <>
@@ -382,6 +386,7 @@ export function TaskList({
                       ariaLabel={boundGroupLabel ?? s.hotwordNone}
                       title={hotwordTitle}
                       disabled={locked || !chips.hotwordsEnabled}
+                      dataTour={taskIndex === 0 ? 'task-hotwords' : undefined}
                       onChange={(id) => onSetHotwordGroup(task.id, id || null)}
                       footer={(close) => (
                         <>
@@ -409,6 +414,7 @@ export function TaskList({
                     title={s.vocalSep}
                     // 开/关同时靠颜色和圆点形状：空心是关，实心是开。aria-pressed 再给读屏。
                     aria-pressed={!!task.vocalSeparation}
+                    data-tour={taskIndex === 0 ? 'task-sep' : undefined}
                     onClick={() => onSetVocalSeparation(task.id, !task.vocalSeparation)}
                   >
                     <span className="sep-mark" aria-hidden />
@@ -424,6 +430,7 @@ export function TaskList({
                     } ${task.transcript?.error ? 'has-error' : ''}`}
                     disabled={transcriptLocked}
                     title={transcriptChipTitle}
+                    data-tour={taskIndex === 0 ? 'task-transcript' : undefined}
                     onClick={() => {
                       if (task.transcript?.error) {
                         onPickTranscript(task.id)
@@ -459,6 +466,7 @@ export function TaskList({
                     label={startLabel}
                     tone="primary"
                     disabled={startKind === 'blocked'}
+                    dataTour={taskIndex === 0 ? 'task-start' : undefined}
                     onClick={() => onStart(task.id)}
                   />
                 )}
@@ -467,6 +475,7 @@ export function TaskList({
                   // 没有输出就禁用，按钮还在。禁用时别写「打开输出」。
                   label={doneWithOutput ? s.openOutput : s.noOutputYet}
                   disabled={!doneWithOutput}
+                  dataTour={taskIndex === 0 ? 'task-output' : undefined}
                   onClick={() => onOpen(task.outputPath!)}
                 />
                 <IconButton

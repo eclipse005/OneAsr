@@ -53,6 +53,7 @@ export function StatusBar({
         className="status-link"
         style={{ color: ready ? 'var(--logo)' : 'var(--warn)' }}
         title={detail}
+        data-tour="status-models"
         onClick={onOpenModels}
       >
         {cliOutdated ? s.cliOutdatedShort : ready ? s.modelsReady : s.modelsNotReady}

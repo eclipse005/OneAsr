@@ -1598,3 +1598,129 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 /* 窗口级确认条贴在状态栏上方，和浮窗里的是同一条 */
 
+
+/* ── 交互引导（独立层，可与 SettingsDrawer 共存；高于 .overlay 的 40） ── */
+.tour-root {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+}
+.tour-mask {
+  position: fixed;
+  background: rgba(15, 23, 42, 0.48);
+  pointer-events: auto;
+  z-index: 90;
+}
+.tour-mask-full { inset: 0; }
+.tour-spotlight {
+  position: fixed;
+  z-index: 91;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 6px rgba(13, 148, 136, 0.28);
+  pointer-events: none;
+  background: transparent;
+}
+.tour-bubble {
+  position: fixed;
+  z-index: 92;
+  width: min(320px, calc(100vw - 24px));
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tour-bubble-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.tour-bubble-head strong {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 750;
+  color: var(--text);
+}
+.tour-step-count {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.tour-bubble-body {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+.tour-click-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--logo);
+  font-weight: 600;
+}
+.tour-bubble-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.tour-bubble-actions .grow { flex: 1; }
+.tour-welcome-backdrop {
+  position: fixed;
+  inset: var(--titlebar-h) 0 0;
+  z-index: 95;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: auto;
+}
+.tour-welcome {
+  width: min(420px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  padding: 28px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  text-align: center;
+}
+.tour-welcome-mark {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 4px;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, #14b8a6, var(--accent));
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.tour-welcome h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 750;
+  color: var(--text);
+}
+.tour-welcome p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.tour-welcome-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.guide-menu { min-width: 148px; }
