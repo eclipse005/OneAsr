@@ -17,7 +17,7 @@ export const TOUR_STEPS: TourStep[] = [
     placement: 'top',
     // 未就绪：点状态栏进设置；已就绪：下一步即可（文案说明可跳过）
     advance: 'click-or-next',
-    when: (ctx) => !ctx.cliOutdated,
+    when: (ctx) => !ctx.cliOutdated && !ctx.cliMissing,
     before: async (_ctx, api) => {
       api.closeGuide()
       return true
@@ -26,11 +26,11 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: 'toolbar-settings-cli',
     selector: '[data-tour="toolbar-settings"]',
-    titleKey: 'tourCliTitle',
-    bodyKey: 'tourCliBody',
+    titleKey: (ctx) => (ctx.cliMissing ? 'tourCliMissingTitle' : 'tourCliTitle'),
+    bodyKey: (ctx) => (ctx.cliMissing ? 'tourCliMissingBody' : 'tourCliBody'),
     placement: 'bottom',
     advance: 'click-or-next',
-    when: (ctx) => ctx.cliOutdated,
+    when: (ctx) => ctx.cliOutdated || ctx.cliMissing,
     before: async (_ctx, api) => {
       api.closeGuide()
       return true
@@ -61,7 +61,7 @@ export const TOUR_STEPS: TourStep[] = [
     advance: 'next',
     allowSkipWait: true,
     // CLI 过旧时 status 也会 Missing，下载无效；只在真缺权重时讲下载
-    when: (ctx) => !ctx.modelsReady && !ctx.cliOutdated,
+    when: (ctx) => !ctx.modelsReady && !ctx.cliOutdated && !ctx.cliMissing,
     waitFor: '[data-tour="model-download-asr"]',
     before: async (_ctx, api) => {
       await api.openSettings('models')

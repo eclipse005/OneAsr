@@ -9,7 +9,7 @@ import type { Settings } from '../shared/types'
  * 业务规则一律不在这里——这是架构约定（Electron 只是 UI 壳）：
  * - 模型就绪、路径解析、开跑门禁 → `oneasr-cli status --json`
  * - 可选模型清单与下载落点 → `oneasr-cli status --json` 的 catalog / `download`
- * 壳里不再出现目录名、阈值、候选顺序、就绪判据这类规则（以前这里有
+ * 壳里不再出现目录名、后缀、候选顺序、就绪判据这类规则（以前这里有
  * hasModelFiles / resolveAsrDir / checkModels / modelsInventory 五处复刻，
  * 判据还比 Rust 松，导致启动门禁可能放行缺文件的目录）。
  *
@@ -17,24 +17,77 @@ import type { Settings } from '../shared/types'
  * （`settings get|set --json`），届时这里只剩 detectAppRoot / resolveCli / settingsPath。
  */
 
+const CLI_NAMES =
+  process.platform === 'win32' ? ['oneasr-cli.exe', 'oneasr-cli'] : ['oneasr-cli', 'oneasr-cli.exe']
+
+const FFMPEG_MARKERS =
+  process.platform === 'win32'
+    ? ['bin/ffmpeg.exe', 'bin/ffmpeg']
+    : ['bin/ffmpeg', 'bin/ffmpeg.exe']
+
+function hasFfmpeg(dir: string): boolean {
+  return FFMPEG_MARKERS.some((m) => fs.existsSync(path.join(dir, m)))
+}
+
+/** 该根下有没有可执行的 oneasr-cli（含 target/release|debug）。 */
+export function hasCliBinary(dir: string): boolean {
+  for (const n of CLI_NAMES) {
+    if (
+      fs.existsSync(path.join(dir, n)) ||
+      fs.existsSync(path.join(dir, 'target', 'release', n)) ||
+      fs.existsSync(path.join(dir, 'target', 'debug', n))
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
- * 安装目录 = 含 bin/ffmpeg[.exe] 的目录（与 Rust 侧 resolve_app_root 同一约定）。
- * 从本文件所在目录往上找，最多 6 层：开发期 out/main → 仓库根即可命中，
- * 省掉每次启动都要 export ONEASR_APP_ROOT。
+ * 从 startDir 往上找含 bin/ffmpeg 的目录（与 Rust resolve_app_root 同一约定）。
+ * 开发期 out/main → 仓库根通常能命中。
  */
-function detectAppRoot(): string | undefined {
-  const markers =
-    process.platform === 'win32'
-      ? ['bin/ffmpeg.exe', 'bin/ffmpeg']
-      : ['bin/ffmpeg', 'bin/ffmpeg.exe']
-  let dir = __dirname
-  for (let i = 0; i < 6; i++) {
-    if (markers.some((m) => fs.existsSync(path.join(dir, m)))) return dir
+export function walkFfmpegRoots(startDir: string, maxLevels = 6): string[] {
+  const found: string[] = []
+  let dir = startDir
+  for (let i = 0; i < maxLevels; i++) {
+    if (hasFfmpeg(dir)) found.push(dir)
     const parent = path.dirname(dir)
     if (parent === dir) break
     dir = parent
   }
-  return undefined
+  return found
+}
+
+/**
+ * 开发期选 app root：优先「带 CLI」的目录，避免仓库里只有 bin/ffmpeg 软链、
+ * 却没有 oneasr-cli 时误把仓库根当运行时（随后 spawn ENOENT → 假「CLI 过旧」）。
+ *
+ * 候选顺序：walk 到的 ffmpeg 根 → 各根旁的 sibling `oneasr-runtime` → extraRoots。
+ */
+export function chooseDevAppRoot(
+  walkedFfmpegRoots: string[],
+  extraRoots: string[] = []
+): string | undefined {
+  const siblings = walkedFfmpegRoots.map((r) => path.join(path.dirname(r), 'oneasr-runtime'))
+  const candidates = Array.from(new Set([...walkedFfmpegRoots, ...siblings, ...extraRoots]))
+  const withCli = candidates.find((c) => hasCliBinary(c))
+  if (withCli) return withCli
+  return walkedFfmpegRoots[0]
+}
+
+/**
+ * 安装目录 = 含 bin/ffmpeg[.exe] 的目录（与 Rust 侧 resolve_app_root 同一约定）。
+ * 从本文件所在目录往上找，最多 6 层：开发期 out/main → 仓库根即可命中，
+ * 省掉每次启动都要 export ONEASR_APP_ROOT。
+ *
+ * 若仓库根没有 CLI、旁路有 `oneasr-runtime`（本 box 布局），优先用后者。
+ */
+function detectAppRoot(): string | undefined {
+  const walked = walkFfmpegRoots(__dirname)
+  const extras: string[] = []
+  if (fs.existsSync('/workspace/oneasr-runtime')) extras.push('/workspace/oneasr-runtime')
+  return chooseDevAppRoot(walked, extras)
 }
 
 /**
@@ -172,14 +225,12 @@ export function saveSettings(settings: Settings, root = dataRoot()): Settings {
 
 /** oneasr-cli 落点：运行目录优先，其次开发期的 target/release|debug（免去手工拷）。 */
 export function resolveCli(appRoot = DEFAULT_APP_ROOT): string {
-  const names =
-    process.platform === 'win32' ? ['oneasr-cli.exe', 'oneasr-cli'] : ['oneasr-cli', 'oneasr-cli.exe']
   const candidates = [
-    ...names.map((n) => path.join(appRoot, n)),
-    ...names.map((n) => path.join(appRoot, 'target', 'release', n)),
-    ...names.map((n) => path.join(appRoot, 'target', 'debug', n))
+    ...CLI_NAMES.map((n) => path.join(appRoot, n)),
+    ...CLI_NAMES.map((n) => path.join(appRoot, 'target', 'release', n)),
+    ...CLI_NAMES.map((n) => path.join(appRoot, 'target', 'debug', n))
   ]
-  return candidates.find((p) => fs.existsSync(p)) ?? path.join(appRoot, 'oneasr-cli')
+  return candidates.find((p) => fs.existsSync(p)) ?? path.join(appRoot, CLI_NAMES[0]!)
 }
 
 /**

@@ -29,6 +29,7 @@ export type TourHostApi = TourStepApi & {
   hasTasks: boolean
   settingsOpen: boolean
   cliOutdated: boolean
+  cliMissing: boolean
 }
 
 type TourApi = {
@@ -56,7 +57,8 @@ function liveCtxFrom(host: TourHostApi) {
     modelsReady: host.modelsReady,
     hasTasks: host.hasTasks,
     settingsOpen: host.settingsOpen,
-    cliOutdated: host.cliOutdated
+    cliOutdated: host.cliOutdated,
+    cliMissing: host.cliMissing
   }
 }
 
@@ -86,7 +88,8 @@ export function TourProvider({
     host.modelsReady,
     host.hasTasks,
     host.settingsOpen,
-    host.cliOutdated
+    host.cliOutdated,
+    host.cliMissing
   ])
 
   const steps = useMemo(() => visibleSteps(ctx), [ctx])
@@ -291,8 +294,14 @@ export function TourProvider({
       <TourOverlay
         active={running && !!step}
         selector={step?.selector ?? null}
-        title={step ? copy(step.titleKey) : ''}
-        body={step ? copy(step.bodyKey) : ''}
+        title={
+          step
+            ? copy(typeof step.titleKey === 'function' ? step.titleKey(ctx) : step.titleKey)
+            : ''
+        }
+        body={
+          step ? copy(typeof step.bodyKey === 'function' ? step.bodyKey(ctx) : step.bodyKey) : ''
+        }
         stepIndex={Math.max(0, stepIndex)}
         stepTotal={Math.max(1, steps.length)}
         advance={step?.advance ?? 'next'}

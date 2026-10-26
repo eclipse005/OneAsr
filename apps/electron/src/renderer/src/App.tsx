@@ -45,6 +45,7 @@ export default function App() {
   const [status, setStatus] = useState<StatusSnapshot | null>(null)
   const [statusAt, setStatusAt] = useState(0)
   const [cliOutdated, setCliOutdated] = useState(false)
+  const [cliMissing, setCliMissing] = useState(false)
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
   const [hotwords, setHotwords] = useState<HotwordStore | null>(null)
@@ -237,7 +238,8 @@ export default function App() {
       setHotwords(await window.oneasr.getHotwords())
       try {
         const info = await window.oneasr.getAppInfo()
-        setCliOutdated(!!info.cli?.outdated)
+        setCliMissing(!!info.cli?.missing)
+        setCliOutdated(!!info.cli?.outdated && !info.cli?.missing)
       } catch {
         /* ignore */
       }
@@ -536,6 +538,7 @@ export default function App() {
       hasTasks: tasks.length > 0,
       settingsOpen,
       cliOutdated,
+      cliMissing,
       openSettings: async (tab: SettingsTab = 'models') => {
         await openSettingsFn(tab)
       },
@@ -547,7 +550,7 @@ export default function App() {
       },
       closeStats: () => setOverlay((cur) => closeOverlay(cur, 'stats'))
     }),
-    [modelsReady, tasks.length, settingsOpen, cliOutdated, openSettingsFn, closeSettingsFn, refreshStats]
+    [modelsReady, tasks.length, settingsOpen, cliOutdated, cliMissing, openSettingsFn, closeSettingsFn, refreshStats]
   )
 
   return (
@@ -674,6 +677,7 @@ export default function App() {
         tasks={tasks}
         message={statusMsg}
         cliOutdated={cliOutdated}
+        cliMissing={cliMissing}
         onOpenModels={() => void openSettingsFn('models')}
         onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => notify('success', s.copied))}
       />
@@ -746,6 +750,7 @@ export default function App() {
             onOpenModels={() => void window.oneasr.openModelsFolder()}
             onRefreshModels={() => void refreshModels()}
             cliOutdated={cliOutdated}
+            cliMissing={cliMissing}
           />
         )}
       </AnimatePresence>

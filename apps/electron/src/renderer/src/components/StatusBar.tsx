@@ -11,7 +11,8 @@ export function StatusBar({
   message,
   onCopyMessage,
   onOpenModels,
-  cliOutdated = false
+  cliOutdated = false,
+  cliMissing = false
 }: {
   lang: UiLang
   /** CLI 的 status --json 快照：就绪、门禁、后端全在里面，壳只显示 */
@@ -22,14 +23,21 @@ export function StatusBar({
   /** 最近一条提示：toast 会消失，这里留 3~6 秒并且可点击复制（长路径/报错不至于看了就丢） */
   message?: { kind: string; text: string } | null
   onCopyMessage?: (text: string) => void
-  /** CLI 缺 status/transcript 时优先提示更新引擎，不要把 help 碎片当错误 */
+  /** CLI 能跑但缺 status/transcript 时提示更新引擎 */
   cliOutdated?: boolean
+  /** 二进制缺失 / 不可达时提示未找到引擎（优先于 outdated） */
+  cliMissing?: boolean
 }) {
   const s = t(lang)
   const chipMotion = useLayerMotion()
+  const cliIssue = cliMissing || cliOutdated
   // 就绪与否 = Rust 的 can_start（含「只导 TXT 就不要求对齐」这类细则），失败时 title 给原因
-  const ready = !cliOutdated && !!status?.can_start.ok
-  const notReadyReason = cliOutdated ? s.cliOutdated : (status?.can_start.reason ?? undefined)
+  const ready = !cliIssue && !!status?.can_start.ok
+  const notReadyReason = cliMissing
+    ? s.cliMissing
+    : cliOutdated
+      ? s.cliOutdated
+      : (status?.can_start.reason ?? undefined)
   // 模型短名不铺在状态栏上；悬停「模型就绪」能看到，设置 → 模型里也有
   const detail = [
     notReadyReason,
@@ -45,6 +53,13 @@ export function StatusBar({
   // 「排队」只算真正进了运行队列的（有 queueRank）；刚添加还没点开始的是「待处理」，行内有徽章
   const queued = tasks.filter((x) => x.status === 'queued' && x.queueRank != null).length
   const done = tasks.filter((x) => ['done', 'error', 'cancelled'].includes(x.status)).length
+  const statusLabel = cliMissing
+    ? s.cliMissingShort
+    : cliOutdated
+      ? s.cliOutdatedShort
+      : ready
+        ? s.modelsReady
+        : s.modelsNotReady
   return (
     <div className="statusbar">
       <span className={`dot ${ready ? 'ok' : ''}`} />
@@ -56,7 +71,7 @@ export function StatusBar({
         data-tour="status-models"
         onClick={onOpenModels}
       >
-        {cliOutdated ? s.cliOutdatedShort : ready ? s.modelsReady : s.modelsNotReady}
+        {statusLabel}
       </button>
       {(running > 0 || queued > 0) && (
         <>

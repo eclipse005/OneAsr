@@ -1,3 +1,4 @@
+import fs from 'fs'
 import { spawn } from 'child_process'
 import { DEFAULT_APP_ROOT, dataRoot, resolveCli } from './settings'
 import { logError } from './log'
@@ -146,35 +147,86 @@ export function runCliCapture(
   })
 }
 
+/** spawn 失败 / 路径不存在 → 未找到引擎，不是「过旧」。 */
+export function isCliUnreachable(code: number | null, stderr: string): boolean {
+  if (code !== -1 && code !== null) return false
+  return /ENOENT/i.test(stderr) || /spawn .* ENOENT/i.test(stderr) || /not found/i.test(stderr)
+}
+
+/**
+ * 紧探测 transcript：认 `transcript inspect`（缺 --input 的报错）或 help 里的真子命令行。
+ * 不要认裸 `transcript` 词（help 里的 transcript_exts / --transcript 会误伤）。
+ */
+export function transcriptCapabilityFromOutput(stdout: string, stderr: string): boolean {
+  const text = `${stdout}\n${stderr}`
+  if (/unknown command:\s*transcript/i.test(text)) return false
+  // 真子命令：缺参时会要 --input
+  if (/missing required --input/i.test(text)) return true
+  // help 用法行写明 transcript inspect
+  if (/transcript\s+inspect/.test(text)) return true
+  if (stdout.trim().startsWith('{')) return true
+  return false
+}
+
+export function statusCapabilityFromOutput(
+  code: number | null,
+  stdout: string,
+  stderr: string
+): boolean {
+  const text = `${stdout}\n${stderr}`
+  if (/unknown command:\s*status/i.test(text)) return false
+  if (isCliUnreachable(code, stderr)) return false
+  return code === 0 || stdout.trim().startsWith('{')
+}
+
 /**
  * 探测壳依赖的 CLI 子命令是否存在。
- * 不要把 `--help` 里的碎片当错误：只认「unknown command」或帮助正文里有没有该子命令。
+ * - 二进制缺失 / spawn ENOENT → missing（不是 outdated）
+ * - 能跑但缺 status / transcript inspect → outdated
  */
 let capsCache: CliCapabilities | null = null
 
 export async function probeCliCapabilities(): Promise<CliCapabilities> {
   if (capsCache) return capsCache
+  const cliPath = resolveCli()
+  if (!fs.existsSync(cliPath)) {
+    capsCache = { status: false, transcript: false, missing: true, outdated: false }
+    return capsCache
+  }
+
   const help = await runCliCapture(['help'], 6000)
-  const text = `${help.stdout}\n${help.stderr}`
-  let statusOk = /\bstatus\b/.test(text) && !/unknown command:\s*status/i.test(text)
-  let transcriptOk =
-    /transcript\s+inspect/.test(text) ||
-    (/\btranscript\b/.test(text) && !/unknown command:\s*transcript/i.test(text))
+  if (isCliUnreachable(help.code, help.stderr)) {
+    capsCache = { status: false, transcript: false, missing: true, outdated: false }
+    return capsCache
+  }
+
+  const helpText = `${help.stdout}\n${help.stderr}`
+  let statusOk = /\bstatus\b/.test(helpText) && !/unknown command:\s*status/i.test(helpText)
+  let transcriptOk = /transcript\s+inspect/.test(helpText)
+
   if (!statusOk) {
     const r = await runCliCapture(['status', '--json'], 8000)
-    const err = `${r.stdout}\n${r.stderr}`
-    statusOk =
-      !/unknown command:\s*status/i.test(err) &&
-      (r.code === 0 || r.stdout.trim().startsWith('{'))
+    if (isCliUnreachable(r.code, r.stderr)) {
+      capsCache = { status: false, transcript: false, missing: true, outdated: false }
+      return capsCache
+    }
+    statusOk = statusCapabilityFromOutput(r.code, r.stdout, r.stderr)
   }
+
   if (!transcriptOk) {
-    const r = await runCliCapture(['transcript'], 6000)
-    const err = `${r.stdout}\n${r.stderr}`
-    transcriptOk = !/unknown command:\s*transcript/i.test(err)
+    // 紧探测：真子命令，不要裸 `transcript`（旧逻辑把 help / ENOENT 都当成有）
+    const r = await runCliCapture(['transcript', 'inspect'], 6000)
+    if (isCliUnreachable(r.code, r.stderr)) {
+      capsCache = { status: false, transcript: false, missing: true, outdated: false }
+      return capsCache
+    }
+    transcriptOk = transcriptCapabilityFromOutput(r.stdout, r.stderr)
   }
+
   capsCache = {
     status: statusOk,
     transcript: transcriptOk,
+    missing: false,
     outdated: !(statusOk && transcriptOk)
   }
   return capsCache

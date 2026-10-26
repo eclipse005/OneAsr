@@ -38,6 +38,8 @@ export type TourContext = {
   settingsOpen: boolean
   /** 状态栏显示「CLI 过旧」时为 true，勿把橙色条当模型就绪 */
   cliOutdated: boolean
+  /** 状态栏显示「未找到引擎」时为 true */
+  cliMissing: boolean
 }
 
 export type TourStep = {
@@ -47,9 +49,9 @@ export type TourStep = {
    * null / 空 = 无高亮洞（收束步）。
    */
   selector: string | null
-  /** i18n key suffix under tour* */
-  titleKey: string
-  bodyKey: string
+  /** i18n key under tour*；可按 ctx 区分 missing / outdated */
+  titleKey: string | ((ctx: TourContext) => string)
+  bodyKey: string | ((ctx: TourContext) => string)
   /** @deprecated 讲解卡已固定右下角，此字段忽略 */
   placement?: TourPlacement
   advance: TourAdvance

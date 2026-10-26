@@ -5,7 +5,8 @@ const base = {
   modelsReady: false,
   hasTasks: false,
   settingsOpen: false,
-  cliOutdated: false
+  cliOutdated: false,
+  cliMissing: false
 }
 
 describe('tour steps', () => {
@@ -69,6 +70,19 @@ describe('tour steps', () => {
     expect(ids).toContain('toolbar-settings-cli')
     expect(ids).toContain('settings-models')
     expect(ids.indexOf('toolbar-settings-cli')).toBeLessThan(ids.indexOf('settings-models'))
+  })
+
+  it('未找到引擎时走设置按钮路径，文案键切到 missing', () => {
+    const ctx = { ...base, cliMissing: true, modelsReady: false }
+    const ids = visibleSteps(ctx).map((s) => s.id)
+    expect(ids).toContain('toolbar-settings-cli')
+    expect(ids).not.toContain('status-models')
+    expect(ids).not.toContain('settings-download')
+    const step = visibleSteps(ctx).find((s) => s.id === 'toolbar-settings-cli')!
+    const titleKey = typeof step.titleKey === 'function' ? step.titleKey(ctx) : step.titleKey
+    const bodyKey = typeof step.bodyKey === 'function' ? step.bodyKey(ctx) : step.bodyKey
+    expect(titleKey).toBe('tourCliMissingTitle')
+    expect(bodyKey).toBe('tourCliMissingBody')
   })
 
   it('模型/热词/输出面板步仍在引导路径中（讲解卡已统一钉右下角，placement 不再约束）', () => {

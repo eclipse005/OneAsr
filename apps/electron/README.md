@@ -21,18 +21,25 @@ Aligned with the previous UI theme tokens:
 Requires Node 22.12+ (Electron 44); this repo is developed on Node 24.
 
 ```bash
-# 引擎侧只需要 CLI；从仓库根构建
+# 引擎侧只需要 CLI；从仓库根构建（或使用旁路 oneasr-runtime）
 cargo build -p oneasr-core --bin oneasr-cli
 
 cd apps/electron
 npm install && npm run build
-export DISPLAY=:4 ELECTRON_DISABLE_GPU=1 ONEASR_APP_ROOT=/workspace/oneasr-runtime
-npx electron .
+# npm run start / dev 会在未设置时自动带上 ONEASR_APP_ROOT
+# （优先旁路 ../oneasr-runtime 或 /workspace/oneasr-runtime）
+export DISPLAY=:4 ELECTRON_DISABLE_GPU=1
+npm start
+# 或显式指定：
+# ONEASR_APP_ROOT=/workspace/oneasr-runtime npm start
 ```
 
+`detectAppRoot()` / `chooseDevAppRoot()` 会优先选**带 oneasr-cli** 的目录：
+仓库里常有 `bin/ffmpeg` 软链却没有 CLI，此时会落到旁路 `oneasr-runtime`
+（本 box 布局），避免 spawn ENOENT 被误报成「引擎 CLI 过旧」。
+
 `resolveCli()` 会依次找 app root、`target/release`、`target/debug` 下的
-`oneasr-cli[.exe]`，开发期不必手工拷贝二进制。开发期数据目录就是仓库根
-（`settings.json`、`models/`、`output/`、日志都在那里）。
+`oneasr-cli[.exe]`。开发期数据目录跟 `ONEASR_APP_ROOT`（即 app root）走。
 
 ## Release packaging
 
