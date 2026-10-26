@@ -4,6 +4,7 @@ import { EASE_OUT, useSurfaceMotion } from '../motion'
 import { placeBubble } from './place'
 import { readTargetRect } from './wait'
 import type { TourAdvance, TourPlacement } from './types'
+import { attachTourTargetClickListener } from './tourTargetClick'
 
 const PAD = 8
 const DEFAULT_BUBBLE_W = 320
@@ -31,7 +32,7 @@ type Props = {
   onNext: () => void
   onSkip: () => void
   onSkipWait?: () => void
-  /** 目标被点了（capture）；由引擎决定是否推进 */
+  /** 目标被点了（capture+defer）；由引擎决定是否推进 */
   onTargetClick: () => void
 }
 
@@ -102,21 +103,20 @@ export function TourOverlay({
     return () => ro.disconnect()
   }, [active, title, body, stepIndex])
 
-  // 点高亮目标推进（冒泡阶段：先让目标自己的 onClick 跑完，例如切 settings tab，
-  // 再 advance；不 preventDefault → 不挡 ASR / 不取消任务）
+  // 点高亮目标推进：capture + 延后回调。
+  // SettingsDrawer modal-shell stopPropagation 会挡住 document 冒泡监听；
+  // capture 才能收到标签点击。延后到 setTimeout(0) 让目标自己的 onClick
+  // （如 setActiveTab）先跑完，再 advance。不 preventDefault。
+  const onTargetClickRef = useRef(onTargetClick)
+  onTargetClickRef.current = onTargetClick
   useEffect(() => {
     if (!active || !selector) return
     if (advance !== 'click' && advance !== 'click-or-next') return
-    const onClick = (event: MouseEvent): void => {
-      const target = event.target
-      if (!(target instanceof Element)) return
-      const hit = target.closest(selector)
-      if (!hit) return
-      onTargetClick()
-    }
-    document.addEventListener('click', onClick, false)
-    return () => document.removeEventListener('click', onClick, false)
-  }, [active, selector, advance, onTargetClick])
+    return attachTourTargetClickListener({
+      selector,
+      onTargetClick: () => onTargetClickRef.current()
+    })
+  }, [active, selector, advance])
 
   const hole = useMemo(() => {
     if (!rect) return null

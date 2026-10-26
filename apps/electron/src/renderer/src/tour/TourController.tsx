@@ -190,6 +190,10 @@ export function TourProvider({
     }
   }, [goToIndex, stop])
 
+  const onTargetClick = useCallback(() => {
+    void advance()
+  }, [advance])
+
   const start = useCallback(() => {
     setWelcomeOpen(false)
     setRunning(true)
@@ -305,7 +309,7 @@ export function TourProvider({
         onNext={() => void advance()}
         onSkip={() => stop('skip')}
         onSkipWait={() => void advance()}
-        onTargetClick={() => void advance()}
+        onTargetClick={onTargetClick}
       />
     </TourCtx.Provider>
   )
