@@ -1,10 +1,12 @@
-import type { TourStep } from './types'
+import type { TourContext, TourStep } from './types'
 
 /**
  * 完整产品引导步骤。条件路径在 when / before 里分叉：
- * - 模型未就绪：从状态栏点进设置 → 模型，可跳过下载等待
- * - 模型已就绪：状态栏只讲解，不强迫开设置
- * - 空列表：讲拖放区；有任务：讲行内芯片（不点「开始」以免真跑 ASR）
+ * - CLI 过旧：工具栏「设置」进模型页（勿把橙色 CLI 条当模型状态）
+ * - 模型未就绪：状态栏 → 设置 → 模型；可跳过下载等待
+ * - 模型已就绪：状态栏只讲解；跳过下载与空态「打开设置」
+ * - 空列表且模型就绪：讲拖放区；未就绪：跳过拖放（画布不可投）
+ * - 有任务：讲行内芯片（不点「开始」以免真跑 ASR）
  */
 export const TOUR_STEPS: TourStep[] = [
   {
@@ -13,13 +15,24 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourStatusTitle',
     bodyKey: 'tourStatusBody',
     placement: 'top',
-    // 未就绪：点状态栏进设置；已就绪：下一步即可
+    // 未就绪：点状态栏进设置；已就绪：下一步即可（文案说明可跳过）
     advance: 'click-or-next',
-    before: async (ctx, api) => {
+    when: (ctx) => !ctx.cliOutdated,
+    before: async (_ctx, api) => {
       api.closeGuide()
-      if (!ctx.modelsReady && !ctx.settingsOpen) {
-        // 用户点状态栏会自己开；这里不抢先打开，保留真实点击路径
-      }
+      return true
+    }
+  },
+  {
+    id: 'toolbar-settings-cli',
+    selector: '[data-tour="toolbar-settings"]',
+    titleKey: 'tourCliTitle',
+    bodyKey: 'tourCliBody',
+    placement: 'bottom',
+    advance: 'click-or-next',
+    when: (ctx) => ctx.cliOutdated,
+    before: async (_ctx, api) => {
+      api.closeGuide()
       return true
     }
   },
@@ -28,16 +41,12 @@ export const TOUR_STEPS: TourStep[] = [
     selector: '[data-tour="settings-pane-models"]',
     titleKey: 'tourModelsTitle',
     bodyKey: 'tourModelsBody',
-    placement: 'left',
+    // 气泡放在面板右侧/下方，避免盖住左侧 Models/Hotwords 导航
+    placement: 'right',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-models"]',
-    before: async (ctx, api) => {
-      if (!ctx.settingsOpen) {
-        await api.openSettings('models')
-      } else {
-        // 已开着但可能不在 models：再推一次
-        await api.openSettings('models')
-      }
+    before: async (_ctx, api) => {
+      await api.openSettings('models')
       return true
     }
   },
@@ -49,7 +58,8 @@ export const TOUR_STEPS: TourStep[] = [
     placement: 'left',
     advance: 'next',
     allowSkipWait: true,
-    when: (ctx) => !ctx.modelsReady,
+    // CLI 过旧时 status 也会 Missing，下载无效；只在真缺权重时讲下载
+    when: (ctx) => !ctx.modelsReady && !ctx.cliOutdated,
     waitFor: '[data-tour="model-download-asr"]',
     before: async (_ctx, api) => {
       await api.openSettings('models')
@@ -73,7 +83,7 @@ export const TOUR_STEPS: TourStep[] = [
     selector: '[data-tour="settings-pane-hotwords"]',
     titleKey: 'tourHotwordsTitle',
     bodyKey: 'tourHotwordsBody',
-    placement: 'left',
+    placement: 'right',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-hotwords"]'
   },
@@ -90,7 +100,7 @@ export const TOUR_STEPS: TourStep[] = [
     selector: '[data-tour="settings-pane-output"]',
     titleKey: 'tourOutputTitle',
     bodyKey: 'tourOutputBody',
-    placement: 'left',
+    placement: 'right',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-output"]'
   },
@@ -100,12 +110,11 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourSettingsCloseTitle',
     bodyKey: 'tourSettingsCloseBody',
     placement: 'bottom',
-    // 只用「下一步」：点 X 若有未保存会先弹确认，跟引导抢焦点
-    advance: 'next',
+    // 点关闭或「下一步」；设置真正关掉时引擎会立刻推进（见 TourController）
+    advance: 'click-or-next',
     waitFor: '[data-tour="settings-close"]',
-    before: async (ctx, api) => {
-      if (!document.querySelector('[data-tour="settings-close"]')) {
-        // 设置已关就跳过这一步
+    before: async (ctx) => {
+      if (!ctx.settingsOpen || !document.querySelector('[data-tour="settings-close"]')) {
         return false
       }
       return true
@@ -117,10 +126,11 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourAddTitle',
     bodyKey: 'tourAddBody',
     placement: 'bottom',
-    // 不强迫点添加（会弹系统文件框）；讲解 + 下一步
+    // 不强迫点添加（会弹系统文件框）；讲解 + 下一步跳过
     advance: 'next',
     before: async (_ctx, api) => {
       api.closeSettings()
+      api.closeStats()
       return true
     }
   },
@@ -131,7 +141,21 @@ export const TOUR_STEPS: TourStep[] = [
     bodyKey: 'tourDropzoneBody',
     placement: 'bottom',
     advance: 'next',
-    when: (ctx) => !ctx.hasTasks
+    // 模型未就绪时空态不可投，勿高亮整块画布
+    when: (ctx) => !ctx.hasTasks && ctx.modelsReady
+  },
+  {
+    id: 'empty-open-settings',
+    selector: '[data-tour="empty-open-settings"]',
+    titleKey: 'tourEmptySettingsTitle',
+    bodyKey: 'tourEmptySettingsBody',
+    placement: 'top',
+    advance: 'click-or-next',
+    when: (ctx) => !ctx.hasTasks && !ctx.modelsReady,
+    before: async (ctx) => {
+      // 刚从设置出来且仍未就绪：讲空态上的「打开设置」入口
+      return !ctx.settingsOpen
+    }
   },
   {
     id: 'task-lang',
@@ -194,7 +218,11 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourStatsTitle',
     bodyKey: 'tourStatsBody',
     placement: 'bottom',
-    advance: 'next'
+    advance: 'next',
+    before: async (_ctx, api) => {
+      await api.openStats()
+      return true
+    }
   },
   {
     id: 'toolbar-guide',
@@ -202,22 +230,22 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourGuideReopenTitle',
     bodyKey: 'tourGuideReopenBody',
     placement: 'bottom',
-    advance: 'next'
+    advance: 'next',
+    before: async (_ctx, api) => {
+      api.closeStats()
+      return true
+    }
   },
   {
     id: 'done',
-    selector: '[data-tour="toolbar-guide"]',
+    selector: null,
     titleKey: 'tourDoneTitle',
     bodyKey: 'tourDoneBody',
-    placement: 'bottom',
+    placement: 'auto',
     advance: 'next'
   }
 ]
 
-export function visibleSteps(ctx: {
-  modelsReady: boolean
-  hasTasks: boolean
-  settingsOpen: boolean
-}): TourStep[] {
+export function visibleSteps(ctx: TourContext): TourStep[] {
   return TOUR_STEPS.filter((step) => (step.when ? step.when(ctx) : true))
 }

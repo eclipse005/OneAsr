@@ -27,6 +27,7 @@ export type TourHostApi = TourStepApi & {
   modelsReady: boolean
   hasTasks: boolean
   settingsOpen: boolean
+  cliOutdated: boolean
 }
 
 type TourApi = {
@@ -49,6 +50,15 @@ export function useTourOptional(): TourApi | null {
   return useContext(TourCtx)
 }
 
+function liveCtxFrom(host: TourHostApi) {
+  return {
+    modelsReady: host.modelsReady,
+    hasTasks: host.hasTasks,
+    settingsOpen: host.settingsOpen,
+    cliOutdated: host.cliOutdated
+  }
+}
+
 export function TourProvider({
   lang,
   host,
@@ -69,14 +79,12 @@ export function TourProvider({
   const hostRef = useRef(host)
   hostRef.current = host
 
-  const ctx = useMemo(
-    () => ({
-      modelsReady: host.modelsReady,
-      hasTasks: host.hasTasks,
-      settingsOpen: host.settingsOpen
-    }),
-    [host.modelsReady, host.hasTasks, host.settingsOpen]
-  )
+  const ctx = useMemo(() => liveCtxFrom(host), [
+    host.modelsReady,
+    host.hasTasks,
+    host.settingsOpen,
+    host.cliOutdated
+  ])
 
   const steps = useMemo(() => visibleSteps(ctx), [ctx])
   const stepIndex = stepId ? steps.findIndex((x) => x.id === stepId) : -1
@@ -99,57 +107,53 @@ export function TourProvider({
     else markTourSkipped()
   }, [])
 
+  const hostApi = useCallback((): TourStepApi => {
+    return {
+      openSettings: (tab) => hostRef.current.openSettings(tab),
+      closeSettings: () => hostRef.current.closeSettings(),
+      closeGuide: () => hostRef.current.closeGuide(),
+      openStats: () => hostRef.current.openStats(),
+      closeStats: () => hostRef.current.closeStats()
+    }
+  }, [])
+
   const goToIndex = useCallback(
     async (index: number) => {
-      const list = visibleSteps({
-        modelsReady: hostRef.current.modelsReady,
-        hasTasks: hostRef.current.hasTasks,
-        settingsOpen: hostRef.current.settingsOpen
-      })
+      const list = visibleSteps(liveCtxFrom(hostRef.current))
       if (index >= list.length) {
         stop('complete')
         return
       }
       if (index < 0) return
       const next = list[index]!
-      const api: TourStepApi = {
-        openSettings: (tab) => hostRef.current.openSettings(tab),
-        closeSettings: () => hostRef.current.closeSettings(),
-        closeGuide: () => hostRef.current.closeGuide()
-      }
-      const liveCtx = {
-        modelsReady: hostRef.current.modelsReady,
-        hasTasks: hostRef.current.hasTasks,
-        settingsOpen: hostRef.current.settingsOpen
-      }
+      const api = hostApi()
+      const live = liveCtxFrom(hostRef.current)
       if (next.before) {
-        const ok = await next.before(liveCtx, api)
+        const ok = await next.before(live, api)
         if (ok === false) {
           await goToIndex(index + 1)
           return
         }
       }
       const waitSel = next.waitFor ?? next.selector
-      const found = await waitForSelector(waitSel, next.waitTimeoutMs ?? 8000)
-      if (!found) {
-        // 选择器没出现就跳过这一步，别卡死
-        await goToIndex(index + 1)
-        return
+      if (waitSel) {
+        const found = await waitForSelector(waitSel, next.waitTimeoutMs ?? 8000)
+        if (!found) {
+          // 选择器没出现就跳过这一步，别卡死
+          await goToIndex(index + 1)
+          return
+        }
       }
       setStepId(next.id)
     },
-    [stop]
+    [stop, hostApi]
   )
 
   const advance = useCallback(async () => {
     if (advancing.current) return
     advancing.current = true
     try {
-      const list = visibleSteps({
-        modelsReady: hostRef.current.modelsReady,
-        hasTasks: hostRef.current.hasTasks,
-        settingsOpen: hostRef.current.settingsOpen
-      })
+      const list = visibleSteps(liveCtxFrom(hostRef.current))
       const cur = stepId ? list.findIndex((x) => x.id === stepId) : -1
       if (cur < 0) {
         stop('complete')
@@ -172,6 +176,13 @@ export function TourProvider({
   }, [goToIndex])
 
   useEscClose(() => stop('skip'), running || welcomeOpen)
+
+  // 设置关掉时立刻离开「关闭设置」步，避免孤儿气泡
+  useEffect(() => {
+    if (!running || stepId !== 'settings-close') return
+    if (host.settingsOpen) return
+    void advance()
+  }, [running, stepId, host.settingsOpen, advance])
 
   // 任务列表从空变有（用户在引导中加了文件）时，重算可见步骤仍停在当前 id
   useEffect(() => {
@@ -237,9 +248,11 @@ export function TourProvider({
         advance={step?.advance ?? 'next'}
         placement={step?.placement}
         nextLabel={s.tourNext}
+        skipStepLabel={s.tourSkipStep}
         skipLabel={s.tourSkip}
         doneLabel={s.tourFinish}
         clickHint={s.tourClickHint}
+        clickOrNextHint={s.tourClickOrNextHint}
         skipWaitLabel={s.tourSkipWait}
         showSkipWait={!!step?.allowSkipWait}
         isLast={step?.id === 'done'}

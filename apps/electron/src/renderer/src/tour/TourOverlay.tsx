@@ -1,11 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { EASE_OUT, useSurfaceMotion } from '../motion'
+import { placeBubble } from './place'
 import { readTargetRect } from './wait'
 import type { TourAdvance, TourPlacement } from './types'
 
 const PAD = 8
-const BUBBLE_GAP = 12
+const DEFAULT_BUBBLE_W = 320
+const DEFAULT_BUBBLE_H = 168
 
 type Props = {
   active: boolean
@@ -17,9 +19,12 @@ type Props = {
   advance: TourAdvance
   placement?: TourPlacement
   nextLabel: string
+  /** click-or-next 时「下一步」可改成「跳过此步」 */
+  skipStepLabel?: string
   skipLabel: string
   doneLabel: string
   clickHint: string
+  clickOrNextHint?: string
   skipWaitLabel?: string
   showSkipWait?: boolean
   isLast: boolean
@@ -28,51 +33,6 @@ type Props = {
   onSkipWait?: () => void
   /** 目标被点了（capture）；由引擎决定是否推进 */
   onTargetClick: () => void
-}
-
-function placeBubble(
-  rect: DOMRect,
-  placement: TourPlacement,
-  bubbleW: number,
-  bubbleH: number
-): { top: number; left: number; side: Exclude<TourPlacement, 'auto'> } {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const candidates: Exclude<TourPlacement, 'auto'>[] =
-    placement === 'auto'
-      ? ['bottom', 'top', 'right', 'left']
-      : [placement, 'bottom', 'top', 'right', 'left']
-
-  for (const side of candidates) {
-    let top = 0
-    let left = 0
-    if (side === 'bottom') {
-      top = rect.bottom + BUBBLE_GAP
-      left = rect.left + rect.width / 2 - bubbleW / 2
-    } else if (side === 'top') {
-      top = rect.top - bubbleH - BUBBLE_GAP
-      left = rect.left + rect.width / 2 - bubbleW / 2
-    } else if (side === 'right') {
-      top = rect.top + rect.height / 2 - bubbleH / 2
-      left = rect.right + BUBBLE_GAP
-    } else {
-      top = rect.top + rect.height / 2 - bubbleH / 2
-      left = rect.left - bubbleW - BUBBLE_GAP
-    }
-    left = Math.max(12, Math.min(left, vw - bubbleW - 12))
-    top = Math.max(12, Math.min(top, vh - bubbleH - 12))
-    const fits =
-      (side === 'bottom' && rect.bottom + BUBBLE_GAP + bubbleH < vh - 8) ||
-      (side === 'top' && rect.top - BUBBLE_GAP - bubbleH > 8) ||
-      (side === 'right' && rect.right + BUBBLE_GAP + bubbleW < vw - 8) ||
-      (side === 'left' && rect.left - BUBBLE_GAP - bubbleW > 8)
-    if (fits || placement !== 'auto') return { top, left, side }
-  }
-  return {
-    top: Math.min(rect.bottom + BUBBLE_GAP, vh - 180),
-    left: Math.max(12, Math.min(rect.left, vw - bubbleW - 12)),
-    side: 'bottom'
-  }
 }
 
 export function TourOverlay({
@@ -85,9 +45,11 @@ export function TourOverlay({
   advance,
   placement = 'auto',
   nextLabel,
+  skipStepLabel,
   skipLabel,
   doneLabel,
   clickHint,
+  clickOrNextHint,
   skipWaitLabel,
   showSkipWait,
   isLast,
@@ -97,6 +59,8 @@ export function TourOverlay({
   onTargetClick
 }: Props) {
   const [rect, setRect] = useState<DOMRect | null>(null)
+  const [bubbleSize, setBubbleSize] = useState({ w: DEFAULT_BUBBLE_W, h: DEFAULT_BUBBLE_H })
+  const bubbleRef = useRef<HTMLDivElement | null>(null)
   const surface = useSurfaceMotion()
 
   // 跟随目标：resize / scroll / 布局变化
@@ -120,6 +84,23 @@ export function TourOverlay({
       window.clearInterval(timer)
     }
   }, [active, selector])
+
+  // 量真实气泡尺寸，避免估算偏小导致盖住目标
+  useLayoutEffect(() => {
+    if (!active) return
+    const el = bubbleRef.current
+    if (!el) return
+    const measure = (): void => {
+      const r = el.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0) {
+        setBubbleSize({ w: Math.ceil(r.width), h: Math.ceil(r.height) })
+      }
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [active, title, body, stepIndex])
 
   // 点高亮目标推进（capture，不阻止原事件 → 不挡 ASR / 不取消任务）
   useEffect(() => {
@@ -147,12 +128,26 @@ export function TourOverlay({
   }, [rect])
 
   const bubblePos = useMemo(() => {
-    if (!rect) return { top: window.innerHeight / 2 - 80, left: window.innerWidth / 2 - 160, side: 'bottom' as const }
-    return placeBubble(rect, placement, 320, 160)
-  }, [rect, placement])
+    if (!rect) {
+      return {
+        top: Math.max(12, window.innerHeight / 2 - bubbleSize.h / 2),
+        left: Math.max(12, window.innerWidth / 2 - bubbleSize.w / 2),
+        side: 'bottom' as const
+      }
+    }
+    return placeBubble(rect, placement, bubbleSize.w, bubbleSize.h)
+  }, [rect, placement, bubbleSize.w, bubbleSize.h])
 
+  // click：只点目标，不显示下一步；click-or-next / next：显示
   const showNext = advance === 'next' || advance === 'click-or-next' || isLast
-  const showClickHint = advance === 'click' || advance === 'click-or-next'
+  const showClickHint = (advance === 'click' || advance === 'click-or-next') && !isLast
+  const hintText =
+    advance === 'click-or-next' && clickOrNextHint ? clickOrNextHint : clickHint
+  const primaryLabel = isLast
+    ? doneLabel
+    : advance === 'click-or-next' && skipStepLabel
+      ? skipStepLabel
+      : nextLabel
 
   return (
     <AnimatePresence>
@@ -212,10 +207,12 @@ export function TourOverlay({
               />
             </>
           ) : (
+            // 无目标（done）或尚未量到：全遮罩，不留假洞
             <div className="tour-mask tour-mask-full" />
           )}
 
           <motion.div
+            ref={bubbleRef}
             className={`tour-bubble side-${bubblePos.side}`}
             role="dialog"
             aria-modal="false"
@@ -231,13 +228,13 @@ export function TourOverlay({
               </span>
             </div>
             <p className="tour-bubble-body">{body}</p>
-            {showClickHint && !isLast && (
-              <p className="tour-click-hint">{clickHint}</p>
-            )}
+            {showClickHint && <p className="tour-click-hint">{hintText}</p>}
             <div className="tour-bubble-actions">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={onSkip}>
-                {skipLabel}
-              </button>
+              {!isLast && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onSkip}>
+                  {skipLabel}
+                </button>
+              )}
               <div className="grow" />
               {showSkipWait && skipWaitLabel && onSkipWait && (
                 <button type="button" className="btn btn-ghost btn-sm" onClick={onSkipWait}>
@@ -246,7 +243,7 @@ export function TourOverlay({
               )}
               {showNext && (
                 <button type="button" className="btn btn-primary btn-sm" onClick={onNext}>
-                  {isLast ? doneLabel : nextLabel}
+                  {primaryLabel}
                 </button>
               )}
             </div>

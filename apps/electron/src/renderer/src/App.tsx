@@ -535,13 +535,19 @@ export default function App() {
       modelsReady,
       hasTasks: tasks.length > 0,
       settingsOpen,
+      cliOutdated,
       openSettings: async (tab: SettingsTab = 'models') => {
         await openSettingsFn(tab)
       },
       closeSettings: () => closeSettingsFn(),
-      closeGuide: () => setOverlay((cur) => closeOverlay(cur, 'guide'))
+      closeGuide: () => setOverlay((cur) => closeOverlay(cur, 'guide')),
+      openStats: async () => {
+        await refreshStats()
+        setOverlay((cur) => openOverlay(cur, 'stats'))
+      },
+      closeStats: () => setOverlay((cur) => closeOverlay(cur, 'stats'))
     }),
-    [modelsReady, tasks.length, settingsOpen, openSettingsFn, closeSettingsFn]
+    [modelsReady, tasks.length, settingsOpen, cliOutdated, openSettingsFn, closeSettingsFn, refreshStats]
   )
 
   return (
@@ -626,7 +632,11 @@ export default function App() {
               <button className="btn btn-primary" disabled={picking} onClick={() => void addFiles()}>
                 {s.add}
               </button>
-              <button className="btn btn-ghost" onClick={() => void openSettingsFn('models')}>
+              <button
+                className="btn btn-ghost"
+                data-tour="empty-open-settings"
+                onClick={() => void openSettingsFn('models')}
+              >
                 {s.openSettings}
               </button>
             </div>

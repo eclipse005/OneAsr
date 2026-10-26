@@ -267,7 +267,7 @@ function ModelPathField({
         : downloadingLabel
   const cancelTitle = isDown ? `${cancelLabel} · ${progressLabel}` : cancelLabel
   return (
-    <div className="field" data-tour={dataTour}>
+    <div className="field">
       <label>{label}</label>
       <div className="model-path-stack">
         <div className="path-input compact">
@@ -299,6 +299,7 @@ function ModelPathField({
             <button
               type="button"
               className="icon-btn"
+              data-tour={dataTour}
               /* title 不跟着 pct 改：原生 tooltip 会因 title 变化重新弹出，鼠标没动也闪。 */
               title={cancelLabel}
               aria-label={cancelTitle}
@@ -310,6 +311,7 @@ function ModelPathField({
             <button
               type="button"
               className={`icon-btn ${readyNow && !isErr ? '' : 'primary'}`}
+              data-tour={dataTour}
               disabled={busy}
               title={actionLabel}
               aria-label={actionLabel}
