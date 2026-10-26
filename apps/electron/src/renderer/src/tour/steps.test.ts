@@ -56,11 +56,32 @@ describe('tour steps', () => {
     expect(start?.advance).toBe('next')
   })
 
-  it('仅点击推进的步骤不提供 next', () => {
-    const tab = visibleSteps({ ...base, modelsReady: true }).find(
-      (s) => s.id === 'settings-hotwords-tab'
-    )
-    expect(tab?.advance).toBe('click')
+  it('设置标签步为 click-or-next，避免 Esc 关设置后卡死', () => {
+    const ids = visibleSteps({ ...base, modelsReady: true })
+    const hot = ids.find((s) => s.id === 'settings-hotwords-tab')
+    const out = ids.find((s) => s.id === 'settings-output-tab')
+    expect(hot?.advance).toBe('click-or-next')
+    expect(out?.advance).toBe('click-or-next')
+  })
+
+  it('CLI 过旧路径仍包含模型步（不可因 general 竞态跳过）', () => {
+    const ids = visibleSteps({ ...base, cliOutdated: true, modelsReady: false }).map((s) => s.id)
+    expect(ids).toContain('toolbar-settings-cli')
+    expect(ids).toContain('settings-models')
+    expect(ids.indexOf('toolbar-settings-cli')).toBeLessThan(ids.indexOf('settings-models'))
+  })
+
+  it('模型/热词/输出面板气泡优先左侧，避免盖住内容', () => {
+    const ids = visibleSteps({ ...base, modelsReady: true })
+    for (const id of ['settings-models', 'settings-hotwords', 'settings-output'] as const) {
+      expect(ids.find((s) => s.id === id)?.placement).toBe('left')
+    }
+  })
+
+  it('统计步高亮面板标题栏而非被挡住的工具栏按钮', () => {
+    const stats = visibleSteps({ ...base, modelsReady: true }).find((s) => s.id === 'toolbar-stats')
+    expect(stats?.selector).toBe('[data-tour="stats-header"]')
+    expect(stats?.waitFor).toBe('[data-tour="stats-header"]')
   })
 
   it('收束步无高亮选择器', () => {

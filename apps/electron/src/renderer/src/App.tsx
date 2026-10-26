@@ -605,15 +605,10 @@ export default function App() {
           <span className="btn-glyph i-chart" aria-hidden />
           {s.stats}
         </button>
-        <button
-          className="btn btn-ghost"
-          data-shot="settings"
-          data-tour="toolbar-settings"
-          onClick={() => void openSettingsFn('general')}
-        >
-          <span className="btn-glyph i-gear" aria-hidden />
-          {s.settings}
-        </button>
+        <ToolbarSettingsButton
+          label={s.settings}
+          openSettings={openSettingsFn}
+        />
       </div>
 
       <div className={`main ${dragging ? 'dragging' : ''}`}>
@@ -830,5 +825,30 @@ function GuideTourButton({
       onStartTour={() => tour.start()}
       onOpenManual={onOpenManual}
     />
+  )
+}
+
+/**
+ * 引导进行中点工具栏「设置」必须进模型页，避免与 tour 的 openSettings('models')
+ * 竞态成 general，导致 models 步 waitFor 失败被跳过。
+ */
+function ToolbarSettingsButton({
+  label,
+  openSettings
+}: {
+  label: string
+  openSettings: (tab?: SettingsTab) => Promise<void>
+}) {
+  const tour = useTour()
+  return (
+    <button
+      className="btn btn-ghost"
+      data-shot="settings"
+      data-tour="toolbar-settings"
+      onClick={() => void openSettings(tour.active ? 'models' : 'general')}
+    >
+      <span className="btn-glyph i-gear" aria-hidden />
+      {label}
+    </button>
   )
 }

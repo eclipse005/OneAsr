@@ -41,11 +41,13 @@ export const TOUR_STEPS: TourStep[] = [
     selector: '[data-tour="settings-pane-models"]',
     titleKey: 'tourModelsTitle',
     bodyKey: 'tourModelsBody',
-    // 气泡放在面板右侧/下方，避免盖住左侧 Models/Hotwords 导航
-    placement: 'right',
+    // 气泡放在面板左侧（盖住导航侧），避免挡住模型内容与 CLI 横幅
+    placement: 'left',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-models"]',
     before: async (_ctx, api) => {
+      // 必须赢过工具栏 Settings 默认 openSettings('general') 的竞态：
+      // 进入本步时强制打开 models，并确认 pane 出现后再亮气泡。
       await api.openSettings('models')
       return true
     }
@@ -72,7 +74,8 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourHotwordsTabTitle',
     bodyKey: 'tourHotwordsTabBody',
     placement: 'right',
-    advance: 'click',
+    // click-or-next：Esc 关掉设置后仍可「跳过此步」，不会卡死无 Next 的 click-only
+    advance: 'click-or-next',
     before: async (_ctx, api) => {
       await api.openSettings('models')
       return true
@@ -83,7 +86,7 @@ export const TOUR_STEPS: TourStep[] = [
     selector: '[data-tour="settings-pane-hotwords"]',
     titleKey: 'tourHotwordsTitle',
     bodyKey: 'tourHotwordsBody',
-    placement: 'right',
+    placement: 'left',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-hotwords"]'
   },
@@ -93,14 +96,14 @@ export const TOUR_STEPS: TourStep[] = [
     titleKey: 'tourOutputTabTitle',
     bodyKey: 'tourOutputTabBody',
     placement: 'right',
-    advance: 'click'
+    advance: 'click-or-next'
   },
   {
     id: 'settings-output',
     selector: '[data-tour="settings-pane-output"]',
     titleKey: 'tourOutputTitle',
     bodyKey: 'tourOutputBody',
-    placement: 'right',
+    placement: 'left',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-output"]'
   },
@@ -214,11 +217,13 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: 'toolbar-stats',
-    selector: '[data-tour="toolbar-stats"]',
+    // 面板盖住工具栏按钮时洞会落空；高亮已打开的统计面板标题栏
+    selector: '[data-tour="stats-header"]',
     titleKey: 'tourStatsTitle',
     bodyKey: 'tourStatsBody',
     placement: 'bottom',
     advance: 'next',
+    waitFor: '[data-tour="stats-header"]',
     before: async (_ctx, api) => {
       await api.openStats()
       return true

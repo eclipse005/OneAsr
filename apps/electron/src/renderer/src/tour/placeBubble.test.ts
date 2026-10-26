@@ -57,3 +57,11 @@ describe('placeBubble', () => {
     expect(pos.side).toBe('top')
   })
 })
+
+  it('贴边时保留更大边距，减少盖住面板顶栏', () => {
+    const target = fakeRect({ top: 80, left: 400, width: 480, height: 520 })
+    const pos = placeBubble(target, 'left', 320, 180)
+    expect(pos.left).toBeGreaterThanOrEqual(20)
+    expect(pos.top).toBeGreaterThanOrEqual(20)
+  })
+

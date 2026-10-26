@@ -1,6 +1,6 @@
 import type { TourPlacement } from './types'
 
-const BUBBLE_GAP = 14
+const BUBBLE_GAP = 18
 
 export type PlaceSide = Exclude<TourPlacement, 'auto'>
 
@@ -68,8 +68,8 @@ function clampPos(
 ): { top: number; left: number } {
   const { vw, vh } = viewport()
   return {
-    left: Math.max(12, Math.min(left, vw - bubbleW - 12)),
-    top: Math.max(12, Math.min(top, vh - bubbleH - 12))
+    left: Math.max(20, Math.min(left, vw - bubbleW - 20)),
+    top: Math.max(20, Math.min(top, vh - bubbleH - 20))
   }
 }
 
@@ -140,10 +140,10 @@ export function placeBubble(
   const cx = rect.left + rect.width / 2
   const cy = rect.top + rect.height / 2
   const corners = [
-    { top: 12, left: 12, side: 'bottom' as PlaceSide },
-    { top: 12, left: vw - bubbleW - 12, side: 'bottom' as PlaceSide },
-    { top: vh - bubbleH - 12, left: 12, side: 'top' as PlaceSide },
-    { top: vh - bubbleH - 12, left: vw - bubbleW - 12, side: 'top' as PlaceSide }
+    { top: 20, left: 20, side: 'bottom' as PlaceSide },
+    { top: 20, left: vw - bubbleW - 20, side: 'bottom' as PlaceSide },
+    { top: vh - bubbleH - 20, left: 20, side: 'top' as PlaceSide },
+    { top: vh - bubbleH - 20, left: vw - bubbleW - 20, side: 'top' as PlaceSide }
   ]
   corners.sort((a, b) => {
     const da = Math.hypot(a.left + bubbleW / 2 - cx, a.top + bubbleH / 2 - cy)

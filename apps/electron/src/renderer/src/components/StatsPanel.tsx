@@ -63,7 +63,7 @@ export function StatsPanel({
         onClick={(e) => e.stopPropagation()}
         {...surface}
       >
-        <div className="modal-header">
+        <div className="modal-header" data-tour="stats-header">
           <h3>{s.statsTitle}</h3>
           <div style={{ flex: 1 }} />
           <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>

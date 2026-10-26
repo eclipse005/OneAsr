@@ -135,11 +135,20 @@ export function TourProvider({
           return
         }
       }
+      // 设置 → 模型：再强制一次 openSettings('models')，压过工具栏按钮的 general 竞态
+      if (next.id === 'settings-models') {
+        await api.openSettings('models')
+      }
       const waitSel = next.waitFor ?? next.selector
       if (waitSel) {
-        const found = await waitForSelector(waitSel, next.waitTimeoutMs ?? 8000)
+        let found = await waitForSelector(waitSel, next.waitTimeoutMs ?? 8000)
+        // models 步：超时则再开一次 models 再等，避免被 general 冲掉后误跳过
+        if (!found && next.id === 'settings-models') {
+          await api.openSettings('models')
+          found = await waitForSelector(waitSel, 4000)
+        }
         if (!found) {
-          // 选择器没出现就跳过这一步，别卡死
+          // 选择器没出现就跳过这一步，别卡死（models 仅在真等不到时才跳）
           await goToIndex(index + 1)
           return
         }
@@ -177,12 +186,28 @@ export function TourProvider({
 
   useEscClose(() => stop('skip'), running || welcomeOpen)
 
-  // 设置关掉时立刻离开「关闭设置」步，避免孤儿气泡
+  // 设置被 Esc/意外关掉时：直接跳到设置块之后，避免 click-only 孤儿气泡
+  // （不要逐步 advance：后面几步 waitFor 会各空等数秒）
   useEffect(() => {
-    if (!running || stepId !== 'settings-close') return
+    if (!running || !stepId) return
     if (host.settingsOpen) return
-    void advance()
-  }, [running, stepId, host.settingsOpen, advance])
+    if (!stepId.startsWith('settings-')) return
+    if (advancing.current) return
+    advancing.current = true
+    void (async () => {
+      try {
+        const list = visibleSteps(liveCtxFrom(hostRef.current))
+        const after = list.findIndex((x) => x.id === 'toolbar-add')
+        if (after >= 0) await goToIndex(after)
+        else {
+          const cur = list.findIndex((x) => x.id === stepId)
+          await goToIndex(cur >= 0 ? cur + 1 : 0)
+        }
+      } finally {
+        advancing.current = false
+      }
+    })()
+  }, [running, stepId, host.settingsOpen, goToIndex])
 
   // 任务列表从空变有（用户在引导中加了文件）时，重算可见步骤仍停在当前 id
   useEffect(() => {
