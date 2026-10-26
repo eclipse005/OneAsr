@@ -22,6 +22,7 @@ import {
 } from './storage'
 import { waitForSelector } from './wait'
 import type { TourStep, TourStepApi, TourStepId } from './types'
+import { tourEscClosesSettings } from './tourEsc'
 
 export type TourHostApi = TourStepApi & {
   modelsReady: boolean
@@ -75,6 +76,8 @@ export function TourProvider({
   const [welcomeOpen, setWelcomeOpen] = useState(false)
   const [running, setRunning] = useState(false)
   const [stepId, setStepId] = useState<TourStepId | null>(null)
+  const stepIdRef = useRef(stepId)
+  stepIdRef.current = stepId
   const advancing = useRef(false)
   const hostRef = useRef(host)
   hostRef.current = host
@@ -135,20 +138,28 @@ export function TourProvider({
           return
         }
       }
-      // 设置 → 模型：再强制一次 openSettings('models')，压过工具栏按钮的 general 竞态
-      if (next.id === 'settings-models') {
-        await api.openSettings('models')
+      // 设置面板步：再强制一次对应 tab，压过工具栏 general 竞态 / 标签点击时序
+      const paneTab =
+        next.id === 'settings-models'
+          ? 'models'
+          : next.id === 'settings-hotwords'
+            ? 'hotwords'
+            : next.id === 'settings-output'
+              ? 'output'
+              : null
+      if (paneTab) {
+        await api.openSettings(paneTab)
       }
       const waitSel = next.waitFor ?? next.selector
       if (waitSel) {
         let found = await waitForSelector(waitSel, next.waitTimeoutMs ?? 8000)
-        // models 步：超时则再开一次 models 再等，避免被 general 冲掉后误跳过
-        if (!found && next.id === 'settings-models') {
-          await api.openSettings('models')
+        // 面板步：超时则再开一次对应 tab 再等，避免竞态后误跳过（热词→输出）
+        if (!found && paneTab) {
+          await api.openSettings(paneTab)
           found = await waitForSelector(waitSel, 4000)
         }
         if (!found) {
-          // 选择器没出现就跳过这一步，别卡死（models 仅在真等不到时才跳）
+          // 选择器没出现就跳过这一步，别卡死（面板步仅在真等不到时才跳）
           await goToIndex(index + 1)
           return
         }
@@ -163,7 +174,8 @@ export function TourProvider({
     advancing.current = true
     try {
       const list = visibleSteps(liveCtxFrom(hostRef.current))
-      const cur = stepId ? list.findIndex((x) => x.id === stepId) : -1
+      const id = stepIdRef.current
+      const cur = id ? list.findIndex((x) => x.id === id) : -1
       if (cur < 0) {
         stop('complete')
         return
@@ -176,7 +188,7 @@ export function TourProvider({
     } finally {
       advancing.current = false
     }
-  }, [stepId, goToIndex, stop])
+  }, [goToIndex, stop])
 
   const start = useCallback(() => {
     setWelcomeOpen(false)
@@ -184,7 +196,16 @@ export function TourProvider({
     void goToIndex(0)
   }, [goToIndex])
 
-  useEscClose(() => stop('skip'), running || welcomeOpen)
+  // Esc：设置步内先关设置（effect 会跳到 toolbar-add）；其它步才退出引导。
+  // 用稳定 callback + ref，避免每次 render 重注册把 Settings 的 Esc 挤出栈顶。
+  const onTourEsc = useCallback(() => {
+    if (tourEscClosesSettings(stepIdRef.current, hostRef.current.settingsOpen)) {
+      hostRef.current.closeSettings()
+      return
+    }
+    stop('skip')
+  }, [stop])
+  useEscClose(onTourEsc, running || welcomeOpen)
 
   // 设置被 Esc/意外关掉时：直接跳到设置块之后，避免 click-only 孤儿气泡
   // （不要逐步 advance：后面几步 waitFor 会各空等数秒）

@@ -95,4 +95,28 @@ describe('tour steps', () => {
     )
     expect(close?.advance).toBe('click-or-next')
   })
+
+  it('热词/输出内容步 before 会打开对应设置页，避免 waitFor 超时跳步', async () => {
+    const ids = visibleSteps({ ...base, modelsReady: true })
+    const hot = ids.find((s) => s.id === 'settings-hotwords')
+    const out = ids.find((s) => s.id === 'settings-output')
+    expect(hot?.waitFor).toBe('[data-tour="settings-pane-hotwords"]')
+    expect(out?.waitFor).toBe('[data-tour="settings-pane-output"]')
+
+    const opened: string[] = []
+    const api = {
+      openSettings: async (tab?: 'general' | 'output' | 'models' | 'hotwords' | 'compute') => {
+        opened.push(tab ?? 'general')
+      },
+      closeSettings: () => {},
+      closeGuide: () => {},
+      openStats: async () => {},
+      closeStats: () => {}
+    }
+    const ctx = { ...base, modelsReady: true, settingsOpen: true }
+    await hot!.before!(ctx, api)
+    await out!.before!(ctx, api)
+    expect(opened).toEqual(['hotwords', 'output'])
+  })
+
 })

@@ -88,7 +88,12 @@ export const TOUR_STEPS: TourStep[] = [
     bodyKey: 'tourHotwordsBody',
     placement: 'left',
     advance: 'next',
-    waitFor: '[data-tour="settings-pane-hotwords"]'
+    waitFor: '[data-tour="settings-pane-hotwords"]',
+    // 点标签或「跳过此步」都要先切到热词页，再等 pane；否则 waitFor 超时会误跳到 output-tab
+    before: async (_ctx, api) => {
+      await api.openSettings('hotwords')
+      return true
+    }
   },
   {
     id: 'settings-output-tab',
@@ -105,7 +110,11 @@ export const TOUR_STEPS: TourStep[] = [
     bodyKey: 'tourOutputBody',
     placement: 'left',
     advance: 'next',
-    waitFor: '[data-tour="settings-pane-output"]'
+    waitFor: '[data-tour="settings-pane-output"]',
+    before: async (_ctx, api) => {
+      await api.openSettings('output')
+      return true
+    }
   },
   {
     id: 'settings-close',

@@ -102,7 +102,8 @@ export function TourOverlay({
     return () => ro.disconnect()
   }, [active, title, body, stepIndex])
 
-  // 点高亮目标推进（capture，不阻止原事件 → 不挡 ASR / 不取消任务）
+  // 点高亮目标推进（冒泡阶段：先让目标自己的 onClick 跑完，例如切 settings tab，
+  // 再 advance；不 preventDefault → 不挡 ASR / 不取消任务）
   useEffect(() => {
     if (!active || !selector) return
     if (advance !== 'click' && advance !== 'click-or-next') return
@@ -113,8 +114,8 @@ export function TourOverlay({
       if (!hit) return
       onTargetClick()
     }
-    document.addEventListener('click', onClick, true)
-    return () => document.removeEventListener('click', onClick, true)
+    document.addEventListener('click', onClick, false)
+    return () => document.removeEventListener('click', onClick, false)
   }, [active, selector, advance, onTargetClick])
 
   const hole = useMemo(() => {
