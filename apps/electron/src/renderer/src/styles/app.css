@@ -1687,9 +1687,18 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   height: 44px;
   margin: 0 auto 4px;
   border-radius: 12px;
-  background:
-    linear-gradient(135deg, #14b8a6, var(--accent));
+  background: linear-gradient(135deg, #14b8a6, #0d9488);
   box-shadow: 0 0 0 4px var(--accent-soft);
+  display: grid;
+  place-items: center;
+}
+/* 与标题栏 logo-mark 同源：assets/icons/logo.svg 波形 mask */
+.tour-welcome-mark-icon {
+  width: 26px;
+  height: 26px;
+  background: #fff;
+  -webkit-mask: url('@assets/icons/logo.svg') center / contain no-repeat;
+  mask: url('@assets/icons/logo.svg') center / contain no-repeat;
 }
 .tour-welcome h2 {
   margin: 0;

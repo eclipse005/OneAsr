@@ -31,7 +31,9 @@ export function WelcomeModal({
         onClick={(e) => e.stopPropagation()}
         {...surface}
       >
-        <div className="tour-welcome-mark" aria-hidden />
+        <div className="tour-welcome-mark" aria-hidden>
+          <span className="tour-welcome-mark-icon" />
+        </div>
         <h2>{title}</h2>
         <p>{body}</p>
         <div className="tour-welcome-actions">
