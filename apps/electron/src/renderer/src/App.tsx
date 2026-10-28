@@ -644,7 +644,11 @@ export default function App() {
             transcriptExts={status?.transcript_exts ?? []}
             timedOutputEnabled={!!settings && (settings.output_srt || settings.output_ass)}
             onStart={(id) => void window.oneasr.startTask(id).then(reportStart)}
-            onCancel={(id) => void window.oneasr.cancelTask(id)}
+            onCancel={(id) =>
+              void window.oneasr.cancelTask(id).then((ok) => {
+                if (ok) notify('info', s.cancelled)
+              })
+            }
             onRemove={(id) => void window.oneasr.removeTask(id).then(setTasks)}
             onOpen={(p) => void window.oneasr.openOutputFolder(p)}
             onSetLanguage={(id, language) =>

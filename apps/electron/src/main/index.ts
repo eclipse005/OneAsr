@@ -559,9 +559,7 @@ function registerIpc(): void {
   // 门禁结果要回给渲染层（翻文案 / 翻设置页），所以这里必须把值传回去
   ipcMain.handle('tasks:start', (_e, id: string) => jobs.startOne(id))
   ipcMain.handle('tasks:startAll', () => jobs.startAll())
-  ipcMain.handle('tasks:cancel', (_e, id: string) => {
-    jobs.cancel(id)
-  })
+  ipcMain.handle('tasks:cancel', (_e, id: string) => jobs.cancel(id))
   ipcMain.handle('transcript:get', (_e, id: string) => jobs.getTranscript(id))
   ipcMain.handle('transcript:set', async (_e, id: string, p: string | null) =>
     jobs.setTranscript(id, p)

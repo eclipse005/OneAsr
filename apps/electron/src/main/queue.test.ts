@@ -286,3 +286,28 @@ describe('JobQueue（排队 / 取消 / 泵出的纯状态机）', () => {
     expect(h.queue.queueRank('A')).toBe(2)
   })
 })
+
+
+describe('cancel then restart (queued withdraw)', () => {
+  it('cancel queued then re-enqueue while another runs', () => {
+    // 与 jobs.restorePending + startOne 对齐：撤下后同一行可以再进队，不挡当前 run。
+    const h = new Harness()
+    h.enqueue('A')
+    h.enqueue('B')
+    expect(h.spawned).toEqual(['A'])
+    expect(h.queue.queueRank('B')).toBe(1)
+
+    h.cancel('B')
+    expect(h.queue.queueRank('B')).toBeUndefined()
+    expect(h.queue.isActive('B')).toBe(false)
+
+    // 行回到待处理后再次 startOne → enqueue
+    h.enqueue('B')
+    expect(h.queue.queueRank('B')).toBe(1)
+    expect(h.spawned).toEqual(['A']) // A 仍在跑，B 只排队
+
+    const runA = Array.from(h.children.values()).find((c) => c.taskId === 'A')!
+    h.close(runA.runId)
+    expect(h.spawned).toEqual(['A', 'B'])
+  })
+})

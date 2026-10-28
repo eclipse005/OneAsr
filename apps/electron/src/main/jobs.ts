@@ -44,6 +44,8 @@ import {
 } from './queue'
 import { killProcessTree } from './kill-tree'
 import { isBulkStartCandidate } from '../shared/start-policy'
+import { bumpStartAttempt, isStartAttemptCurrent } from '../shared/start-attempt'
+import { restorePendingFields } from '../shared/task-idle'
 import { playClick, playReminder } from './sfx'
 
 let seq = 0
@@ -82,10 +84,12 @@ export class JobManager extends EventEmitter {
   private readonly probeLimit = createLimit(2)
   /**
    * 正在等 `status` 门禁返回的启动。取消可能落在这个窗口里：此时任务既不在
-   * 队列里也没有 child，`queue.cancel` 只能返回 absent。把它记下来，取消时
-   * 直接把行标成 cancelled，门禁返回后 startOne/startAll 就不会再起进程。
+   * 队列里也没有 child，`queue.cancel` 只能返回 absent。把它记下来；
+   * 取消时 bump startEpoch，门禁返回后那一次 start 作废——行本身恢复成待处理。
    */
   private readonly starting = new Set<string>()
+  /** 启动代数：cancel 在门禁窗口里 bump，作废那一次 startOne/startAll。 */
+  private readonly startEpoch = new Map<string, number>()
   /** task id → 文稿正文；任务移除 / 清空时同步删除 */
   private readonly transcripts = new Map<string, StagedTranscript>()
   private sessionRecent: StatsSnapshot['recentSession'] = []
@@ -486,34 +490,34 @@ export class JobManager extends EventEmitter {
 
   /**
    * 取消：排队中的行"撤下来"，运行中的行"杀掉"。
+   * 行状态一律恢复成待处理（与刚加入列表相同）；「已取消」只走右下角 toast。
    * 运行中的行只发 SIGTERM 并标记意图；**下一条要等这次 run 的 close**（状态机保证）。
+   * @returns 是否真的动到了排队 / 运行中 / 门禁中的任务（给 UI 决定要不要 toast）。
    */
-  cancel(id: string): void {
+  cancel(id: string): boolean {
     const t = this.tasks.find((x) => x.id === id)
-    if (!t) return
+    if (!t) return false
 
     const result = this.queue.cancel(id)
     if (result.outcome === 'queued') {
-      t.status = 'cancelled'
-      t.progress = 'cancelled'
+      restorePendingFields(t)
       this.emitUpdate()
-      return
+      return true
     }
     if (result.outcome !== 'running') {
       // 还在等启动门禁：没有队列项、没有 child，但这一行确实“正在开始”。
-      // 标记取消，门禁返回后的复查会放弃启动。
+      // bump 代数让门禁返回后的 start 作废；行恢复待处理，可再点开始。
       if (this.starting.has(id)) {
-        t.status = 'cancelled'
-        t.progress = 'cancelled'
-        t.finishedAt = Date.now()
+        bumpStartAttempt(this.startEpoch, id)
+        restorePendingFields(t)
         this.emitUpdate()
+        return true
       }
-      return
+      return false
     }
 
-    t.status = 'cancelled'
-    t.progress = 'cancelled'
-    t.finishedAt = Date.now()
+    // 运行中：UI 立刻回到待处理；kill 与 sessionRecent 仍按这次 run 的取消意图收尾。
+    restorePendingFields(t)
     this.emitUpdate()
     this.runCommands(result.commands)
     // 定时器捕获这一次 run：到点时句柄表/状态机都还要对得上，否则什么都不做
@@ -523,6 +527,7 @@ export class JobManager extends EventEmitter {
     ) {
       this.armKillTimer(result.runId)
     }
+    return true
   }
 
   /** 一行进入"排队"时的公共重置（startOne / startAll 共用）。 */
@@ -544,6 +549,7 @@ export class JobManager extends EventEmitter {
   async startOne(id: string): Promise<StartResult> {
     const t = this.tasks.find((x) => x.id === id)
     if (!t || t.status === 'running') return { ok: false, code: 'nothing-to-start' }
+    const attempt = bumpStartAttempt(this.startEpoch, id)
     this.starting.add(id)
     try {
       const gate = await this.canStart(t)
@@ -552,7 +558,10 @@ export class JobManager extends EventEmitter {
       // 跑起来/排上队；此时不能再 prepareQueued，否则会把 running 重置成 queued。
       if (!this.tasks.includes(t)) return { ok: false, code: 'nothing-to-start' }
       if (this.queue.isActive(t.id)) return { ok: true }
-      if (t.status === 'cancelled') return { ok: false, code: 'nothing-to-start' }
+      // 门禁窗口里点了取消：代数对不上，不起进程（行已是待处理，可再点开始）。
+      if (!isStartAttemptCurrent(this.startEpoch, id, attempt)) {
+        return { ok: false, code: 'nothing-to-start' }
+      }
       this.prepareQueued(t)
       this.runCommands(this.queue.enqueue(t))
       this.beginBatch()
@@ -565,11 +574,16 @@ export class JobManager extends EventEmitter {
   }
 
   async startAll(): Promise<StartResult> {
-    // 完成和取消的行留在原地；已经在跑或已经排队的不再入队一次。
+    // 完成的行留在原地；已经在跑或已经排队的不再入队一次。
+    // 取消过的行会先被 restorePending 成待处理，因而可以再次进批量开始。
     const candidates = this.tasks.filter((t) =>
       isBulkStartCandidate(t.status, this.queue.queueRank(t.id) !== undefined)
     )
-    for (const t of candidates) this.starting.add(t.id)
+    const attempts = new Map<string, number>()
+    for (const t of candidates) {
+      attempts.set(t.id, bumpStartAttempt(this.startEpoch, t.id))
+      this.starting.add(t.id)
+    }
     try {
       // 每行可能带着不同的语言/人声分离/热词组，门禁逐个问（并发，N 很小）
       const gates = await Promise.all(candidates.map((t) => this.canStart(t)))
@@ -583,9 +597,10 @@ export class JobManager extends EventEmitter {
         }
         // 与 startOne 同一个复查：等待门禁期间被另一条路径启动/取消的行跳过，
         // 不重置它的运行态。
+        const attempt = attempts.get(t.id) ?? 0
         if (
           !this.tasks.includes(t) ||
-          t.status === 'cancelled' ||
+          !isStartAttemptCurrent(this.startEpoch, t.id, attempt) ||
           this.queue.isActive(t.id)
         ) {
           continue
@@ -674,7 +689,8 @@ export class JobManager extends EventEmitter {
 
   private startRun(cmd: SpawnCommand<TaskSnapshot>): void {
     const { runId, task } = cmd
-    // 排队后被撤下（或行被 clear/remove 掉）的条目不该真起进程：这次 run 立刻作废
+    // 行被 clear/remove，或极端路径仍留着 cancelled：这次 run 立刻作废。
+    // 正常取消会 restorePending（queued），并已从运行队列撤下，不会走到这里。
     if (task.status === 'cancelled' || !this.tasks.includes(task)) {
       this.noteBatchOutcome('cancelled')
       this.runCommands(this.queue.childClosed(runId))

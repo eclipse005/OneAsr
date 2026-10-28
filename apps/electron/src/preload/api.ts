@@ -54,7 +54,7 @@ export interface OneAsrApi {
   clearTasks: () => Promise<TaskSnapshot[]>
   startTask: (id: string) => Promise<StartResult>
   startAll: () => Promise<StartResult>
-  cancelTask: (id: string) => Promise<void>
+  cancelTask: (id: string) => Promise<boolean>
   /** 文稿：读取正文 / 挂载 / 保存编辑 / 智能断句 / 重读 / 移除 */
   getTranscript: (id: string) => Promise<TranscriptEditResult>
   setTaskTranscript: (id: string, path: string | null) => Promise<TaskSnapshot[]>
