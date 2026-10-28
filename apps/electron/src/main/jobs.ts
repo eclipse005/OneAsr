@@ -44,6 +44,7 @@ import {
 } from './queue'
 import { killProcessTree } from './kill-tree'
 import { isBulkStartCandidate } from '../shared/start-policy'
+import { playClick, playReminder } from './sfx'
 
 let seq = 0
 function nextId(): string {
@@ -90,6 +91,14 @@ export class JobManager extends EventEmitter {
   private sessionRecent: StatsSnapshot['recentSession'] = []
   private lastOutput?: string
   private lastDurationMs?: number
+  /**
+   * 整批提示音：startOne/startAll 真正入队后进入 batch；
+   * 忙→闲时若本批有成功或失败（不全是取消）就响一次 reminder。
+   * 与旧版 GPUI `begin_batch` / `end_batch_if_idle` 同语义。
+   */
+  private batchActive = false
+  private batchOk = 0
+  private batchErr = 0
 
   list(): TaskSnapshot[] {
     return this.tasks.map((t) => {
@@ -158,6 +167,7 @@ export class JobManager extends EventEmitter {
   }
 
   async add(items: Array<string | AddTaskInput>): Promise<TaskSnapshot[]> {
+    const before = this.tasks.length
     const settings = loadSettings()
     const hw = loadHotwords()
     const language = settings.language || 'zh'
@@ -215,6 +225,8 @@ export class JobManager extends EventEmitter {
       })
     }
     this.emitUpdate()
+    // 一次操作一声：拖入 N 个文件只响一次（列表真变长才算）。
+    if (this.tasks.length > before) playClick()
     return this.list()
   }
 
@@ -386,11 +398,14 @@ export class JobManager extends EventEmitter {
   }
 
   remove(id: string): TaskSnapshot[] {
+    const existed = this.tasks.some((t) => t.id === id)
+    if (!existed) return this.list()
     if (this.queue.isRunning(id)) this.cancel(id)
     this.tasks = this.tasks.filter((t) => t.id !== id)
     this.transcripts.delete(id)
     this.queue.removeQueued(id)
     this.emitUpdate()
+    playClick()
     return this.list()
   }
 
@@ -399,6 +414,7 @@ export class JobManager extends EventEmitter {
    * 以前这里会顺手 cancel 掉运行中的任务，等于「清空」= 杀掉正在干的活。
    */
   clear(): TaskSnapshot[] {
+    const hadClearable = this.tasks.some((t) => t.status !== 'running')
     this.queue.clearQueued()
     this.tasks = this.tasks.filter((t) => t.status === 'running')
     const keep = new Set(this.tasks.map((t) => t.id))
@@ -406,6 +422,7 @@ export class JobManager extends EventEmitter {
       if (!keep.has(id)) this.transcripts.delete(id)
     }
     this.emitUpdate()
+    if (hadClearable) playClick()
     return this.list()
   }
 
@@ -538,7 +555,9 @@ export class JobManager extends EventEmitter {
       if (t.status === 'cancelled') return { ok: false, code: 'nothing-to-start' }
       this.prepareQueued(t)
       this.runCommands(this.queue.enqueue(t))
+      this.beginBatch()
       this.emitUpdate()
+      playClick()
       return { ok: true }
     } finally {
       this.starting.delete(id)
@@ -580,11 +599,45 @@ export class JobManager extends EventEmitter {
           : { ok: false, code: 'nothing-to-start' }
       }
       for (const t of accepted) this.runCommands(this.queue.enqueue(t))
+      this.beginBatch()
       this.emitUpdate()
+      playClick()
       return { ok: true }
     } finally {
       for (const t of candidates) this.starting.delete(t.id)
     }
+  }
+
+
+  private beginBatch(): void {
+    if (!this.batchActive) {
+      this.batchActive = true
+      this.batchOk = 0
+      this.batchErr = 0
+    }
+  }
+
+  /** 一次 run 收尾记入本批：ok / err 才算「有真活」；cancelled 不计。 */
+  private noteBatchOutcome(kind: 'ok' | 'err' | 'cancelled'): void {
+    if (!this.batchActive) return
+    if (kind === 'ok') this.batchOk += 1
+    else if (kind === 'err') this.batchErr += 1
+  }
+
+  /**
+   * 队列空闲且没有正在等门禁的启动 → 收尾。
+   * 全是取消（ok=err=0）则静默；否则一声 reminder。
+   */
+  private endBatchIfIdle(): void {
+    if (!this.batchActive) return
+    if (this.queue.view().busy || this.starting.size > 0) return
+    const ok = this.batchOk
+    const err = this.batchErr
+    this.batchActive = false
+    this.batchOk = 0
+    this.batchErr = 0
+    if (ok === 0 && err === 0) return
+    playReminder()
   }
 
   private emitUpdate(): void {
@@ -623,7 +676,9 @@ export class JobManager extends EventEmitter {
     const { runId, task } = cmd
     // 排队后被撤下（或行被 clear/remove 掉）的条目不该真起进程：这次 run 立刻作废
     if (task.status === 'cancelled' || !this.tasks.includes(task)) {
+      this.noteBatchOutcome('cancelled')
       this.runCommands(this.queue.childClosed(runId))
+      this.endBatchIfIdle()
       return
     }
     const settings = loadSettings()
@@ -638,7 +693,9 @@ export class JobManager extends EventEmitter {
       task.finishedAt = Date.now()
       logError(`task ${task.name}: ${message}`)
       this.emitUpdate()
+      this.noteBatchOutcome('err')
       this.runCommands(this.queue.childClosed(runId))
+      this.endBatchIfIdle()
       return
     }
     const staged = this.transcripts.get(task.id)
@@ -762,7 +819,9 @@ export class JobManager extends EventEmitter {
         this.sessionRecent = this.sessionRecent.slice(0, 20)
         this.emitUpdate()
         this.emit('stats', this.getStats())
+        this.noteBatchOutcome('cancelled')
         this.runCommands(this.queue.childClosed(runId))
+        this.endBatchIfIdle()
         return
       }
 
@@ -861,7 +920,9 @@ export class JobManager extends EventEmitter {
       this.sessionRecent = this.sessionRecent.slice(0, 20)
       this.emitUpdate()
       this.emit('stats', this.getStats())
+      this.noteBatchOutcome(ok ? 'ok' : 'err')
       this.runCommands(this.queue.childClosed(runId))
+      this.endBatchIfIdle()
     })
 
     child.on('error', (err) => {
@@ -874,7 +935,9 @@ export class JobManager extends EventEmitter {
       logError(`task spawn failed: ${task.name}\n  cmd: ${cmdline}`, err)
       task.finishedAt = Date.now()
       this.emitUpdate()
+      this.noteBatchOutcome('err')
       this.runCommands(this.queue.childClosed(runId))
+      this.endBatchIfIdle()
     })
   }
 

@@ -178,7 +178,7 @@ export const zh = {
   guideHwRow:
     '热词只影响这一行的转写，而且只对中文和英文；其它语言这一栏固定为「无热词」，不能选。点行里的「热词」chip 可以换组或选「无热词」；挂了文稿去做打轴时不用热词。',
   guideBackend: '自动会按独显、核显、CPU 的顺序试。选 GPU 时没有可用显卡就直接失败。选 CPU 则不用显卡。',
-  guideSounds: '这个开关会保存。任务完成时的提示音还没接到界面上。',
+  guideSounds: '总开关。开着时：加文件、删任务、清空、开始、保存设置会响轻触音；一整批跑完（成功或失败）响一次提醒音。整批全是取消则不响。提醒音播的时候轻触音会让开。',
   guideTray: '开着时，点窗口关闭会缩到托盘，任务继续跑。托盘菜单里的退出才会真正关掉。关掉时，点窗口关闭就是退出。',
   guideLog: '报错记在程序目录的日志里。设置里能看到当前这份和上一份轮转加在一起的大小。打开日志可以把报错原样发给别人。清理会删掉这两份，下一笔报错会重新写上这次运行的信息。',
   guideTabTranscript: '文稿',
@@ -493,7 +493,7 @@ export const en: Dict = {
   guideHwRow:
     'A row’s hotwords affect only that transcription, and only for Chinese or English; other languages show No hotwords and cannot pick a group. Click the Hotwords chip on the row to change the group or choose No hotwords. Aligning a transcript does not use hotwords.',
   guideBackend: 'Auto tries a discrete GPU, then an integrated GPU, then CPU. GPU fails outright when no adapter is available. CPU does not use a graphics adapter.',
-  guideSounds: 'The switch is saved. A sound when a task finishes is not wired up yet.',
+  guideSounds: 'Master switch. When on: add files, remove a task, clear the list, start, and Save settings tap once; a finished batch (success or failure) plays one reminder. An all-cancelled drain stays silent. Clicks stay muted while the reminder plays.',
   guideTray: 'When on, closing the window hides it to the tray and tasks keep running. Quit from the tray menu to exit. When off, closing the window quits.',
   guideLog: 'Errors are written to a log in the app folder. Settings shows the size of the current file plus the previous rotation. Open the log to copy an error as-is. Clear deletes both, and the next error starts a new file with this run’s details.',
   guideTabTranscript: 'Transcript',

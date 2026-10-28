@@ -40,6 +40,12 @@ import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
 import type { AddTaskInput, HotwordStore, Settings, StatusSnapshot } from '../shared/types'
 import { TITLEBAR_HEIGHT, titleBarOverlayOptions } from '../shared/window-chrome'
+import {
+  bindSfxWindow,
+  playClick,
+  refreshSoundFromSettings,
+  setSoundEnabled
+} from './sfx'
 
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
@@ -419,8 +425,18 @@ function createWindow(): void {
 
 function registerIpc(): void {
   ipcMain.handle('settings:get', () => loadSettings())
-  ipcMain.handle('settings:save', (_e, settings: Settings) => saveSettings(settings))
-  ipcMain.handle('settings:reset', () => saveSettings(defaultSettings()))
+  ipcMain.handle('settings:save', (_e, settings: Settings) => {
+    const saved = saveSettings(settings)
+    setSoundEnabled(!!saved.sound)
+    // 显式点保存才响；抽屉关时的丢弃/不提交保持安静。
+    playClick()
+    return saved
+  })
+  ipcMain.handle('settings:reset', () => {
+    const saved = saveSettings(defaultSettings())
+    setSoundEnabled(!!saved.sound)
+    return saved
+  })
   /**
    * 模型状态、就绪判据、开跑门禁、可选模型清单（catalog）——全部来自
    * `oneasr-cli status --json`。壳只转发，不再自己判断目录够不够。
@@ -585,6 +601,8 @@ app.whenReady().then(() => {
   // 再初始化日志/设置/模型目录。
   setUserDataDir(app.getPath('userData'))
   initLog(dataRoot())
+  bindSfxWindow(() => mainWindow)
+  refreshSoundFromSettings()
   registerIpc()
   // macOS 的 Dock 图标不认 BrowserWindow.icon：打包后由 .app 里的 AppIcon.icns 决定
   // （scripts/pack-unix.sh 用 iconutil 生成），未打包开发期这里先顶上同一份图标。

@@ -22,6 +22,7 @@ import { useEmptyMotion } from './motion'
 import { isBulkStartCandidate } from '../../shared/start-policy'
 import { closeOverlay, openOverlay, type OverlayKind } from '../../shared/overlay'
 import { fileName, pairPicked, pairingItems } from './lib/pairing'
+import { installSfxPlayer } from './lib/sfx-player'
 import type {
   HotwordStore,
   DownloadState,
@@ -147,6 +148,9 @@ export default function App() {
     },
     [settings, hotwords, status]
   )
+
+  // 主进程下发 sfx:play；藏到托盘时窗口还在，HTMLAudio 照样响。
+  useEffect(() => installSfxPlayer(window.oneasr.onSfxPlay), [])
 
   useEffect(() => {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'

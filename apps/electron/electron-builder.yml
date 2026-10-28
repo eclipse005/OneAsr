@@ -18,6 +18,8 @@ extraResources:
     to: runtime
   - from: ../../assets/icons
     to: icons
+  - from: ../../assets/sounds
+    to: sounds
 
 asar: true
 npmRebuild: false

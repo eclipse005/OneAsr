@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { OneAsrApi } from './api'
+import type { OneAsrApi, SfxKind } from './api'
 import type {
   DownloadState,
   HotwordStore,
@@ -84,7 +84,12 @@ const api: OneAsrApi = {
   },
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowMaximize: () => ipcRenderer.invoke('window:maximize'),
-  windowClose: () => ipcRenderer.invoke('window:close')
+  windowClose: () => ipcRenderer.invoke('window:close'),
+  onSfxPlay: (cb) => {
+    const listener = (_: Electron.IpcRendererEvent, kind: SfxKind): void => cb(kind)
+    ipcRenderer.on('sfx:play', listener)
+    return () => ipcRenderer.removeListener('sfx:play', listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('oneasr', api)

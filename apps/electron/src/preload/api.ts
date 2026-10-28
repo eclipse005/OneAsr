@@ -10,6 +10,8 @@ import type {
   TranscriptEditResult
 } from '../shared/types'
 
+export type SfxKind = 'click' | 'reminder'
+
 /** 拖放/选择拿到的文件 → 绝对路径（Electron 32+ 只能用 webUtils.getPathForFile） */
 export type GetPathForFile = (file: File) => string
 
@@ -79,4 +81,6 @@ export interface OneAsrApi {
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
+  /** 主进程决定何时播；渲染层只负责出声 */
+  onSfxPlay: (cb: (kind: SfxKind) => void) => () => void
 }

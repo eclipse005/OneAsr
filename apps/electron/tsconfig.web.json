@@ -9,8 +9,24 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"]
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@assets/*": [
+        "../../assets/*"
+      ]
+    }
   },
-  "include": ["src/renderer/src/**/*", "src/renderer/*.d.ts", "src/shared/**/*"]
+  "include": [
+    "src/renderer/src/**/*",
+    "src/renderer/*.d.ts",
+    "src/shared/**/*"
+  ]
 }
