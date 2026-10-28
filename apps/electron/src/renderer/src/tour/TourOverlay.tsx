@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { EASE_OUT, useSurfaceMotion } from '../motion'
+import { DUR, EASE_OUT, useSurfaceMotion } from '../motion'
 import { readTargetRect } from './wait'
 import type { TourAdvance } from './types'
 import { attachTourTargetClickListener } from './tourTargetClick'
@@ -131,8 +131,8 @@ export function TourOverlay({
           aria-live="polite"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.12, ease: EASE_OUT } }}
-          transition={{ duration: 0.18, ease: EASE_OUT }}
+          exit={{ opacity: 0, transition: { duration: DUR.overlayExit, ease: EASE_OUT } }}
+          transition={{ duration: DUR.overlay, ease: EASE_OUT }}
         >
           {/* 四块遮罩围出洞；一律从标题栏下方开始，避免压暗后与系统 WCO 白块割裂 */}
           {hole ? (

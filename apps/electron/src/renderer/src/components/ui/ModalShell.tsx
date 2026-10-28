@@ -2,7 +2,7 @@ import type { ReactNode, RefObject } from 'react'
 import { useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { useEscClose } from '../../esc'
-import { useSurfaceMotion } from '../../motion'
+import { useOverlayMotion, useSurfaceMotion } from '../../motion'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -82,6 +82,7 @@ function useFocusTrap(containerRef: RefObject<HTMLElement | null>): void {
 
 /**
  * Shared modal chrome: overlay + shell + header + close.
+ * Root is motion so AnimatePresence can run overlay exit; shell uses surface.
  * Focus trap + Esc + overlay dismiss. Tour coach-mark dig-hole is separate.
  */
 export function ModalShell({
@@ -104,13 +105,14 @@ export function ModalShell({
   closeDataShot?: string
   closeDataTour?: string
 }) {
+  const overlay = useOverlayMotion()
   const surface = useSurfaceMotion()
   const shellRef = useRef<HTMLDivElement>(null)
   useEscClose(onClose)
   useFocusTrap(shellRef)
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <motion.div className="overlay" onClick={onClose} {...overlay}>
       <motion.div
         ref={shellRef}
         className={shellClassName ? `modal-shell ${shellClassName}` : 'modal-shell'}
@@ -136,6 +138,6 @@ export function ModalShell({
         </div>
         {children}
       </motion.div>
-    </div>
+    </motion.div>
   )
 }

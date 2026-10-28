@@ -18,7 +18,7 @@ import {
   transcriptsUnpaired,
   unsupportedCount
 } from './i18n'
-import { useSurfaceMotion } from './motion'
+import { useEmptyMotion } from './motion'
 import { isBulkStartCandidate } from '../../shared/start-policy'
 import { closeOverlay, openOverlay, type OverlayKind } from '../../shared/overlay'
 import { fileName, pairPicked, pairingItems } from './lib/pairing'
@@ -184,7 +184,7 @@ export default function App() {
     }
   }, [openSettingsFn])
 
-  const dropzoneMotion = useSurfaceMotion()
+  const dropzoneMotion = useEmptyMotion()
   useEscClose(() => setClearOpen(false), clearOpen)
 
   const notify = useCallback((kind: 'info' | 'success' | 'warn' | 'error', message: string) => {

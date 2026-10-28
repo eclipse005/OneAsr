@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { useEscClose } from '../esc'
-import { useSurfaceMotion } from '../motion'
+import { useOverlayMotion, useSurfaceMotion } from '../motion'
 
 export function WelcomeModal({
   title,
@@ -17,11 +17,12 @@ export function WelcomeModal({
   onStart: () => void
   onSkip: () => void
 }) {
+  const overlay = useOverlayMotion()
   const surface = useSurfaceMotion()
   useEscClose(onSkip)
 
   return (
-    <div className="tour-welcome-backdrop" onClick={onSkip}>
+    <motion.div className="tour-welcome-backdrop" onClick={onSkip} {...overlay}>
       <motion.div
         className="tour-welcome"
         role="dialog"
@@ -42,6 +43,6 @@ export function WelcomeModal({
           </button>
         </div>
       </motion.div>
-    </div>
+    </motion.div>
   )
 }
