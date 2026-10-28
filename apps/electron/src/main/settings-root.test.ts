@@ -127,7 +127,11 @@ describe('resolveAppRoot：app root 的唯一决策点', () => {
   })
 
   it('完全无线索时不编造路径，并说明原因', () => {
-    const lonely = tmpDir('no-clues')
+    // Nest deeper than walkFfmpegRoots(maxLevels=6) so we never reach `/`.
+    // Otherwise system `/bin/ffmpeg` false-positives as an app root (source=detected).
+    const base = tmpDir('no-clues')
+    const lonely = path.join(base, 'a', 'b', 'c', 'd', 'e', 'f')
+    fs.mkdirSync(lonely, { recursive: true })
     const d = resolveAppRoot({ startDir: lonely })
     expect(d.source).toBe('fallback')
     expect(d.notes.join(' ')).toContain('没找到')
