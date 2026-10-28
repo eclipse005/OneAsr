@@ -1,9 +1,8 @@
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence } from 'framer-motion'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from './ConfirmDialog'
-import { useEscClose } from '../esc'
-import { useSurfaceMotion } from '../motion'
 import { t, transcriptRate, transcriptSummary, type UiLang } from '../i18n'
+import { ModalShell } from './ui'
 import { transcriptLineMarks, transcriptRows } from '../../../shared/transcript-lines'
 import type { TranscriptInfo } from '../../../shared/types'
 
@@ -39,7 +38,6 @@ export function TranscriptPanel({
   onRemove
 }: TranscriptPanelProps) {
   const s = t(lang)
-  const surface = useSurfaceMotion()
   const [draft, setDraft] = useState(text)
   const [busy, setBusy] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
@@ -180,7 +178,6 @@ export function TranscriptPanel({
     if (dirty) setConfirmClose(true)
     else onClose()
   }
-  useEscClose(requestClose)
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
     if (busy) return
@@ -197,22 +194,12 @@ export function TranscriptPanel({
   const editable = !locked && !info.error
 
   return (
-    <div className="overlay" onClick={requestClose}>
-      <motion.div
-        className="modal-shell transcript-shell"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        {...surface}
-      >
-        <div className="modal-header">
-          <h3>{s.transcriptPanelTitle}</h3>
-          <div style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={requestClose}>
-            {s.close}
-          </button>
-        </div>
-
+    <ModalShell
+      title={s.transcriptPanelTitle}
+      onClose={requestClose}
+      closeLabel={s.close}
+      shellClassName="transcript-shell"
+    >
         <div className="transcript-body">
           <aside className="transcript-summary">
             <div>
@@ -369,7 +356,6 @@ export function TranscriptPanel({
             {savedAck && !dirty ? s.saved : s.transcriptSave}
           </button>
         </div>
-      </motion.div>
-    </div>
+    </ModalShell>
   )
 }

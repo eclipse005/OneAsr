@@ -5,64 +5,17 @@ import type { DownloadState, HotwordStore, Settings, StatusSnapshot } from '../.
 import { HotwordEditor } from './HotwordPanel'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SelectMenu } from './Popover'
-import { useEscClose } from '../esc'
-import { usePaneMotion, useSurfaceMotion } from '../motion'
+import { usePaneMotion } from '../motion'
 import { formatSize } from '../lib/format'
+import { ModalShell, Seg, Toggle } from './ui'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
-
-function Toggle({
-  on,
-  onChange,
-  'aria-label': ariaLabel
-}: {
-  on: boolean
-  onChange: (v: boolean) => void
-  'aria-label'?: string
-}) {
-  return (
-    <button
-      type="button"
-      className={`toggle ${on ? 'on' : ''}`}
-      role="switch"
-      aria-checked={on}
-      aria-label={ariaLabel}
-      onClick={() => onChange(!on)}
-    />
-  )
-}
 
 function Pill({ ok, label, ready, missing }: { ok: boolean; label: string; ready: string; missing: string }) {
   return (
     <span className={`status-pill ${ok ? 'ready' : 'missing'}`}>
       {label}: {ok ? ready : missing}
     </span>
-  )
-}
-
-function Seg({
-  options,
-  value,
-  onChange
-}: {
-  options: { id: string; label: string }[]
-  value: string
-  onChange: (id: string) => void
-}) {
-  return (
-    <div className="seg" role="group">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          className={`seg-item ${value === o.id ? 'active' : ''}`}
-          aria-pressed={value === o.id}
-          onClick={() => onChange(o.id)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }
 
@@ -382,7 +335,6 @@ export function SettingsDrawer({
   onRefreshModels: () => void
 }) {
   const s = t(lang)
-  const surface = useSurfaceMotion()
   const pane = usePaneMotion()
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   useEffect(() => {
@@ -447,25 +399,15 @@ export function SettingsDrawer({
     { id: 'compute', label: s.sectionCompute }
   ]
 
-  useEscClose(tryClose)
 
   return (
-    <div className="overlay" onClick={tryClose}>
-      <motion.div
-        className="modal-shell"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        {...surface}
-      >
-        <div className="modal-header">
-          <h3>{s.settings}</h3>
-          <div style={{ flex: 1 }} />
-          <button type="button" data-shot="close-modal" data-tour="settings-close" className="btn btn-ghost" onClick={tryClose}>
-            {s.close}
-          </button>
-        </div>
-
+    <ModalShell
+      title={s.settings}
+      onClose={tryClose}
+      closeLabel={s.close}
+      closeDataShot="close-modal"
+      closeDataTour="settings-close"
+    >
         <div className="settings-body">
           <nav className="settings-nav" aria-label={s.settings}>
             {tabs.map((tab) => (
@@ -847,16 +789,13 @@ export function SettingsDrawer({
           {activeTab === 'hotwords' && hotwordDraft ? (
             <div className="hw-default-toggle" title={s.defaultGroup}>
               <span className="pref-label">{s.defaultGroupShort}</span>
-              <button
-                type="button"
-                className={`toggle ${hotwordDraft.default_group_enabled ? 'on' : ''}`}
-                role="switch"
-                aria-checked={hotwordDraft.default_group_enabled}
+              <Toggle
+                on={hotwordDraft.default_group_enabled}
                 aria-label={s.defaultGroup}
-                onClick={() =>
+                onChange={(v) =>
                   onHotwordsChange({
                     ...hotwordDraft,
-                    default_group_enabled: !hotwordDraft.default_group_enabled,
+                    default_group_enabled: v,
                     default_group:
                       hotwordDraft.default_group || hotwordDraft.groups[0]?.id || null
                   })
@@ -910,7 +849,6 @@ export function SettingsDrawer({
             />
           )}
         </AnimatePresence>
-      </motion.div>
-    </div>
+    </ModalShell>
   )
 }

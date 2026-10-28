@@ -1,8 +1,6 @@
-import { motion } from 'framer-motion'
 import { formatDuration, heatTooltip, moreItems, t, taskStatusLabel, UiLang } from '../i18n'
-import { useEscClose } from '../esc'
-import { useSurfaceMotion } from '../motion'
 import type { StatsSnapshot } from '../../../shared/types'
+import { ModalShell } from './ui'
 
 /**
  * 列表封顶：多出来的折成「还有 N 条」，放在卡片标题行里（不额外占高度）。
@@ -51,25 +49,15 @@ export function StatsPanel({
   const recent = stats.recentSession.slice(0, RECENT_MAX)
   const hasRecent = recent.length > 0 || !!stats.lastOutput
 
-  const surface = useSurfaceMotion()
-  useEscClose(onClose)
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <motion.div
-        className="modal-shell"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        {...surface}
-      >
-        <div className="modal-header" data-tour="stats-header">
-          <h3>{s.statsTitle}</h3>
-          <div style={{ flex: 1 }} />
-          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>
-            {s.close}
-          </button>
-        </div>
+    <ModalShell
+      title={s.statsTitle}
+      onClose={onClose}
+      closeLabel={s.close}
+      headerDataTour="stats-header"
+      closeDataShot="close-modal"
+    >
         <div className="modal-body stats-body" style={{ whiteSpace: 'normal' }}>
           {empty ? (
             <p>{s.statsEmpty}</p>
@@ -218,7 +206,6 @@ export function StatsPanel({
             </>
           )}
         </div>
-      </motion.div>
-    </div>
+    </ModalShell>
   )
 }

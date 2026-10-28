@@ -1,0 +1,74 @@
+/**
+ * Design tokens — map EXISTING app values first; primitives/CSS consume these.
+ * Cross-platform unified content UI (no per-OS skins). Dark theme is out of scope.
+ */
+:root {
+  /* ── Color (existing palette) ── */
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --line: #e2e8f0;
+  --line-soft: #ecf0f4;
+  --divider: #cbd5e1;
+  --text: #0f172a;
+  --muted: #64748b;
+  /* Was #94a3b8 (~2.56:1 on white). Bumped to ~4.5:1; still slightly softer than --muted. */
+  --muted-soft: #667892;
+  --accent: #0d9488;
+  --accent-soft: #ccfbf1;
+  --accent-mist: #e6fffa;
+  --logo: #0f766e;
+  --danger: #dc2626;
+  --danger-soft: #fee2e2;
+  --warn: #d97706;
+  --warn-soft: #fff7ed;
+  --ok: #0d9488;
+  --row-hover: #f8fafc;
+  --zebra: #fafbfc;
+  --switch-off: #cbd5e1;
+  --shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.12);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --titlebar-h: 44px;
+  --font: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 120ms;
+  --dur-layer: 160ms;
+  --dur-surface: 220ms;
+  color-scheme: light;
+
+  /* Semantic aliases (same values; prefer these in new code) */
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+
+  /* ── Spacing (common gaps/paddings already used in app.css) ── */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 24px;
+
+  /* ── Font sizes (existing rem ladder) ── */
+  --fs-2xs: 0.68rem;
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.75rem;
+  --fs-md: 0.78rem;
+  --fs-base: 0.82rem;
+  --fs-lg: 0.84rem;
+  --fs-xl: 0.88rem;
+  --fs-2xl: 0.95rem;
+  --fs-3xl: 1rem;
+  --fs-4xl: 1.12rem;
+  --fs-title: 1.2rem;
+
+  /* ── Z layers (mapped from prior hard-coded indexes) ──
+     overlay 40 · modal(fixed confirm) 60 · popover 80 · tour 90+ */
+  --z-overlay: 40;
+  --z-modal: 60;
+  --z-popover: 80;
+  --z-tour: 90;
+}

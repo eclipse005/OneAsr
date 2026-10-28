@@ -1,36 +1,4 @@
-:root {
-  --bg: #f4f6f8;
-  --panel: #ffffff;
-  --line: #e2e8f0;
-  --line-soft: #ecf0f4;
-  --divider: #cbd5e1;
-  --text: #0f172a;
-  --muted: #64748b;
-  --muted-soft: #94a3b8;
-  --accent: #0d9488;
-  --accent-soft: #ccfbf1;
-  --accent-mist: #e6fffa;
-  --logo: #0f766e;
-  --danger: #dc2626;
-  --danger-soft: #fee2e2;
-  --warn: #d97706;
-  --warn-soft: #fff7ed;
-  --ok: #0d9488;
-  --row-hover: #f8fafc;
-  --zebra: #fafbfc;
-  --switch-off: #cbd5e1;
-  --shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.12);
-  --radius: 14px;
-  --radius-sm: 10px;
-  --titlebar-h: 44px;
-  --font: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-micro: 120ms;
-  --dur-layer: 160ms;
-  --dur-surface: 220ms;
-  color-scheme: light;
-}
+@import './tokens.css';
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -105,7 +73,7 @@ button:focus-visible {
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn-primary:disabled {
   opacity: 1;
-  background: #e2e8f0;
+  background: var(--line);
   color: var(--muted);
   box-shadow: none;
 }
@@ -256,7 +224,7 @@ html[lang='en'] .row-chip.transcript-chip {
 /* 悬停弹卡：portal 到 body + fixed 定位（卡片内的绝对定位会被 .task-list 的
    overflow:auto 裁掉），位置由 JS 给，底部放不下会翻到上方 */
 .hover-card {
-  z-index: 80; display: flex; flex-direction: column; gap: 4px;
+  z-index: var(--z-popover); display: flex; flex-direction: column; gap: 4px;
   min-width: 210px; padding: 8px 10px; background: #fff;
   border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
 }
@@ -280,7 +248,7 @@ html[lang='en'] .row-chip.transcript-chip {
 .timing-sep { height: 1px; background: var(--line-soft); margin: -2px 0; }
 /* 行内 chip 的下拉：portal 到 body + fixed 定位（不被 .task-list 裁剪），位置由 JS 给 */
 .chip-menu {
-  z-index: 70;
+  z-index: var(--z-popover);
   min-width: 130px; max-height: 260px; overflow: auto;
   padding: 4px; background: #fff; border: 1px solid var(--line);
   border-radius: 10px; box-shadow: var(--shadow-lg);
@@ -520,7 +488,7 @@ html[lang='en'] .badge-slot { width: 100px; }
    浮窗从标题栏下方开始：右上角 138×44 的系统按钮区永远在最上层，
    面板一旦伸进那 44px，圆角和右上角就会被 overlay 的白色矩形吃掉。 */
 .overlay {
-  position: fixed; inset: var(--titlebar-h) 0 0; z-index: 40;
+  position: fixed; inset: var(--titlebar-h) 0 0; z-index: var(--z-overlay);
   background: transparent;
   display: flex; justify-content: center; align-items: center;
   padding: 16px 24px 24px;
@@ -571,7 +539,7 @@ html[lang='en'] .badge-slot { width: 100px; }
 }
 .modal-confirm-backdrop.is-fixed {
   position: fixed; top: var(--titlebar-h); left: 0; right: 0; bottom: 0;
-  z-index: 60;
+  z-index: var(--z-modal);
 }
 .modal-confirm {
   width: min(380px, 100%);
@@ -759,7 +727,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   display: grid; grid-template-columns: repeat(30, 1fr); gap: 4px;
 }
 .heat i {
-  aspect-ratio: 1; border-radius: 4px; background: #e2e8f0;
+  aspect-ratio: 1; border-radius: 4px; background: var(--line);
 }
 .heat i.l1 { background: #99f6e4; }
 .heat i.l2 { background: #5eead4; }
@@ -771,7 +739,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .bar-row { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; }
 .bar-row .lab { width: 34px; color: var(--muted); }
 .bar-row .num { width: 28px; text-align: right; color: var(--muted); }
-.bar-row .track { flex: 1; height: 8px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
+.bar-row .track { flex: 1; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .bar-row .track > b { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 
 /* 本次会话：两列紧凑行，超出的折成计数 */
@@ -1259,7 +1227,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  z-index: 40;
+  z-index: var(--z-overlay);
   min-width: 260px;
   max-width: 360px;
   margin: 0;
@@ -1593,18 +1561,18 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .tour-root {
   position: fixed;
   inset: 0;
-  z-index: 90;
+  z-index: var(--z-tour);
   pointer-events: none;
 }
 .tour-mask {
   position: fixed;
   background: rgba(15, 23, 42, 0.48);
   pointer-events: auto;
-  z-index: 90;
+  z-index: var(--z-tour);
 }
 .tour-spotlight {
   position: fixed;
-  z-index: 91;
+  z-index: calc(var(--z-tour) + 1);
   /* 圆角选区环；小按钮看起来接近圆，大面板仍是圆角矩形 */
   border-radius: 12px;
   box-shadow:
@@ -1616,7 +1584,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 .tour-bubble {
   position: fixed;
-  z-index: 92;
+  z-index: calc(var(--z-tour) + 2);
   width: min(320px, calc(100vw - 24px));
   pointer-events: auto;
   background: var(--panel);
@@ -1673,7 +1641,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .tour-welcome-backdrop {
   position: fixed;
   inset: var(--titlebar-h) 0 0;
-  z-index: 95;
+  z-index: calc(var(--z-tour) + 5);
   background: rgba(15, 23, 42, 0.4);
   display: flex;
   align-items: center;

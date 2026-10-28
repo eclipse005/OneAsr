@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { t, UiLang } from '../i18n'
-import { useEscClose } from '../esc'
-import { usePaneMotion, useSurfaceMotion } from '../motion'
+import { usePaneMotion } from '../motion'
+import { ModalShell } from './ui'
 
 type GuideTab = 'use' | 'transcript' | 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 type Copy = ReturnType<typeof t>
@@ -192,10 +192,8 @@ function TabBody({ tab, s }: { tab: GuideTab; s: Copy }) {
 
 export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => void }) {
   const s = t(lang)
-  const surface = useSurfaceMotion()
   const pane = usePaneMotion()
   const [tab, setTab] = useState<GuideTab>('use')
-  useEscClose(onClose)
 
   const tabs: { id: GuideTab; label: string }[] = [
     { id: 'use', label: s.guideTabUse },
@@ -208,21 +206,13 @@ export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => voi
   ]
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <motion.div
-        className="modal-shell guide-shell"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        {...surface}
-      >
-        <div className="modal-header">
-          <h3>{s.guideTitle}</h3>
-          <div style={{ flex: 1 }} />
-          <button type="button" data-shot="close-modal" className="btn btn-ghost" onClick={onClose}>
-            {s.close}
-          </button>
-        </div>
+    <ModalShell
+      title={s.guideTitle}
+      onClose={onClose}
+      closeLabel={s.close}
+      shellClassName="guide-shell"
+      closeDataShot="close-modal"
+    >
         <div className="settings-body">
           <nav className="settings-nav" aria-label={s.guideTitle}>
             {tabs.map((item) => (
@@ -245,7 +235,6 @@ export function GuidePanel({ lang, onClose }: { lang: UiLang; onClose: () => voi
             </AnimatePresence>
           </div>
         </div>
-      </motion.div>
-    </div>
+    </ModalShell>
   )
 }
