@@ -23,7 +23,7 @@ button:focus-visible {
 .titlebar {
   display: flex; align-items: center; height: var(--titlebar-h);
   /* 右侧不留内边距：窗口按钮像系统的一样贴到窗口边缘 */
-  padding: 0 0 0 16px;
+  padding: 0 0 0 var(--space-7);
   -webkit-app-region: drag;
   /* 用纯白与系统 Window Controls Overlay 同色（overlay 是不透明矩形，
      半透明标题栏会在右侧显出一块白框）；底边线也交给 .toolbar 的 border-top，
@@ -53,8 +53,8 @@ button:focus-visible {
 .titlebar .spacer { flex: 1; }
 
 .toolbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px; background: var(--panel);
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-5) var(--space-7); background: var(--panel);
   /* 顶边线必须画在标题栏之外：44px 高度正好是 overlay 的覆盖范围。 */
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -65,8 +65,8 @@ button:focus-visible {
 .toolbar .grow { flex: 1; }
 
 .btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 34px; padding: 0 14px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  height: 34px; padding: 0 var(--space-6); border-radius: var(--radius-sm);
   border: 1px solid transparent;
   transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
@@ -81,7 +81,7 @@ button:focus-visible {
 .btn-primary.is-acked:disabled {
   background: linear-gradient(135deg, #14b8a6, var(--accent));
   color: #fff;
-  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.28);
+  box-shadow: var(--shadow-accent);
 }
 .btn-danger {
   background: var(--danger);
@@ -92,7 +92,7 @@ button:focus-visible {
 .btn-primary {
   background: linear-gradient(135deg, #14b8a6, var(--accent));
   color: #fff; font-weight: 650;
-  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.28);
+  box-shadow: var(--shadow-accent);
 }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.04); }
 .btn-ghost {
@@ -101,11 +101,11 @@ button:focus-visible {
 .btn-ghost:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-mist); color: var(--logo); }
 .btn-danger-ghost:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
 
-.main { flex: 1; min-height: 0; position: relative; padding: 16px; }
+.main { flex: 1; min-height: 0; position: relative; padding: var(--space-7); }
 /* 拖着文件进来时，不管列表空不空都要有落点提示（以前只有空态那个虚线框会亮） */
 .main.dragging::after {
   content: ''; position: absolute; inset: 8px; z-index: 5;
-  border: 2px dashed var(--accent); border-radius: calc(var(--radius) + 6px);
+  border: 2px dashed var(--accent); border-radius: var(--radius-lg);
   background: var(--accent-mist); opacity: 0.5; pointer-events: none;
 }
 /* 空态时落点区自己就是提示框（它会亮出虚线+变底色），别再叠一层窗口级的虚线框——
@@ -119,11 +119,11 @@ button:focus-visible {
      边框位留着（透明），真把文件拖进来时再亮出虚线（见 .dropzone.active），
      这样既不占地方、拖放时又不缺提示。 */
   border: 1.5px dashed transparent;
-  border-radius: calc(var(--radius) + 6px);
+  border-radius: var(--radius-lg);
   /* 底色一路淡到窗口底（--bg），跟下面的状态栏接得上，看不出接缝 */
   background: linear-gradient(180deg, #fff 0%, var(--accent-mist) 58%, var(--bg) 100%);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; color: var(--muted);
+  gap: var(--space-4); color: var(--muted);
   transition: border-color var(--dur-layer) var(--ease-out), background var(--dur-layer) var(--ease-out), box-shadow var(--dur-layer) var(--ease-out);
 }
 /* 空态时落点区铺满整个内容区：不要四周留一圈边，也不要圆角——
@@ -138,7 +138,7 @@ button:focus-visible {
   color: var(--logo);
 }
 .dropzone .icon {
-  width: 56px; height: 56px; border-radius: 16px;
+  width: 56px; height: 56px; border-radius: var(--radius-lg);
   background: var(--panel); border: 1px solid var(--line);
   display: grid; place-items: center;
   box-shadow: var(--shadow); color: var(--accent);
@@ -149,11 +149,11 @@ button:focus-visible {
   -webkit-mask: url('@assets/icons/audio.svg') center / contain no-repeat;
   mask: url('@assets/icons/audio.svg') center / contain no-repeat;
 }
-.dropzone-actions { display: flex; gap: 8px; margin-top: 8px; }
-.dropzone h2 { margin: 0; color: var(--text); font-size: 1.2rem; font-weight: 700; }
-.dropzone p { margin: 0; font-size: 0.92rem; }
+.dropzone-actions { display: flex; gap: var(--space-3); margin-top: var(--space-3); }
+.dropzone h2 { margin: 0; color: var(--text); font-size: var(--fs-title); font-weight: 700; }
+.dropzone p { margin: 0; font-size: var(--fs-2xl); color: var(--muted); }
 
-.task-list { height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+.task-list { height: 100%; overflow: auto; display: flex; flex-direction: column; gap: var(--space-4); padding-right: 2px; }
 
 /* ── 任务行内能力（对齐旧版：媒体图标、尺寸·时长、排队位次、每行语言/热词组/人声分离、耗时明细）── */
 .task-card .media-icon { width: 15px; height: 15px; flex: none; background: var(--muted-soft); }
@@ -303,9 +303,9 @@ html[lang='en'] .row-chip.transcript-chip {
      左列留够，右列的 chip 自己换行（.row-chips 有 wrap），状态永远完整。 */
   display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, auto); gap: 6px 14px;
   align-items: center;
-  padding: 11px 14px 11px 18px; border-radius: var(--radius);
+  padding: 11px var(--space-6) 11px 18px; border-radius: var(--radius);
   background: var(--panel); border: 1px solid var(--line);
-  box-shadow: 0 4px 16px rgba(15,23,42,0.04);
+  box-shadow: var(--shadow-card);
   transition: border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
 }
 /* 左侧状态色条：扫列表时状态一眼可见，不用去读药丸上的字（旧版也是这个做法） */
@@ -326,7 +326,7 @@ html[lang='en'] .row-chip.transcript-chip {
 }
 .task-card .meta-line {
   display: flex; align-items: center; gap: 10px; min-height: 18px;
-  color: var(--muted); font-size: 0.75rem; font-weight: 500;
+  color: var(--muted); font-size: var(--fs-sm); font-weight: 500;
   min-width: 0;
 }
 /* 元信息（大小 · 时长、耗时）可以被挤：挤不下时先省略它们，
@@ -411,17 +411,26 @@ html[lang='en'] .badge-slot { width: 100px; }
 .task-card .badge.running::before { animation: dotPulse 1.6s ease-in-out infinite; }
 @keyframes dotPulse { 0%, 100% { opacity: .35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-micro: 1ms; --dur-layer: 1ms; --dur-surface: 1ms; }
+  :root {
+    --dur-micro: 1ms;
+    --dur-layer: 1ms;
+    --dur-surface: 1ms;
+    --dur-overlay: 1ms;
+  }
   .task-card .badge.running::before { animation: none; }
   .hover-card, .main.dragging::after { animation: none; }
 }
-/* 图标按钮：等宽 32，hover 才出底色；危险动作 hover 才转红 */
+/* 图标按钮：等宽 32（稠密行内），hover 才出底色；危险动作 hover 才转红。
+   命中区保持视觉尺寸；focus-visible 用 soft ring，不撑开布局。 */
 .icon-btn {
   width: 32px; height: 32px; flex: none; display: grid; place-items: center;
   border-radius: 9px; border: 1px solid transparent; background: transparent;
-  color: var(--muted); transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
+  color: var(--muted);
+  transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
 }
 .icon-btn:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
+.icon-btn:active:not(:disabled) { transform: translateY(1px); }
+.icon-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 /* 行内主操作**不用实心填充**：实心青绿是"页面级 CTA"的权重（工具栏那个「＋添加」），
    用在每一行的图标上会让列表一直在喊"点我"，而且完成行/失败行的主操作都成了同一块绿，
    主次也就没了。改用统一幽灵样式 + 主操作给强调色图标，hover 才出淡底。 */
@@ -451,10 +460,10 @@ html[lang='en'] .badge-slot { width: 100px; }
 .badge.cancelled { background: var(--warn-soft); color: var(--warn); border-color: #fed7aa; }
 
 .statusbar {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  min-height: 36px; padding: 6px 16px;
+  display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap;
+  min-height: 36px; padding: var(--space-2) var(--space-7);
   border-top: 1px solid var(--line); background: var(--panel);
-  color: var(--muted); font-size: 0.78rem;
+  color: var(--muted); font-size: var(--fs-md);
 }
 .statusbar .sep { width: 1px; height: 14px; background: var(--line); }
 .statusbar .grow { flex: 1 1 auto; min-width: 8px; }
@@ -491,7 +500,7 @@ html[lang='en'] .badge-slot { width: 100px; }
   position: fixed; inset: var(--titlebar-h) 0 0; z-index: var(--z-overlay);
   background: transparent;
   display: flex; justify-content: center; align-items: center;
-  padding: 16px 24px 24px;
+  padding: var(--space-7) var(--space-8) var(--space-8);
 }
 
 /* 所有浮窗一个尺寸：900 × 640（窗口再小就按视口收），换标签页/换面板都不跳动。
@@ -505,28 +514,28 @@ html[lang='en'] .badge-slot { width: 100px; }
   max-height: min(640px, calc(100vh - var(--titlebar-h) - 40px));
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.22), 0 2px 10px rgba(15, 23, 42, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
   display: flex; flex-direction: column;
   overflow: hidden;
 }
 
 
 .modal-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-5) var(--space-7); border-bottom: 1px solid var(--line);
   background: #fff;
   flex-shrink: 0;
 }
-.modal-header h3 { margin: 0; font-size: 1rem; color: var(--text); font-weight: 750; }
+.modal-header h3 { margin: 0; font-size: var(--fs-3xl); color: var(--text); font-weight: 750; }
 .modal-body {
-  flex: 1; overflow: auto; padding: 12px 14px 14px;
-  display: flex; flex-direction: column; gap: 10px; background: var(--bg);
+  flex: 1; overflow: auto; padding: var(--space-5) var(--space-6) var(--space-6);
+  display: flex; flex-direction: column; gap: var(--space-4); background: var(--bg);
   min-height: 0;
 }
 .modal-footer {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel);
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-4) var(--space-6); border-top: 1px solid var(--line); background: var(--panel);
   flex-shrink: 0;
 }
 .modal-footer .hint { flex: 1; color: var(--warn); font-size: 0.82rem; font-weight: 600; }
@@ -543,10 +552,10 @@ html[lang='en'] .badge-slot { width: 100px; }
 }
 .modal-confirm {
   width: min(380px, 100%);
-  padding: 18px 20px 16px;
-  border: 1px solid var(--line); border-radius: 14px;
+  padding: 18px 20px var(--space-7);
+  border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--panel); box-shadow: var(--shadow-lg);
-  display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; gap: var(--space-7);
 }
 .modal-confirm p { margin: 0; color: var(--text); font-weight: 600; line-height: 1.5; white-space: pre-line; }
 .modal-confirm.is-danger p { color: var(--danger); }
@@ -656,14 +665,22 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 .toggle {
   position: relative; width: 42px; height: 24px; border-radius: 999px;
-  background: var(--switch-off); transition: background var(--dur-micro) var(--ease-out); flex-shrink: 0;
+  background: var(--switch-off);
+  transition: background var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
+  flex-shrink: 0;
 }
 .toggle.on { background: var(--accent); }
+.toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* Invisible hit pad → ~44px tall without stretching the track fill. */
+.toggle::before {
+  content: ""; position: absolute; inset: -10px -6px; border-radius: 999px;
+}
 .toggle::after {
   content: ""; position: absolute; top: 3px; left: 3px;
   width: 18px; height: 18px; border-radius: 50%; background: #fff;
   box-shadow: 0 1px 3px rgba(15,23,42,0.2);
   transition: transform var(--dur-micro) var(--ease-out);
+  pointer-events: none;
 }
 .toggle.on::after { transform: translateX(18px); }
 
@@ -987,9 +1004,10 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .seg {
   display: inline-flex;
   align-items: stretch;
-  height: 30px;
+  height: 32px;
+  min-height: 32px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
   background: #fff;
   width: fit-content;
@@ -997,8 +1015,8 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 .seg-item {
   height: 100%;
-  padding: 0 12px;
-  font-size: 0.82rem;
+  padding: 0 var(--space-5);
+  font-size: var(--fs-base);
   color: var(--muted);
   background: transparent;
   border: none;
@@ -1008,6 +1026,8 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 .seg-item:last-child { border-right: none; }
 .seg-item:hover { color: var(--logo); background: var(--accent-mist); }
+.seg-item:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); z-index: 1; }
+.seg-item:active:not(.active) { background: var(--accent-soft); }
 .seg-item.active {
   background: var(--accent-soft);
   color: var(--logo);
@@ -1653,9 +1673,9 @@ select:focus, .text-input:focus, textarea.text-input:focus {
   width: min(420px, 100%);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  padding: 28px 24px 20px;
+  padding: 28px var(--space-8) 20px;
   display: flex;
   flex-direction: column;
   align-items: stretch;

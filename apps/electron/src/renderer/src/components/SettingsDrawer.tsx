@@ -397,6 +397,7 @@ export function SettingsDrawer({
       title={s.settings}
       onClose={tryClose}
       closeLabel={s.close}
+      shellClassName="settings-shell"
       closeDataShot="close-modal"
       closeDataTour="settings-close"
     >
