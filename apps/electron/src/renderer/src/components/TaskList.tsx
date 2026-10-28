@@ -343,7 +343,7 @@ export function TaskList({
                 {duplicateName && <div className="meta">{task.input}</div>}
               </div>
               {/* 右：热词 chips + 状态 + 动作（与旧版一致：热词贴着右侧，动作在最右） */}
-              <div className="controls">
+              <div className="controls" data-tour={taskIndex === 0 ? 'task-row' : undefined}>
                 <div className="row-chips">
                   {chips.showLanguage && (
                     <SelectMenu

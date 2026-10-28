@@ -21,7 +21,14 @@ import {
   TOUR_STORAGE_KEY
 } from './storage'
 import { waitForSelector } from './wait'
-import type { TourStep, TourStepApi, TourStepId } from './types'
+import {
+  resolveTourAllowSkipWait,
+  resolveTourSelector,
+  resolveTourWaitFor,
+  type TourStep,
+  type TourStepApi,
+  type TourStepId
+} from './types'
 import { tourEscClosesSettings } from './tourEsc'
 
 export type TourHostApi = TourStepApi & {
@@ -147,7 +154,8 @@ export function TourProvider({
       if (paneTab) {
         await api.openSettings(paneTab)
       }
-      const waitSel = next.waitFor ?? next.selector
+      const liveAfterBefore = liveCtxFrom(hostRef.current)
+      const waitSel = resolveTourWaitFor(next, liveAfterBefore)
       if (waitSel) {
         let found = await waitForSelector(waitSel, next.waitTimeoutMs ?? 8000)
         // 面板步：超时则再开一次对应 tab 再等，避免竞态后误跳过（热词→输出）
@@ -197,7 +205,7 @@ export function TourProvider({
     void goToIndex(0)
   }, [goToIndex])
 
-  // Esc：设置步内先关设置（effect 会跳到 toolbar-add）；其它步才退出引导。
+  // Esc：设置步内先关设置（effect 会跳到 add-or-drop）；其它步才退出引导。
   // 用稳定 callback + ref，避免每次 render 重注册把 Settings 的 Esc 挤出栈顶。
   const onTourEsc = useCallback(() => {
     if (tourEscClosesSettings(stepIdRef.current, hostRef.current.settingsOpen)) {
@@ -219,7 +227,7 @@ export function TourProvider({
     void (async () => {
       try {
         const list = visibleSteps(liveCtxFrom(hostRef.current))
-        const after = list.findIndex((x) => x.id === 'toolbar-add')
+        const after = list.findIndex((x) => x.id === 'add-or-drop')
         if (after >= 0) await goToIndex(after)
         else {
           const cur = list.findIndex((x) => x.id === stepId)
@@ -236,9 +244,9 @@ export function TourProvider({
     if (!running || !stepId) return
     const list = visibleSteps(ctx)
     if (!list.some((x) => x.id === stepId)) {
-      // 当前步因条件消失（例如加了任务后 dropzone 没了）→ 进下一步
+      // 当前步因条件消失（例如加了任务后空态步没了）→ 进下一步
       const fallback = list.findIndex((x) =>
-        ['toolbar-add', 'task-lang', 'toolbar-stats', 'toolbar-guide', 'done'].includes(x.id)
+        ['add-or-drop', 'task-row', 'done'].includes(x.id)
       )
       void goToIndex(fallback >= 0 ? fallback : 0)
     }
@@ -287,7 +295,7 @@ export function TourProvider({
       </AnimatePresence>
       <TourOverlay
         active={running && !!step}
-        selector={step?.selector ?? null}
+        selector={step ? resolveTourSelector(step.selector, ctx) : null}
         title={
           step
             ? copy(typeof step.titleKey === 'function' ? step.titleKey(ctx) : step.titleKey)
@@ -306,7 +314,7 @@ export function TourProvider({
         clickHint={s.tourClickHint}
         clickOrNextHint={s.tourClickOrNextHint}
         skipWaitLabel={s.tourSkipWait}
-        showSkipWait={!!step?.allowSkipWait}
+        showSkipWait={step ? resolveTourAllowSkipWait(step, ctx) : false}
         isLast={step?.id === 'done'}
         onNext={() => void advance()}
         onSkip={() => stop('skip')}

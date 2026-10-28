@@ -1,21 +1,24 @@
 import type { TourContext, TourStep } from './types'
 
 /**
- * 完整产品引导步骤。条件路径在 when / before 里分叉：
- * - 模型未就绪：状态栏 → 设置 → 模型；可跳过下载等待
- * - 模型已就绪：状态栏只讲解；跳过下载与空态「打开设置」
- * - 空列表且模型就绪：讲拖放区；未就绪：跳过拖放（画布不可投）
- * - 有任务：讲行内芯片（不点「开始」以免真跑 ASR）
+ * 产品引导约 6 步；就绪与未就绪同一课表，仅个别文案 / 高亮 / skip-wait 分叉：
+ * 1. status-models — 必点状态栏进「设置 → 模型」
+ * 2. settings-models — 模型页；未就绪时同步讲下载（可跳过等待）
+ * 3. settings-hotwords — 热词页（before 直接打开）
+ * 4. settings-output — 输出页（before 直接打开）
+ * 5. add-or-drop — 添加 / 拖放合并；设置与统计在 before 里关掉
+ * 6. done — 收束（指南可重开 + 工具栏统计）
+ * 有任务时在添加后多一步 task-row（行内芯片总览；开始仅 next，不点跑 ASR）
  */
 export const TOUR_STEPS: TourStep[] = [
   {
     id: 'status-models',
     selector: '[data-tour="status-models"]',
     titleKey: 'tourStatusTitle',
-    bodyKey: 'tourStatusBody',
+    bodyKey: (ctx) => (ctx.modelsReady ? 'tourStatusBodyReady' : 'tourStatusBody'),
     placement: 'top',
-    // 未就绪：点状态栏进设置；已就绪：下一步即可（文案说明可跳过）
-    advance: 'click-or-next',
+    // 就绪与未就绪都必点：与产品 onOpenModels 一致，进设置→模型
+    advance: 'click',
     before: async (_ctx, api) => {
       api.closeGuide()
       return true
@@ -23,44 +26,20 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: 'settings-models',
-    selector: '[data-tour="settings-pane-models"]',
+    // 未就绪：高亮下载控件，同页讲模型+下载；就绪：高亮模型面板
+    selector: (ctx) =>
+      ctx.modelsReady
+        ? '[data-tour="settings-pane-models"]'
+        : '[data-tour="model-download-asr"]',
     titleKey: 'tourModelsTitle',
-    bodyKey: 'tourModelsBody',
-    // 气泡放在面板左侧（盖住导航侧），避免挡住模型内容与 CLI 横幅
+    bodyKey: (ctx) => (ctx.modelsReady ? 'tourModelsBody' : 'tourModelsBodyNeedDownload'),
     placement: 'left',
     advance: 'next',
-    waitFor: '[data-tour="settings-pane-models"]',
-    before: async (_ctx, api) => {
-      // 必须赢过工具栏 Settings 默认 openSettings('general') 的竞态：
-      // 进入本步时强制打开 models，并确认 pane 出现后再亮气泡。
-      await api.openSettings('models')
-      return true
-    }
-  },
-  {
-    id: 'settings-download',
-    selector: '[data-tour="model-download-asr"]',
-    titleKey: 'tourDownloadTitle',
-    bodyKey: 'tourDownloadBody',
-    placement: 'left',
-    advance: 'next',
-    allowSkipWait: true,
-    // 只在真缺权重时讲下载
-    when: (ctx) => !ctx.modelsReady,
-    waitFor: '[data-tour="model-download-asr"]',
-    before: async (_ctx, api) => {
-      await api.openSettings('models')
-      return true
-    }
-  },
-  {
-    id: 'settings-hotwords-tab',
-    selector: '[data-tour="settings-tab-hotwords"]',
-    titleKey: 'tourHotwordsTabTitle',
-    bodyKey: 'tourHotwordsTabBody',
-    placement: 'right',
-    // click-or-next：Esc 关掉设置后仍可「跳过此步」，不会卡死无 Next 的 click-only
-    advance: 'click-or-next',
+    waitFor: (ctx) =>
+      ctx.modelsReady
+        ? '[data-tour="settings-pane-models"]'
+        : '[data-tour="model-download-asr"]',
+    allowSkipWait: (ctx) => !ctx.modelsReady,
     before: async (_ctx, api) => {
       await api.openSettings('models')
       return true
@@ -74,19 +53,10 @@ export const TOUR_STEPS: TourStep[] = [
     placement: 'left',
     advance: 'next',
     waitFor: '[data-tour="settings-pane-hotwords"]',
-    // 点标签或「跳过此步」都要先切到热词页，再等 pane；否则 waitFor 超时会误跳到 output-tab
     before: async (_ctx, api) => {
       await api.openSettings('hotwords')
       return true
     }
-  },
-  {
-    id: 'settings-output-tab',
-    selector: '[data-tour="settings-tab-output"]',
-    titleKey: 'tourOutputTabTitle',
-    bodyKey: 'tourOutputTabBody',
-    placement: 'right',
-    advance: 'click-or-next'
   },
   {
     id: 'settings-output',
@@ -102,28 +72,15 @@ export const TOUR_STEPS: TourStep[] = [
     }
   },
   {
-    id: 'settings-close',
-    selector: '[data-tour="settings-close"]',
-    titleKey: 'tourSettingsCloseTitle',
-    bodyKey: 'tourSettingsCloseBody',
-    placement: 'bottom',
-    // 点关闭或「下一步」；设置真正关掉时引擎会立刻推进（见 TourController）
-    advance: 'click-or-next',
-    waitFor: '[data-tour="settings-close"]',
-    before: async (ctx) => {
-      if (!ctx.settingsOpen || !document.querySelector('[data-tour="settings-close"]')) {
-        return false
-      }
-      return true
-    }
-  },
-  {
-    id: 'toolbar-add',
-    selector: '[data-tour="toolbar-add"]',
+    id: 'add-or-drop',
+    // 空列表且模型就绪：高亮拖放区；否则高亮工具栏添加（未就绪画布不可投）
+    selector: (ctx) =>
+      !ctx.hasTasks && ctx.modelsReady
+        ? '[data-tour="dropzone"]'
+        : '[data-tour="toolbar-add"]',
     titleKey: 'tourAddTitle',
     bodyKey: 'tourAddBody',
     placement: 'bottom',
-    // 不强迫点添加（会弹系统文件框）；讲解 + 下一步跳过
     advance: 'next',
     before: async (_ctx, api) => {
       api.closeSettings()
@@ -132,108 +89,15 @@ export const TOUR_STEPS: TourStep[] = [
     }
   },
   {
-    id: 'dropzone',
-    selector: '[data-tour="dropzone"]',
-    titleKey: 'tourDropzoneTitle',
-    bodyKey: 'tourDropzoneBody',
+    id: 'task-row',
+    selector: '[data-tour="task-row"]',
+    titleKey: 'tourTaskRowTitle',
+    bodyKey: 'tourTaskRowBody',
     placement: 'bottom',
+    // 绝不用 click 推进——会点到「开始」真跑 ASR
     advance: 'next',
-    // 模型未就绪时空态不可投，勿高亮整块画布
-    when: (ctx) => !ctx.hasTasks && ctx.modelsReady
-  },
-  {
-    id: 'empty-open-settings',
-    selector: '[data-tour="empty-open-settings"]',
-    titleKey: 'tourEmptySettingsTitle',
-    bodyKey: 'tourEmptySettingsBody',
-    placement: 'top',
-    advance: 'click-or-next',
-    when: (ctx) => !ctx.hasTasks && !ctx.modelsReady,
-    before: async (ctx) => {
-      // 刚从设置出来且仍未就绪：讲空态上的「打开设置」入口
-      return !ctx.settingsOpen
-    }
-  },
-  {
-    id: 'task-lang',
-    selector: '[data-tour="task-lang"]',
-    titleKey: 'tourTaskLangTitle',
-    bodyKey: 'tourTaskLangBody',
-    placement: 'bottom',
-    advance: 'next',
-    when: (ctx) => ctx.hasTasks
-  },
-  {
-    id: 'task-hotwords',
-    selector: '[data-tour="task-hotwords"]',
-    titleKey: 'tourTaskHotwordsTitle',
-    bodyKey: 'tourTaskHotwordsBody',
-    placement: 'bottom',
-    advance: 'next',
-    when: (ctx) => ctx.hasTasks
-  },
-  {
-    id: 'task-sep',
-    selector: '[data-tour="task-sep"]',
-    titleKey: 'tourTaskSepTitle',
-    bodyKey: 'tourTaskSepBody',
-    placement: 'bottom',
-    advance: 'next',
-    when: (ctx) => ctx.hasTasks
-  },
-  {
-    id: 'task-transcript',
-    selector: '[data-tour="task-transcript"]',
-    titleKey: 'tourTaskTranscriptTitle',
-    bodyKey: 'tourTaskTranscriptBody',
-    placement: 'bottom',
-    advance: 'next',
-    when: (ctx) => ctx.hasTasks
-  },
-  {
-    id: 'task-start',
-    selector: '[data-tour="task-start"]',
-    titleKey: 'tourTaskStartTitle',
-    bodyKey: 'tourTaskStartBody',
-    placement: 'left',
-    // 绝不用 click 推进——那会真的开跑 ASR
-    advance: 'next',
-    when: (ctx) => ctx.hasTasks
-  },
-  {
-    id: 'task-output',
-    selector: '[data-tour="task-output"]',
-    titleKey: 'tourTaskOutputTitle',
-    bodyKey: 'tourTaskOutputBody',
-    placement: 'left',
-    advance: 'next',
-    when: (ctx) => ctx.hasTasks
-  },
-  {
-    id: 'toolbar-stats',
-    // 面板盖住工具栏按钮时洞会落空；高亮已打开的统计面板标题栏
-    selector: '[data-tour="stats-header"]',
-    titleKey: 'tourStatsTitle',
-    bodyKey: 'tourStatsBody',
-    placement: 'bottom',
-    advance: 'next',
-    waitFor: '[data-tour="stats-header"]',
-    before: async (_ctx, api) => {
-      await api.openStats()
-      return true
-    }
-  },
-  {
-    id: 'toolbar-guide',
-    selector: '[data-tour="toolbar-guide"]',
-    titleKey: 'tourGuideReopenTitle',
-    bodyKey: 'tourGuideReopenBody',
-    placement: 'bottom',
-    advance: 'next',
-    before: async (_ctx, api) => {
-      api.closeStats()
-      return true
-    }
+    when: (ctx) => ctx.hasTasks,
+    waitFor: '[data-tour="task-row"]'
   },
   {
     id: 'done',

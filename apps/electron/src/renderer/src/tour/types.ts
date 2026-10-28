@@ -12,23 +12,10 @@ export type TourAdvance =
 export type TourStepId =
   | 'status-models'
   | 'settings-models'
-  | 'settings-download'
-  | 'settings-hotwords-tab'
   | 'settings-hotwords'
-  | 'settings-output-tab'
   | 'settings-output'
-  | 'settings-close'
-  | 'toolbar-add'
-  | 'dropzone'
-  | 'empty-open-settings'
-  | 'task-lang'
-  | 'task-hotwords'
-  | 'task-sep'
-  | 'task-transcript'
-  | 'task-start'
-  | 'task-output'
-  | 'toolbar-stats'
-  | 'toolbar-guide'
+  | 'add-or-drop'
+  | 'task-row'
   | 'done'
 
 export type TourContext = {
@@ -42,8 +29,9 @@ export type TourStep = {
   /**
    * CSS selector；通常是 [data-tour="…"]。
    * null / 空 = 无高亮洞（收束步）。
+   * 也可按 ctx 动态选择（空列表就绪高亮拖放区等）。
    */
-  selector: string | null
+  selector: string | null | ((ctx: TourContext) => string | null)
   /** i18n key under tour*；可按 ctx 区分 missing / outdated */
   titleKey: string | ((ctx: TourContext) => string)
   bodyKey: string | ((ctx: TourContext) => string)
@@ -58,10 +46,10 @@ export type TourStep = {
    */
   before?: (ctx: TourContext, api: TourStepApi) => void | boolean | Promise<void | boolean>
   /** 高亮前等这个选择器出现（默认用 selector） */
-  waitFor?: string
+  waitFor?: string | ((ctx: TourContext) => string | undefined)
   waitTimeoutMs?: number
   /** 气泡上额外显示「跳过下载等待」之类 */
-  allowSkipWait?: boolean
+  allowSkipWait?: boolean | ((ctx: TourContext) => boolean)
 }
 
 export type TourStepApi = {
@@ -70,4 +58,22 @@ export type TourStepApi = {
   closeGuide: () => void
   openStats: () => Promise<void>
   closeStats: () => void
+}
+
+export function resolveTourSelector(
+  selector: TourStep['selector'],
+  ctx: TourContext
+): string | null {
+  return typeof selector === 'function' ? selector(ctx) : selector
+}
+
+export function resolveTourWaitFor(step: TourStep, ctx: TourContext): string | null {
+  if (step.waitFor) {
+    return typeof step.waitFor === 'function' ? step.waitFor(ctx) ?? null : step.waitFor
+  }
+  return resolveTourSelector(step.selector, ctx)
+}
+
+export function resolveTourAllowSkipWait(step: TourStep, ctx: TourContext): boolean {
+  return typeof step.allowSkipWait === 'function' ? !!step.allowSkipWait(ctx) : !!step.allowSkipWait
 }
