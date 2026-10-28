@@ -348,9 +348,7 @@ export function SettingsDrawer({
   onPickDir,
   onPickModel,
   onOpenModels,
-  onRefreshModels,
-  cliOutdated = false,
-  cliMissing = false
+  onRefreshModels
 }: {
   lang: UiLang
   draft: Settings
@@ -382,10 +380,6 @@ export function SettingsDrawer({
   ) => void
   onOpenModels: () => void
   onRefreshModels: () => void
-  /** CLI 能跑但缺 status/transcript 时为 true */
-  cliOutdated?: boolean
-  /** 二进制缺失 / 不可达 */
-  cliMissing?: boolean
 }) {
   const s = t(lang)
   const surface = useSurfaceMotion()
@@ -616,11 +610,6 @@ export function SettingsDrawer({
 
             {activeTab === 'models' && (
               <>
-                {(cliMissing || cliOutdated) && (
-                  <p className="cli-outdated-banner" role="status">
-                    {cliMissing ? s.cliMissing : s.cliOutdated}
-                  </p>
-                )}
                 <div className="models-toolbar">
                   <div className="models-status" onClick={onRefreshModels} title={s.refreshModelsStatus}>
                     <Pill ok={!!status?.models.asr.ready} label={s.asr} ready={s.ready} missing={s.missing} />

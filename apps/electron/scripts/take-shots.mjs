@@ -16,7 +16,7 @@ const env = {
   ...process.env,
   DISPLAY: process.env.DISPLAY || ':4',
   ELECTRON_DISABLE_GPU: '1',
-  ONEASR_APP_ROOT: process.env.ONEASR_APP_ROOT || '/workspace/oneasr-runtime',
+  // app root 交给主进程的 resolveAppRoot()（唯一决策点）；想指定就 export。
   ONEASR_AUTO_SHOT: '1',
   ONEASR_AUTO_SHOT_EXIT: '1',
   ONEASR_SHOT_DIR: shotDir

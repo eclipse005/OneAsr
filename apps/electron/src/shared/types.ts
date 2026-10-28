@@ -238,24 +238,6 @@ export interface HotwordStore {
   threshold: number
 }
 
-export interface CliCapabilities {
-  status: boolean
-  transcript: boolean
-  /** 二进制不存在或 spawn ENOENT —— 未找到引擎，不是过旧 */
-  missing: boolean
-  /** CLI 能跑但缺 status / transcript inspect 等壳依赖能力 */
-  outdated: boolean
-}
-
-export interface AppInfo {
-  appRoot: string
-  dataRoot?: string
-  cliPath: string
-  display: string | undefined
-  version: string
-  cli?: CliCapabilities
-}
-
 export type ToastKind = 'info' | 'success' | 'error' | 'warn'
 
 export interface ToastPayload {

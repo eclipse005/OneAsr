@@ -2,10 +2,20 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 
-const appRoot = process.env.ONEASR_APP_ROOT || '/workspace/oneasr-runtime'
-const input =
-  process.env.ONEASR_SMOKE_INPUT ||
-  '/workspace/oneasr-hotword-bench/datasets/librispeech/wav_context/1089-134686-0010.wav'
+// 不猜路径：app root 与样本音频都由调用方指定。
+const appRoot = process.env.ONEASR_APP_ROOT
+if (!appRoot) {
+  console.error(
+    '需要 ONEASR_APP_ROOT：指向包含 oneasr-cli 的目录。例：\n' +
+      '  ONEASR_APP_ROOT=/path/to/oneasr-runtime node scripts/smoke-transcribe.mjs'
+  )
+  process.exit(2)
+}
+const input = process.env.ONEASR_SMOKE_INPUT
+if (!input) {
+  console.error('需要 ONEASR_SMOKE_INPUT：要转写的音频文件路径')
+  process.exit(2)
+}
 const cli = path.join(appRoot, 'oneasr-cli')
 const outDir = path.join(appRoot, 'output')
 fs.mkdirSync(outDir, { recursive: true })

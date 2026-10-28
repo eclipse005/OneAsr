@@ -12,6 +12,7 @@ import {
 import { join } from 'path'
 import fs from 'fs'
 import {
+  APP_ROOT_DECISION,
   DEFAULT_APP_ROOT,
   dataRoot,
   defaultSettings,
@@ -20,16 +21,20 @@ import {
   saveSettings,
   setUserDataDir
 } from './settings'
-import { probeCliCapabilities, runCliJson } from './cli'
+import { runCliJson } from './cli'
 import { JobManager } from './jobs'
 import { DownloadManager } from './downloads'
 import {
   addSessionContext,
+  appVersion,
   clearDiagnosticLog,
   initLog,
   installProcessHandlers,
+  logError,
   logFileToOpen,
-  logInfo
+  logInfo,
+  logWarn,
+  versionMismatchNote
 } from './log'
 import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
@@ -322,20 +327,48 @@ function createWindow(): void {
   const icon = resolveAppIcon()
   // 一行启动诊断：窗口装饰归谁、图标从哪来，出问题时先看这条（Electron 33 没有 getTitleBarOverlay 可查）。
   const chrome = windowChrome()
+  const cli = resolveCli()
   console.log(
-    `[oneasr] platform=${process.platform} appRoot=${DEFAULT_APP_ROOT} cli=${resolveCli()}\n` +
+    `[oneasr] platform=${process.platform} appRoot=${DEFAULT_APP_ROOT} (${APP_ROOT_DECISION.source}) cli=${cli ?? '(未找到)'}\n` +
       `[oneasr] icon=${icon ?? '(none)'} chrome=${JSON.stringify(chrome)}`
   )
-  // 这些信息平时只留在内存里；一旦有 WARN/ERROR/PANIC，会连同第一条日志一起写入
-  addSessionContext('window', `chrome=${JSON.stringify(chrome)}\nicon=${icon ?? '(none)'}\ncli=${resolveCli()}`)
+  // 这些信息平时只留在内存里；一旦有 WARN/ERROR/PANIC，会连同第一条日志一起写入。
+  // app root 的选择依据也记在这里：以后出现“跑错了目录/找不到引擎”不用再靠猜。
+  addSessionContext(
+    'window',
+    `chrome=${JSON.stringify(chrome)}\nicon=${icon ?? '(none)'}\ncli=${cli ?? '(未找到)'}`
+  )
+  addSessionContext(
+    'app root',
+    `root=${DEFAULT_APP_ROOT}\nsource=${APP_ROOT_DECISION.source}` +
+      (APP_ROOT_DECISION.notes.length ? `\nnotes=${APP_ROOT_DECISION.notes.join(' | ')}` : '')
+  )
+  // 缺 CLI 是安装/环境问题，用户修不了 -> 不上界面，但必须留痕（否则就成了静默失败）
+  if (!cli) logError(`oneasr-cli 未找到；app root=${DEFAULT_APP_ROOT}`)
+  // env 被降级、探测到没编译引擎……这些都是「程序自己换了主意」，
+  // 绝不能静默：不打 WARN 就不会落盘，排查时就只能猜。
+  if (APP_ROOT_DECISION.notes.length) {
+    logWarn(`app root 降级到 ${DEFAULT_APP_ROOT}：${APP_ROOT_DECISION.notes.join('；')}`)
+  }
   // 模型状态也问 CLI（判据在 Rust），随手把结果塞进诊断日志的会话上下文
   void runCliJson<StatusSnapshot>(['status', '--json'], 20000)
     .then((r) => {
-      if (!r.ok || !r.data) return
+      if (!r.ok || !r.data) {
+        // 真实调用失败：这是唯一需要人看的信号，写进日志（界面只说“未就绪”）
+        logWarn(`oneasr-cli status 失败：${r.error ?? 'unknown'}`)
+        return
+      }
+      // 版本一致性：**机器可读字段**（status --json 的 version），不解析任何文案。
+      // app 版本读不到就跳过——宁愿不比对，也不拿 Electron 的版本号去比（那会凭空造警告）。
+      const cliVersion = r.data.version
+      const shellVersion = appVersion()
+      const mismatch = versionMismatchNote(cliVersion, shellVersion)
+      if (mismatch) logWarn(mismatch)
       const m = r.data.models
       addSessionContext(
         'models (oneasr-cli status)',
-        `asr=${m.asr.id} ready=${m.asr.ready} path=${m.asr.dir}\n` +
+        `cli_version=${cliVersion}\n` +
+          `asr=${m.asr.id} ready=${m.asr.ready} path=${m.asr.dir}\n` +
           `aligner=${m.aligner.id} ready=${m.aligner.ready} path=${m.aligner.dir}\n` +
           `demucs=${m.demucs.ready} sensevoice=${m.sensevoice.ready} backend=${r.data.backend}\n` +
           `can_start=${r.data.can_start.ok ? 'ok' : (r.data.can_start.reason ?? 'no')}`
@@ -394,15 +427,6 @@ function createWindow(): void {
 }
 
 function registerIpc(): void {
-  ipcMain.handle('app:info', async () => ({
-    appRoot: DEFAULT_APP_ROOT,
-    dataRoot: dataRoot(),
-    cliPath: resolveCli(),
-    display: process.env.DISPLAY,
-    version: app.getVersion(),
-    cli: await probeCliCapabilities()
-  }))
-
   ipcMain.handle('settings:get', () => loadSettings())
   ipcMain.handle('settings:save', (_e, settings: Settings) => saveSettings(settings))
   ipcMain.handle('settings:reset', () => saveSettings(defaultSettings()))

@@ -35,6 +35,21 @@ export class DownloadManager extends EventEmitter {
   start(model: string, targetDir?: string): { ok: boolean; code?: 'busy' | 'spawn' } {
     if (this.children.has(model)) return { ok: false, code: 'busy' }
     const cli = resolveCli()
+    if (!cli) {
+      const failed = {
+        model,
+        state: 'error' as const,
+        doneBytes: 0,
+        totalBytes: 0,
+        pct: 0,
+        message: `oneasr-cli 未找到（app root = ${DEFAULT_APP_ROOT}）`,
+        finishedAt: Date.now()
+      }
+      logError(`download: ${failed.message}`)
+      this.current.set(model, failed)
+      this.emit('updated', failed)
+      return { ok: false, code: 'spawn' }
+    }
     const args = [
       'download',
       '--model',

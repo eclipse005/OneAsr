@@ -630,6 +630,17 @@ export class JobManager extends EventEmitter {
     const appRoot = DEFAULT_APP_ROOT
     const dataRootDir = dataRoot()
     const cli = resolveCli(appRoot)
+    if (!cli) {
+      // 没引擎就没得跑：当场把任务标成失败（带可搜的错因），不要开子进程等 ENOENT
+      const message = `oneasr-cli 未找到（app root = ${appRoot}）`
+      task.status = 'error'
+      task.error = message
+      task.finishedAt = Date.now()
+      logError(`task ${task.name}: ${message}`)
+      this.emitUpdate()
+      this.runCommands(this.queue.childClosed(runId))
+      return
+    }
     const staged = this.transcripts.get(task.id)
     const transcriptRun = !!staged && !staged.info.error
     /**

@@ -44,8 +44,6 @@ export default function App() {
   /** CLI 的 status --json 快照：就绪、门禁、catalog 全在里面 */
   const [status, setStatus] = useState<StatusSnapshot | null>(null)
   const [statusAt, setStatusAt] = useState(0)
-  const [cliOutdated, setCliOutdated] = useState(false)
-  const [cliMissing, setCliMissing] = useState(false)
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
   const [hotwords, setHotwords] = useState<HotwordStore | null>(null)
@@ -236,13 +234,9 @@ export default function App() {
       setDraft(loaded)
       setTasks(await window.oneasr.listTasks())
       setHotwords(await window.oneasr.getHotwords())
-      try {
-        const info = await window.oneasr.getAppInfo()
-        setCliMissing(!!info.cli?.missing)
-        setCliOutdated(!!info.cli?.outdated && !info.cli?.missing)
-      } catch {
-        /* ignore */
-      }
+      // 不再探测“CLI 是否过旧”：那靠正则匹配本地化的人读文案，中文界面下
+      // 必然误判（已连续误报两次），而它只用来点亮一条用户治不了的警告。
+      // 引擎的真实问题（缺失 / 跑挂）由 runCliJson 的失败与日志负责。
       await refreshModels()
       await refreshStats()
     })()
@@ -537,8 +531,6 @@ export default function App() {
       modelsReady,
       hasTasks: tasks.length > 0,
       settingsOpen,
-      cliOutdated,
-      cliMissing,
       openSettings: async (tab: SettingsTab = 'models') => {
         await openSettingsFn(tab)
       },
@@ -550,7 +542,7 @@ export default function App() {
       },
       closeStats: () => setOverlay((cur) => closeOverlay(cur, 'stats'))
     }),
-    [modelsReady, tasks.length, settingsOpen, cliOutdated, cliMissing, openSettingsFn, closeSettingsFn, refreshStats]
+    [modelsReady, tasks.length, settingsOpen, openSettingsFn, closeSettingsFn, refreshStats]
   )
 
   return (
@@ -676,8 +668,6 @@ export default function App() {
         status={status}
         tasks={tasks}
         message={statusMsg}
-        cliOutdated={cliOutdated}
-        cliMissing={cliMissing}
         onOpenModels={() => void openSettingsFn('models')}
         onCopyMessage={(text) => void window.oneasr.copyText(text).then(() => notify('success', s.copied))}
       />
@@ -749,8 +739,6 @@ export default function App() {
             }
             onOpenModels={() => void window.oneasr.openModelsFolder()}
             onRefreshModels={() => void refreshModels()}
-            cliOutdated={cliOutdated}
-            cliMissing={cliMissing}
           />
         )}
       </AnimatePresence>

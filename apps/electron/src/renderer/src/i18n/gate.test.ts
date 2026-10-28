@@ -70,6 +70,23 @@ describe('渲染层双语门禁', () => {
     expect(cjkStringsIn('fixture.tsx', source)).toHaveLength(2)
   })
 
+  it('没有“用户治不了”的引擎状态文案（CLI 缺失/过旧）', () => {
+    // 历史：cliMissing / cliOutdated 两组文案曾在状态栏与设置横幅里展示，
+    // 而它们的判据是解析本地化的人读文案（中文界面必然误判），且用户无从处理。
+    // 整条链路已删除；文案若被重新加回，这里先红。
+    const forbidden = ['cliMissing', 'cliMissingShort', 'cliOutdated', 'cliOutdatedShort']
+    for (const key of forbidden) {
+      expect(Object.keys(zh), `zh.${key}`).not.toContain(key)
+      expect(Object.keys(en), `en.${key}`).not.toContain(key)
+    }
+    // 引导里那些「引擎 CLI 过旧」的讲解也不该复活
+    //（注意别写成 startsWith('tourCli')：tourClickHint 同前缀，会误伤）
+    for (const key of ['tourCliTitle', 'tourCliBody', 'tourCliMissingTitle', 'tourCliMissingBody']) {
+      expect(Object.keys(zh), `zh.${key}`).not.toContain(key)
+      expect(Object.keys(en), `en.${key}`).not.toContain(key)
+    }
+  })
+
   it('渲染层源码里没有硬编码中文（注释与 i18n 表除外）', () => {
     // 读原始源码而不是打包产物：注释不在 AST 里，天然不会误报；
     // i18n 目录是文案本体，测试文件里则是夹具。

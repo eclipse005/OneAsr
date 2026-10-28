@@ -1146,18 +1146,6 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 .field-hint.quiet { color: var(--muted); font-weight: 500; }
 
-.cli-outdated-banner {
-  margin: 0;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid #fed7aa;
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: 0.76rem;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
 /* Models toolbar — 克制的就绪 pill */
 .models-toolbar {
   display: flex;

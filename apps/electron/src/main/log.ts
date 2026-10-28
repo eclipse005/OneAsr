@@ -33,23 +33,67 @@ function describe(error: unknown): string {
   return String(error)
 }
 
-/** dev 下 app.getVersion() 给的是 Electron 版本，这里读本应用的 package.json。 */
-function appVersion(): string {
-  try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')
-    ) as { version?: string }
-    return pkg.version ?? app.getVersion()
-  } catch {
-    return app.getVersion()
+/**
+ * 从给定候选路径里读出应用版本（纯函数，不碰 Electron）。
+ *
+ * 读不到返回 null，**绝不回退成 Electron 版本**：拿一个错的版本号去写日志、
+ * 或者去和引擎版本比对，会凭空造出一条“版本不一致”的假警告。
+ */
+export function readAppVersion(candidates: string[]): string | null {
+  for (const file of candidates) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(file, 'utf8')) as { version?: string }
+      if (pkg.version) return pkg.version
+    } catch {
+      /* 试下一个候选 */
+    }
   }
+  return null
+}
+
+/**
+ * 本应用的版本（不是 Electron 的）。
+ *
+ * `app.getVersion()` 在开发期返回的是 **Electron 的版本**（44.x），拿它当应用版本
+ * 会直接写错诊断日志——而拿它去和引擎版本比对，会凭空造出一条“版本不一致”。
+ *
+ * 候选顺序覆盖两种布局：
+ * - 开发期：本文件编到 `apps/electron/out/main/` → `../../package.json`
+ * - 打包后：`resources/app.asar/out/main/` → `../../package.json` 同样成立
+ * - `app.getAppPath()` 有时确实指向应用根（打包场景）
+ *
+ * 都读不到就返回 null：**宁可不比对，也不能拿错的版本号去比**。
+ */
+export function appVersion(): string | null {
+  return readAppVersion([
+    path.join(app.getAppPath(), 'package.json'),
+    path.resolve(__dirname, '..', '..', 'package.json')
+  ])
+}
+
+/**
+ * 引擎与界面版本不一致时该不该报——**纯函数**，好测也好讲清楚边界。
+ *
+ * 规矩：
+ * - 界面版本读不到（null）→ **不报**。宁可少一条诊断，也不拿错的版本号去比，
+ *   否则新造的假警告就让“删掉误报”这场改动白做了。
+ * - 两者都有且不同 → 给一句可搜的 WARN（壳与引擎应由同一个 tag 构建）。
+ * - 一致 → 静默。
+ */
+export function versionMismatchNote(
+  cliVersion: string | undefined,
+  shellVersion: string | null
+): string | null {
+  if (!cliVersion || !shellVersion) return null
+  if (cliVersion === shellVersion) return null
+  return `引擎与界面版本不一致：cli=${cliVersion} app=${shellVersion}（同 tag 应一致）`
 }
 
 function buildContext(root: string): string {
   const lines = [
     '=== OneAsr (Electron) session ===',
     `time:      ${new Date().toISOString()}`,
-    `app:       ${appVersion()} (electron ${process.versions.electron}, chrome ${process.versions.chrome}, node ${process.versions.node})`,
+    `app:       ${appVersion() ?? 'unknown'} (electron ${process.versions.electron}, chrome ${process.versions.chrome}, node ${process.versions.node})`,
     `platform:  ${process.platform} ${process.arch} · ${os.release()}`,
     `cpu/ram:   ${os.cpus()[0]?.model ?? '?'} · ${Math.round(os.totalmem() / 1024 ** 3)} GB`,
     `app_root:  ${root}`,

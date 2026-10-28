@@ -1,9 +1,7 @@
-import fs from 'fs'
 import { spawn } from 'child_process'
 import { DEFAULT_APP_ROOT, dataRoot, resolveCli } from './settings'
 import { logError } from './log'
 import { mainLang } from './i18n'
-import type { CliCapabilities } from '../shared/types'
 
 /**
  * 所有 CLI 子进程共用的环境：数据目录 + 界面语言。
@@ -32,9 +30,23 @@ export interface CliResult<T> {
   error?: string
 }
 
+/**
+ * 没找到 CLI 时的统一答复：一句能直接搜到原因的话，不冒充“CLI 跑挂了”。
+ * 界面不展示它（用户修不了），但会进 oneasr-error.log 与返回给调用方的 error。
+ */
+function missingCliMessage(): string {
+  return `oneasr-cli 未找到（app root = ${DEFAULT_APP_ROOT}）`
+}
+
 export function runCliJson<T>(args: string[], timeoutMs = 60000): Promise<CliResult<T>> {
   return new Promise((resolve) => {
     const cli = resolveCli()
+    if (!cli) {
+      const error = missingCliMessage()
+      logError(`${error}：${args.join(' ')}`)
+      resolve({ ok: false, error })
+      return
+    }
     let child
     try {
       child = spawn(cli, args, {
@@ -93,146 +105,4 @@ export function runCliJson<T>(args: string[], timeoutMs = 60000): Promise<CliRes
       }
     })
   })
-}
-
-export function runCliCapture(
-  args: string[],
-  timeoutMs = 8000
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const cli = resolveCli()
-    let child
-    try {
-      child = spawn(cli, args, {
-        cwd: DEFAULT_APP_ROOT,
-        env: cliEnv(),
-        windowsHide: true
-      })
-    } catch (error) {
-      resolve({ code: -1, stdout: '', stderr: String(error) })
-      return
-    }
-    let stdout = ''
-    let stderr = ''
-    let settled = false
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      try {
-        child.kill('SIGTERM')
-        child.kill('SIGKILL')
-      } catch {
-        /* ignore */
-      }
-      resolve({ code: -1, stdout, stderr: stderr || `cli timeout after ${timeoutMs}ms` })
-    }, timeoutMs)
-    child.stdout?.on('data', (b) => {
-      stdout += b.toString('utf8')
-    })
-    child.stderr?.on('data', (b) => {
-      stderr += b.toString('utf8')
-    })
-    child.on('error', (error) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve({ code: -1, stdout, stderr: String(error) })
-    })
-    child.on('close', (code) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve({ code, stdout, stderr })
-    })
-  })
-}
-
-/** spawn 失败 / 路径不存在 → 未找到引擎，不是「过旧」。 */
-export function isCliUnreachable(code: number | null, stderr: string): boolean {
-  if (code !== -1 && code !== null) return false
-  return /ENOENT/i.test(stderr) || /spawn .* ENOENT/i.test(stderr) || /not found/i.test(stderr)
-}
-
-/**
- * 紧探测 transcript：认 `transcript inspect`（缺 --input 的报错）或 help 里的真子命令行。
- * 不要认裸 `transcript` 词（help 里的 transcript_exts / --transcript 会误伤）。
- */
-export function transcriptCapabilityFromOutput(stdout: string, stderr: string): boolean {
-  const text = `${stdout}\n${stderr}`
-  if (/unknown command:\s*transcript/i.test(text)) return false
-  // 真子命令：缺参时会要 --input
-  if (/missing required --input/i.test(text)) return true
-  // help 用法行写明 transcript inspect
-  if (/transcript\s+inspect/.test(text)) return true
-  if (stdout.trim().startsWith('{')) return true
-  return false
-}
-
-export function statusCapabilityFromOutput(
-  code: number | null,
-  stdout: string,
-  stderr: string
-): boolean {
-  const text = `${stdout}\n${stderr}`
-  if (/unknown command:\s*status/i.test(text)) return false
-  if (isCliUnreachable(code, stderr)) return false
-  return code === 0 || stdout.trim().startsWith('{')
-}
-
-/**
- * 探测壳依赖的 CLI 子命令是否存在。
- * - 二进制缺失 / spawn ENOENT → missing（不是 outdated）
- * - 能跑但缺 status / transcript inspect → outdated
- */
-let capsCache: CliCapabilities | null = null
-
-export async function probeCliCapabilities(): Promise<CliCapabilities> {
-  if (capsCache) return capsCache
-  const cliPath = resolveCli()
-  if (!fs.existsSync(cliPath)) {
-    capsCache = { status: false, transcript: false, missing: true, outdated: false }
-    return capsCache
-  }
-
-  const help = await runCliCapture(['help'], 6000)
-  if (isCliUnreachable(help.code, help.stderr)) {
-    capsCache = { status: false, transcript: false, missing: true, outdated: false }
-    return capsCache
-  }
-
-  const helpText = `${help.stdout}\n${help.stderr}`
-  let statusOk = /\bstatus\b/.test(helpText) && !/unknown command:\s*status/i.test(helpText)
-  let transcriptOk = /transcript\s+inspect/.test(helpText)
-
-  if (!statusOk) {
-    const r = await runCliCapture(['status', '--json'], 8000)
-    if (isCliUnreachable(r.code, r.stderr)) {
-      capsCache = { status: false, transcript: false, missing: true, outdated: false }
-      return capsCache
-    }
-    statusOk = statusCapabilityFromOutput(r.code, r.stdout, r.stderr)
-  }
-
-  if (!transcriptOk) {
-    // 紧探测：真子命令，不要裸 `transcript`（旧逻辑把 help / ENOENT 都当成有）
-    const r = await runCliCapture(['transcript', 'inspect'], 6000)
-    if (isCliUnreachable(r.code, r.stderr)) {
-      capsCache = { status: false, transcript: false, missing: true, outdated: false }
-      return capsCache
-    }
-    transcriptOk = transcriptCapabilityFromOutput(r.stdout, r.stderr)
-  }
-
-  capsCache = {
-    status: statusOk,
-    transcript: transcriptOk,
-    missing: false,
-    outdated: !(statusOk && transcriptOk)
-  }
-  return capsCache
-}
-
-/** 测试或换 CLI 路径后清缓存。 */
-export function clearCliCapabilitiesCache(): void {
-  capsCache = null
 }

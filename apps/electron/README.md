@@ -26,20 +26,26 @@ cargo build -p oneasr-core --bin oneasr-cli
 
 cd apps/electron
 npm install && npm run build
-# npm run start / dev 会在未设置时自动带上 ONEASR_APP_ROOT
-# （优先旁路 ../oneasr-runtime 或 /workspace/oneasr-runtime）
 export DISPLAY=:4 ELECTRON_DISABLE_GPU=1
 npm start
-# 或显式指定：
+# 或显式指定 app root（一般不需要，见下）：
 # ONEASR_APP_ROOT=/workspace/oneasr-runtime npm start
 ```
 
-`detectAppRoot()` / `chooseDevAppRoot()` 会优先选**带 oneasr-cli** 的目录：
-仓库里常有 `bin/ffmpeg` 软链却没有 CLI，此时会落到旁路 `oneasr-runtime`
-（本 box 布局），避免 spawn ENOENT 被误报成「引擎 CLI 过旧」。
+**app root 只有一处决策**：`src/main/settings.ts` 的 `resolveAppRoot()`
+（`npm run dev` / `start` 不再预先写 `ONEASR_APP_ROOT`）。
+它先看 `ONEASR_APP_ROOT`（**必须有 oneasr-cli 才采纳**，否则忽略并记日志），
+再走 `chooseDevAppRoot()` —— 优先选**带 oneasr-cli** 的目录，
+且 `hasCliBinary()` 把 `target/release`、`target/debug` 也算在内 —— 所以仓库根
+只要 `cargo build` 过就能直接用，不必把二进制拷到根目录。
+仓库里常有 `bin/ffmpeg` 却没有 CLI，此时会落到旁路 `oneasr-runtime`。
 
 `resolveCli()` 会依次找 app root、`target/release`、`target/debug` 下的
-`oneasr-cli[.exe]`。开发期数据目录跟 `ONEASR_APP_ROOT`（即 app root）走。
+`oneasr-cli[.exe]`。开发期数据目录跟 app root 走。
+
+> 以前 `scripts/run-with-runtime.mjs` 另写了一份「只看根目录」的探测并把它
+> 当 `ONEASR_APP_ROOT` 塞给主进程，遮掉了上面这份正确逻辑（表现为状态栏
+> 一直「未找到引擎」）。那份重复实现已删：**不要再加第二处 root 探测**。
 
 ## Release packaging
 
@@ -103,9 +109,10 @@ Settings / Hotwords / Stats / Guide / Transcript matching 均为**居中弹窗**
 ## Smoke
 
 ```bash
-npm run smoke:settings
-npm run smoke:transcribe
-DISPLAY=:4 node scripts/launch-smoke.mjs
+# 这两个需要显式指定 app root（脚本不再猜路径，也不再硬编码任何本机路径）
+ONEASR_APP_ROOT=/path/to/runtime npm run smoke:settings
+ONEASR_APP_ROOT=/path/to/runtime ONEASR_SMOKE_INPUT=/path/to/audio.wav npm run smoke:transcribe
+DISPLAY=:4 node scripts/launch-smoke.mjs   # 未设 ONEASR_APP_ROOT 就由主进程探测
 ```
 
 ## Known gaps vs the previous UI

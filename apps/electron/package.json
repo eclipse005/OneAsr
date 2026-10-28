@@ -11,20 +11,17 @@
   "main": "./out/main/index.js",
   "private": true,
   "scripts": {
-    "dev": "node scripts/run-with-runtime.mjs dev",
+    "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "preview": "node scripts/run-with-runtime.mjs preview",
-    "start": "node scripts/run-with-runtime.mjs start",
+    "preview": "electron-vite preview",
+    "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "smoke:settings": "node scripts/smoke-settings.mjs",
     "smoke:transcribe": "node scripts/smoke-transcribe.mjs",
     "smoke:launch": "node scripts/launch-smoke.mjs",
     "shots": "node scripts/take-shots.mjs",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm test && npm run build",
-    "dev:raw": "electron-vite dev",
-    "start:raw": "electron .",
-    "preview:raw": "electron-vite preview"
+    "verify": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "framer-motion": "^11.18.2",

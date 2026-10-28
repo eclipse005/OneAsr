@@ -4,9 +4,7 @@ import { visibleSteps } from './steps'
 const base = {
   modelsReady: false,
   hasTasks: false,
-  settingsOpen: false,
-  cliOutdated: false,
-  cliMissing: false
+  settingsOpen: false
 }
 
 describe('tour steps', () => {
@@ -14,17 +12,9 @@ describe('tour steps', () => {
     const ids = visibleSteps({ ...base, modelsReady: false, hasTasks: false }).map((s) => s.id)
     expect(ids).toContain('settings-download')
     expect(ids).toContain('status-models')
-    expect(ids).not.toContain('toolbar-settings-cli')
     expect(ids).not.toContain('dropzone')
     expect(ids).toContain('empty-open-settings')
     expect(ids).not.toContain('task-lang')
-  })
-
-  it('CLI 过旧时走设置按钮，不装成模型状态，并跳过下载', () => {
-    const ids = visibleSteps({ ...base, cliOutdated: true, modelsReady: false }).map((s) => s.id)
-    expect(ids).toContain('toolbar-settings-cli')
-    expect(ids).not.toContain('status-models')
-    expect(ids).not.toContain('settings-download')
   })
 
   it('模型就绪时跳过下载与空态设置；有任务时讲行内芯片', () => {
@@ -65,24 +55,12 @@ describe('tour steps', () => {
     expect(out?.advance).toBe('click-or-next')
   })
 
-  it('CLI 过旧路径仍包含模型步（不可因 general 竞态跳过）', () => {
-    const ids = visibleSteps({ ...base, cliOutdated: true, modelsReady: false }).map((s) => s.id)
-    expect(ids).toContain('toolbar-settings-cli')
-    expect(ids).toContain('settings-models')
-    expect(ids.indexOf('toolbar-settings-cli')).toBeLessThan(ids.indexOf('settings-models'))
-  })
-
-  it('未找到引擎时走设置按钮路径，文案键切到 missing', () => {
-    const ctx = { ...base, cliMissing: true, modelsReady: false }
-    const ids = visibleSteps(ctx).map((s) => s.id)
-    expect(ids).toContain('toolbar-settings-cli')
-    expect(ids).not.toContain('status-models')
-    expect(ids).not.toContain('settings-download')
-    const step = visibleSteps(ctx).find((s) => s.id === 'toolbar-settings-cli')!
-    const titleKey = typeof step.titleKey === 'function' ? step.titleKey(ctx) : step.titleKey
-    const bodyKey = typeof step.bodyKey === 'function' ? step.bodyKey(ctx) : step.bodyKey
-    expect(titleKey).toBe('tourCliMissingTitle')
-    expect(bodyKey).toBe('tourCliMissingBody')
+  it('引导里没有 CLI 状态分支：引擎问题不上界面，用户治不了', () => {
+    // 历史：这里曾有 toolbar-settings-cli 一步专门讲「引擎 CLI 过旧」。
+    // 那条警告的判据是正则匹配本地化的人读文案，中文界面下永远误报，
+    // 而用户也无法处理 —— 整条链路已删除，引导只剩产品本身的使用路径。
+    const ids = visibleSteps({ ...base, modelsReady: true }).map((s) => s.id)
+    expect(ids.some((id) => id.includes('cli'))).toBe(false)
   })
 
   it('模型/热词/输出面板步仍在引导路径中（讲解卡已统一钉右下角，placement 不再约束）', () => {

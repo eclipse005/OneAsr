@@ -2,7 +2,6 @@ import type { TourContext, TourStep } from './types'
 
 /**
  * 完整产品引导步骤。条件路径在 when / before 里分叉：
- * - CLI 过旧：工具栏「设置」进模型页（勿把橙色 CLI 条当模型状态）
  * - 模型未就绪：状态栏 → 设置 → 模型；可跳过下载等待
  * - 模型已就绪：状态栏只讲解；跳过下载与空态「打开设置」
  * - 空列表且模型就绪：讲拖放区；未就绪：跳过拖放（画布不可投）
@@ -17,20 +16,6 @@ export const TOUR_STEPS: TourStep[] = [
     placement: 'top',
     // 未就绪：点状态栏进设置；已就绪：下一步即可（文案说明可跳过）
     advance: 'click-or-next',
-    when: (ctx) => !ctx.cliOutdated && !ctx.cliMissing,
-    before: async (_ctx, api) => {
-      api.closeGuide()
-      return true
-    }
-  },
-  {
-    id: 'toolbar-settings-cli',
-    selector: '[data-tour="toolbar-settings"]',
-    titleKey: (ctx) => (ctx.cliMissing ? 'tourCliMissingTitle' : 'tourCliTitle'),
-    bodyKey: (ctx) => (ctx.cliMissing ? 'tourCliMissingBody' : 'tourCliBody'),
-    placement: 'bottom',
-    advance: 'click-or-next',
-    when: (ctx) => ctx.cliOutdated || ctx.cliMissing,
     before: async (_ctx, api) => {
       api.closeGuide()
       return true
@@ -60,8 +45,8 @@ export const TOUR_STEPS: TourStep[] = [
     placement: 'left',
     advance: 'next',
     allowSkipWait: true,
-    // CLI 过旧时 status 也会 Missing，下载无效；只在真缺权重时讲下载
-    when: (ctx) => !ctx.modelsReady && !ctx.cliOutdated && !ctx.cliMissing,
+    // 只在真缺权重时讲下载
+    when: (ctx) => !ctx.modelsReady,
     waitFor: '[data-tour="model-download-asr"]',
     before: async (_ctx, api) => {
       await api.openSettings('models')

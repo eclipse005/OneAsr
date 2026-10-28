@@ -11,7 +11,6 @@ export type TourAdvance =
 
 export type TourStepId =
   | 'status-models'
-  | 'toolbar-settings-cli'
   | 'settings-models'
   | 'settings-download'
   | 'settings-hotwords-tab'
@@ -36,10 +35,6 @@ export type TourContext = {
   modelsReady: boolean
   hasTasks: boolean
   settingsOpen: boolean
-  /** 状态栏显示「CLI 过旧」时为 true，勿把橙色条当模型就绪 */
-  cliOutdated: boolean
-  /** 状态栏显示「未找到引擎」时为 true */
-  cliMissing: boolean
 }
 
 export type TourStep = {

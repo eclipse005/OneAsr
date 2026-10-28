@@ -14,9 +14,10 @@ const env = {
   ...process.env,
   DISPLAY: process.env.DISPLAY || ':4',
   ELECTRON_DISABLE_GPU: '1',
-  ELECTRON_OZONE_PLATFORM_HINT: 'x11',
-  ONEASR_APP_ROOT: process.env.ONEASR_APP_ROOT || '/workspace/oneasr-runtime'
+  ELECTRON_OZONE_PLATFORM_HINT: 'x11'
 }
+// 不在这里猜 app root：主进程的 resolveAppRoot() 是唯一决策点（且 env 会校验）。
+// 想指定就自己 export ONEASR_APP_ROOT，未设则自动探测。
 
 const child = spawn(process.execPath, [electronBin, mainJs], {
   cwd: root,

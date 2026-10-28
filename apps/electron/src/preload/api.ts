@@ -6,7 +6,6 @@ import type {
   StatusSnapshot,
   TaskSnapshot,
   StatsSnapshot,
-  AppInfo,
   HotwordStore,
   TranscriptEditResult
 } from '../shared/types'
@@ -30,7 +29,6 @@ export interface OneAsrApi {
   platform: string
   /** 拖放取路径（Electron 32+ 用 webUtils.getPathForFile；File.path 已被移除） */
   getPathForFile: (file: File) => string
-  getAppInfo: () => Promise<AppInfo>
   getSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
   resetSettings: () => Promise<Settings>

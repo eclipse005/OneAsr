@@ -28,8 +28,6 @@ export type TourHostApi = TourStepApi & {
   modelsReady: boolean
   hasTasks: boolean
   settingsOpen: boolean
-  cliOutdated: boolean
-  cliMissing: boolean
 }
 
 type TourApi = {
@@ -56,9 +54,7 @@ function liveCtxFrom(host: TourHostApi) {
   return {
     modelsReady: host.modelsReady,
     hasTasks: host.hasTasks,
-    settingsOpen: host.settingsOpen,
-    cliOutdated: host.cliOutdated,
-    cliMissing: host.cliMissing
+    settingsOpen: host.settingsOpen
   }
 }
 
@@ -87,9 +83,7 @@ export function TourProvider({
   const ctx = useMemo(() => liveCtxFrom(host), [
     host.modelsReady,
     host.hasTasks,
-    host.settingsOpen,
-    host.cliOutdated,
-    host.cliMissing
+    host.settingsOpen
   ])
 
   const steps = useMemo(() => visibleSteps(ctx), [ctx])
