@@ -8,7 +8,7 @@
  *
  * 退出比进入短，并沿进来的方向收回。系统开了「减少动态效果」时只留透明度。
  */
-import { useReducedMotion, type Transition, type Variants } from 'framer-motion'
+import { useReducedMotion, type Transition } from 'framer-motion'
 
 export const EASE_OUT = [0.16, 1, 0.3, 1] as const
 
@@ -45,40 +45,7 @@ function fadeOnly(duration: number, exitDuration = Math.min(duration, 0.08)): {
   }
 }
 
-/* ── Static variants (for TourOverlay / one-off spreads; prefer hooks in components) ── */
-
-export const fadeVariants: Variants = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 }
-}
-
-export const fadeUpVariants: Variants = {
-  initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: 6 }
-}
-
-export const scaleInSoftVariants: Variants = {
-  initial: { opacity: 0, y: 12, scale: 0.98 },
-  animate: { opacity: 1, y: 0, scale: 1 },
-  exit: { opacity: 0, y: 10, scale: 0.99 }
-}
-
-export const overlayFadeVariants: Variants = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 }
-}
-
-/** Drawer-style: soft vertical settle (same language as surface; not a side slide). */
-export const panelSlideVariants: Variants = {
-  initial: { opacity: 0, y: 10 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: 8 }
-}
-
-/* ── Hooks ── */
+/* ── Hooks（静态 Variants 已收口到 hooks；组件请用 use*Motion） ── */
 
 /** 遮罩：只淡入淡出。必须挂在 AnimatePresence 的根 motion 上，退出才收得住。 */
 export function useOverlayMotion() {

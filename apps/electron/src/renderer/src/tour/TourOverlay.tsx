@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { DUR, EASE_OUT, useSurfaceMotion } from '../motion'
 import { readTargetRect } from './wait'
 import type { TourAdvance } from './types'
@@ -59,6 +59,7 @@ export function TourOverlay({
 }: Props) {
   const [rect, setRect] = useState<DOMRect | null>(null)
   const surface = useSurfaceMotion()
+  const reduceMotion = useReducedMotion() === true
 
   // 跟随目标：resize / scroll / 布局变化
   useLayoutEffect(() => {
@@ -182,7 +183,11 @@ export function TourOverlay({
                   width: hole.width,
                   height: hole.height
                 }}
-                transition={{ type: 'spring', stiffness: 380, damping: 32, mass: 0.7 }}
+                transition={
+                  reduceMotion
+                    ? { duration: 0 }
+                    : { duration: DUR.layer, ease: EASE_OUT }
+                }
               />
             </>
           ) : (
