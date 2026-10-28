@@ -4,11 +4,11 @@ import { DUR, EASE_OUT, useSurfaceMotion } from '../motion'
 import { readTargetRect } from './wait'
 import type { TourAdvance } from './types'
 import { attachTourTargetClickListener } from './tourTargetClick'
+import { TITLEBAR_HEIGHT } from '../../../shared/window-chrome'
 
 const PAD = 8
-/** 与 CSS --titlebar-h / main TITLEBAR_HEIGHT 一致。遮罩不得盖住标题栏：
- *  系统 Window Controls Overlay 画在网页之上，压暗标题栏会留下一块刺眼的白按钮区。 */
-const TITLEBAR_H = 44
+/** 遮罩不得盖住标题栏（高度与 shared/window-chrome、CSS --titlebar-h 同源）。 */
+const TITLEBAR_H = TITLEBAR_HEIGHT
 
 type Props = {
   active: boolean
@@ -134,7 +134,7 @@ export function TourOverlay({
           exit={{ opacity: 0, transition: { duration: DUR.overlayExit, ease: EASE_OUT } }}
           transition={{ duration: DUR.overlay, ease: EASE_OUT }}
         >
-          {/* 四块遮罩围出洞；一律从标题栏下方开始，避免压暗后与系统 WCO 白块割裂 */}
+          {/* 四块遮罩围出洞；一律从标题栏下方开始，避免压暗标题栏后与系统按钮叠层割裂 */}
           {hole ? (
             <>
               <div

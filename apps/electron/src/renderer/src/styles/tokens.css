@@ -41,6 +41,8 @@
   --radius-lg: 16px;
 
   --titlebar-h: 44px;
+  /* 与 shared/window-chrome TITLEBAR_BG 对齐；WCO overlay 透明，底色只靠这里 */
+  --titlebar-bg: #ffffff;
   --font: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
 
   /* ── Motion (CSS transitions; FM uses motion.ts DUR) ── */

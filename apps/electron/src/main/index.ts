@@ -39,6 +39,7 @@ import {
 import { m } from './i18n'
 import { loadHotwords, saveHotwords } from './hotword'
 import type { AddTaskInput, HotwordStore, Settings, StatusSnapshot } from '../shared/types'
+import { TITLEBAR_HEIGHT, titleBarOverlayOptions } from '../shared/window-chrome'
 
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
@@ -293,19 +294,15 @@ async function runAutoShots(win: BrowserWindow): Promise<void> {
   }
 }
 
-/** 标题栏高度。CSS 里 .titlebar 的 44px 必须跟它一致（overlay 高度、红绿灯对中都读它）。 */
-const TITLEBAR_HEIGHT = 44
-
 /**
- * 窗口按钮一律交给系统，不自绘：
+ * 窗口按钮一律交给系统，不自绘（常量见 shared/window-chrome）：
  * - Windows / Linux：titleBarStyle hidden + Window Controls Overlay →
  *   min/max/close 归系统（Windows 由 DWM 画；Linux 由 Electron 画）。
- *   overlay.color / symbolColor 必须跟渲染进程 .titlebar 底色一致（#fff / #475569），
- *   否则右上角会多出一块「更亮」的白矩形。引导遮罩也不得压暗标题栏
- *   （见 TourOverlay TITLEBAR_H），否则同样会露出这块原生白底。
+ *   overlay.color 透明，底色只由渲染进程 .titlebar 画，避免原生不透明白块「发亮」。
+ *   引导遮罩也不得压暗标题栏（见 TourOverlay TITLEBAR_HEIGHT）。
  *   Windows 上命中测试是真的 HTMINBUTTON/HTMAXBUTTON/HTCLOSE —— Win11 贴靠布局因此可用。
  * - macOS：titleBarStyle hidden + trafficLightPosition → 左上角红绿灯，
- *   位置对齐 44px 标题栏（系统默认位置是按 ~28px 标题栏给的，不设会偏上）。
+ *   位置对齐 TITLEBAR_HEIGHT（系统默认位置是按 ~28px 标题栏给的，不设会偏上）。
  */
 function windowChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
   if (process.platform === 'darwin') {
@@ -314,13 +311,7 @@ function windowChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
       trafficLightPosition: { x: 16, y: Math.round((TITLEBAR_HEIGHT - 14) / 2) }
     }
   }
-  // 与 renderer .titlebar { background: #fff } 同色；符号取 slate，深浅主题都靠这一套浅色 chrome
-  const overlay: Electron.TitleBarOverlay = {
-    color: '#ffffff',
-    symbolColor: '#475569',
-    height: TITLEBAR_HEIGHT
-  }
-  return { titleBarStyle: 'hidden', titleBarOverlay: overlay }
+  return { titleBarStyle: 'hidden', titleBarOverlay: titleBarOverlayOptions() }
 }
 
 function createWindow(): void {

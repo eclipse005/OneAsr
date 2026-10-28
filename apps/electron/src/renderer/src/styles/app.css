@@ -21,20 +21,26 @@ button:focus-visible {
 .app { display: flex; flex-direction: column; height: 100%; }
 
 .titlebar {
-  display: flex; align-items: center; height: var(--titlebar-h);
-  /* 右侧不留内边距：窗口按钮像系统的一样贴到窗口边缘 */
-  padding: 0 0 0 var(--space-7);
+  /* 全宽铺底：WCO overlay.color 透明，底色只靠 CSS，须伸到系统按钮底下，避免露 --bg 灰。 */
+  display: flex; align-items: stretch;
+  height: env(titlebar-area-height, var(--titlebar-h));
+  padding: 0;
   -webkit-app-region: drag;
-  /* 用纯白与系统 Window Controls Overlay 同色（overlay 是不透明矩形，
-     半透明标题栏会在右侧显出一块白框）；底边线也交给 .toolbar 的 border-top，
-     因为 overlay 会盖住标题栏自己的 border-bottom，把线切断。 */
-  background: #fff;
+  background: var(--titlebar-bg);
+  /* 底边线交给 .toolbar 的 border-top：overlay 会盖住标题栏自己的 border-bottom。 */
 }
-/* 窗口按钮由系统画，这里给它让位：
-   Windows / Linux = 右上角 Window Controls Overlay（3 × 46px）；macOS = 左上角红绿灯。 */
-.titlebar.platform-win32,
-.titlebar.platform-linux { padding-right: 138px; }
-.titlebar.platform-darwin { padding-left: 78px; }
+/* 内容安全区：Electron 官方 custom-title-bar 用 env(titlebar-area-*)，
+   不再猜 Win/Linux 右侧 138px。无 WCO（如 macOS）时 env 回退为 0 / 100%。 */
+.titlebar-safe {
+  display: flex; align-items: center;
+  margin-left: env(titlebar-area-x, 0px);
+  width: env(titlebar-area-width, 100%);
+  height: env(titlebar-area-height, var(--titlebar-h));
+  padding: 0 0 0 var(--space-7);
+  box-sizing: border-box;
+}
+/* macOS 无 titlebar-area-*：env 回退后靠左侧 padding 给红绿灯让位。 */
+.titlebar.platform-darwin .titlebar-safe { padding-left: 78px; }
 
 .titlebar .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; color: var(--logo); letter-spacing: 0.01em; }
 .titlebar .brand .logo {
@@ -1576,8 +1582,8 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 
 
 /* ── 交互引导（独立层，可与 SettingsDrawer 共存；高于 .overlay 的 40） ──
-   遮罩从标题栏下方开始（见 TourOverlay TITLEBAR_H）：系统 WCO 不透明白块
-   若压暗标题栏会留一块刺眼亮区，和 .overlay 注释同一原因。 */
+   遮罩从标题栏下方开始（见 TourOverlay TITLEBAR_HEIGHT）：勿压暗标题栏，
+   否则系统按钮字形会叠在半透明遮罩上，观感割裂。 */
 .tour-root {
   position: fixed;
   inset: 0;
