@@ -25,13 +25,13 @@
 
 ## 下载安装
 
-当前版本 **[v2.0.0](https://github.com/eclipse005/OneAsr/releases/tag/v2.0.0)**（点文件名即下载）：
+当前版本 **[v2.0.1](https://github.com/eclipse005/OneAsr/releases/tag/v2.0.1)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_macos.dmg) |
 
 ## 快速上手
 

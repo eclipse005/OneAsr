@@ -25,13 +25,13 @@ Optional vocal separation (HTDemucs) can run before either mode.
 
 ## Download
 
-Current version **[v2.0.0](https://github.com/eclipse005/OneAsr/releases/tag/v2.0.0)** (click a file name to download):
+Current version **[v2.0.1](https://github.com/eclipse005/OneAsr/releases/tag/v2.0.1)** (click a file name to download):
 
 | Platform | Download |
 |------|------|
-| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_windows_portable.zip) |
-| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_linux_x64.tar.gz) |
-| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v2.0.0/OneAsr_2.0.0_macos.dmg) |
+| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_windows_portable.zip) |
+| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_linux_x64.tar.gz) |
+| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v2.0.1/OneAsr_2.0.1_macos.dmg) |
 
 ## Quick start
 
