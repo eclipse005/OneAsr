@@ -639,6 +639,16 @@ export function t(lang: UiLang): Dict {
   return lang === 'zh' ? zh : en
 }
 
+/**
+ * Recognition-language chips: native autonyms on purpose (中文 / English / …).
+ * `auto` is the one label that follows UI language — use `langOptions(lang)`.
+ *
+ * Deliberate leftovers (not Dict keys):
+ * - native language autonyms above
+ * - format codes SRT / TXT / ASS; model sizes 0.6B / 1.7B
+ * - UI symbols ✓ ✗ — ↻ ▾ …
+ * - parameterized helpers below (unsupportedCount, queueRank, …) keep inline zh/en
+ */
 export const LANG_OPTIONS = [
   { id: 'zh', label: '中文' },
   { id: 'en', label: 'English' },
@@ -647,6 +657,12 @@ export const LANG_OPTIONS = [
   { id: 'ko', label: '한국어' },
   { id: 'auto', label: 'Auto' }
 ]
+
+/** Like LANG_OPTIONS but `auto` uses the UI dictionary (`自动` / `Auto`). */
+export function langOptions(lang: UiLang): { id: string; label: string }[] {
+  const s = t(lang)
+  return LANG_OPTIONS.map((o) => (o.id === 'auto' ? { ...o, label: s.auto } : o))
+}
 
 /**
  * 阶段名：按 CLI 事件里的稳定 `key` 出文案（label 跟 CLI 进程语言走，可能是系统语言，

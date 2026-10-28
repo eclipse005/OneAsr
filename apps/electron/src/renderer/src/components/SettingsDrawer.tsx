@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { LANG_OPTIONS, t, UiLang } from '../i18n'
+import { langOptions, t, UiLang } from '../i18n'
 import type { DownloadState, HotwordStore, Settings, StatusSnapshot } from '../../../shared/types'
 import { HotwordEditor } from './HotwordPanel'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SelectMenu } from './Popover'
 import { usePaneMotion } from '../motion'
 import { formatSize } from '../lib/format'
-import { ModalShell, Seg, Toggle } from './ui'
+import { IconButton, ModalShell, Seg, Toggle } from './ui'
 
 export type SettingsTab = 'general' | 'output' | 'models' | 'hotwords' | 'compute'
 
@@ -239,15 +239,7 @@ function ModelPathField({
               </span>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="icon-btn"
-            title={browseLabel}
-            aria-label={browseLabel}
-            onClick={onBrowse}
-          >
-            <span className="icon-glyph i-folder" aria-hidden />
-          </button>
+          <IconButton icon="folder" label={browseLabel} onClick={onBrowse} />
           {isDown ? (
             <button
               type="button"
@@ -451,7 +443,7 @@ export function SettingsDrawer({
                   <SelectMenu
                     className="select-menu"
                     value={draft.language}
-                    options={LANG_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+                    options={langOptions(lang)}
                     ariaLabel={s.recognitionLanguage}
                     onChange={(id) => set('language', id)}
                   />
