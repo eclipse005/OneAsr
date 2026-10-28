@@ -1109,9 +1109,11 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 }
 .pref-row:last-of-type { border-bottom: none; }
 .pref-label {
-  color: var(--text);
-  font-size: 0.86rem;
-  font-weight: 550;
+  /* 与 .field > label / .size-quant-half > label 同一套：设置项标签不另加粗 */
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.3;
+  font-weight: 400;
 }
 .pref-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pref-note { color: var(--muted); font-size: 0.75rem; font-weight: 500; line-height: 1.3; }
@@ -1371,7 +1373,7 @@ select:focus, .text-input:focus, textarea.text-input:focus {
 .hw-default-toggle .pref-label {
   font-size: 0.82rem;
   color: var(--muted);
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
 }
 .hw-default-toggle .toggle {
