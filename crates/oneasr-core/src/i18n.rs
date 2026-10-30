@@ -271,6 +271,23 @@ pub fn sep_gpu_fallback(reason: &str) -> String {
     }
 }
 
+/// `{start}–{end}s 这段解码不完整（复读截断），切成小块也救不回来；该段字幕可能漏字`
+/// / `{start}–{end}s decoded incompletely (repetition cut-off); smaller windows did not
+/// recover it, so this span may be missing lines`。
+///
+/// 只在“撞顶/复读 + 切碎重试也没救回来”时出现——这时宁可告警，也不能静默丢掉几十秒台词。
+pub fn asr_span_incomplete(start: f64, end: f64) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "{start:.0}–{end:.0}s 这段解码不完整（复读截断），切成小块也救不回来；该段字幕可能漏字"
+        ),
+        UiLang::En => format!(
+            "{start:.0}–{end:.0}s decoded incompletely (repetition cut-off); smaller windows did not \
+             recover it, so this span may be missing lines"
+        ),
+    }
+}
+
 // ---- 模型目录校验 ----
 
 /// `{role} 模型目录不存在: {dir}` / `{role} model folder not found: {dir}`。
