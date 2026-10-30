@@ -140,7 +140,6 @@ function TabBody({ tab, s }: { tab: GuideTab; s: Copy }) {
         <Entry title={s.uiLanguage} body={s.guideUiLanguage} />
         <Entry title={s.recognitionLanguage} body={s.guideLanguage} />
         <Entry title={s.subtitleLength} body={s.guideSubtitleLength} />
-        <Entry title={s.chunkDuration} body={s.guideChunk} />
       </div>
     )
   }

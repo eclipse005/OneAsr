@@ -150,8 +150,6 @@ impl AsrError {
     }
 }
 
-const MIN_SILENCE_FALLBACK: f32 = 0.3;
-
 /// Fine-grained pipeline stage for live UI status and timing breakdown.
 ///
 /// Order in a successful run:
@@ -1032,7 +1030,7 @@ impl<'a> Pipeline<'a> {
             match vad::run_vad(&conv.wav_path) {
                 Ok(speech) => {
                     let silences =
-                        vad::speech_to_silences(&speech, conv.duration, MIN_SILENCE_FALLBACK);
+                        vad::speech_to_silences(&speech, conv.duration, vad::MIN_SILENCE_MICRO);
                     let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
                     trace_log(format!(
                         "vad: duration={:.1}s speech={} silence_gaps={} chunks={}",

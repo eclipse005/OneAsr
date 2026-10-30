@@ -461,14 +461,6 @@ export function SettingsDrawer({
                     ]}
                   />
                 </div>
-                <div className="field">
-                  <label>{s.chunkDuration}</label>
-                  <Seg
-                    value={String(draft.chunk_target_seconds)}
-                    onChange={(id) => set('chunk_target_seconds', Number(id))}
-                    options={[30, 60, 90, 120, 180].map((n) => ({ id: String(n), label: String(n) }))}
-                  />
-                </div>
               </>
             )}
 
