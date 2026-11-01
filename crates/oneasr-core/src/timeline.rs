@@ -248,9 +248,11 @@ pub struct RenderOptions {
     /// Ignored when `transcript` is set — see [`Self::transcript`].
     pub script: TextScript,
     /// The transcript, when this subtitle was aligned to one instead of
-    /// transcribed. Its **line breaks are the cue boundaries**; the layout DP
-    /// does not run, because re-deriving the breaks would undo a decision the
-    /// author just made on purpose.
+    /// transcribed. Its **line breaks are the cue boundaries** and its **lines
+    /// are the cue text, character for character**; the layout DP does not run,
+    /// because re-deriving the breaks would undo a decision the author just made
+    /// on purpose, and `join_words` does not respell them, because the spacing
+    /// an author typed is part of what they wrote.
     pub transcript: Option<String>,
     /// `None` = do not produce this format.
     pub srt: bool,
@@ -258,6 +260,10 @@ pub struct RenderOptions {
     pub ass: bool,
     /// 成稿字幕美化。不看语言选项：每一句按自己的字符决定改不改标点、补不补空格。
     /// 不重新断行，也不改时间。
+    ///
+    /// **文稿模式下无效**（`transcript` 为 `Some` 时直接不算）：那里的文字是
+    /// 用户写的，机器只加时间戳。要美化就先改文稿本身（`transcript polish` /
+    /// 文稿面板上的「美化字幕」），那是用户的显式动作，而不是打轴之后的自动一遍。
     pub beautify: bool,
 }
 
@@ -312,7 +318,10 @@ pub fn render(timeline: &Timeline, opts: &RenderOptions) -> Result<Rendered, Str
         }
     };
     let mut sentences = sentences;
-    if opts.beautify {
+    // 文稿模式不美化：文字是用户的，机器只加时间戳。美化在打轴之前作用于
+    // 文稿本身（用户在面板上点的那个动作），不是打轴之后的自动一遍。
+    let beautify = opts.beautify && opts.transcript.is_none();
+    if beautify {
         // 断句已经定稿。这里只改每条字幕的文字：标点、全角半角、汉字和
         // 英文/数字之间的空格。不增删字幕条的时间，空条（只剩标点）丢掉。
         for sentence in &mut sentences.translation_sentences {
@@ -327,7 +336,12 @@ pub fn render(timeline: &Timeline, opts: &RenderOptions) -> Result<Rendered, Str
     Ok(Rendered {
         srt: opts.srt.then(|| source_sentences_to_srt(&sentences)),
         ass: opts.ass.then(|| {
-            crate::subtitle::ass::to_ass_with(&sentences, &KaraokeStyle::default(), opts.beautify)
+            crate::subtitle::ass::to_ass_with(
+                &sentences,
+                &KaraokeStyle::default(),
+                beautify,
+                opts.transcript.is_some(),
+            )
         }),
         sentences,
     })
@@ -521,6 +535,75 @@ mod tests {
 
     /// Changing the segment length changes the presentation, not the words.
     /// This is the re-render paying for itself: today this costs two model runs.
+    /// 文稿模式的两条承诺，都写在同一处断言里：
+    ///
+    /// 1. 字幕的文字就是文稿那一行（含空格）；
+    /// 2. 即使 `beautify` 为真，也不许对文稿动一个字——文稿模式没有“打轴之后
+    ///    再美化一遍”这件事。
+    ///
+    /// 旧代码上这条必红：`join_words` 会把 `月亮 代表 我的心` 拼成
+    /// `月亮代表我的心`，而美化会把 `，` 变成空格、并在汉字与拉丁之间插空格。
+    #[test]
+    fn transcript_cues_are_the_authors_lines_and_beautify_never_runs() {
+        let words: Vec<WordToken> = "月亮 代表 我的心，你 用 AI 吗"
+            .split_whitespace()
+            .flat_map(|raw| {
+                let is_cjk = raw.chars().all(|c| !c.is_ascii());
+                if is_cjk && raw.chars().count() > 1 {
+                    raw.chars().map(|c| c.to_string()).collect::<Vec<_>>()
+                } else {
+                    vec![raw.to_string()]
+                }
+            })
+            .enumerate()
+            .map(|(i, t)| word(&t, i as f64 * 0.3, i as f64 * 0.3 + 0.25))
+            .collect();
+        let tl = timeline_of(words);
+        let text = "月亮 代表 我的心，你用 AI 吗";
+        for beautify in [false, true] {
+            let rendered = render(
+                &tl,
+                &RenderOptions {
+                    transcript: Some(text.into()),
+                    beautify,
+                    ..all_options()
+                },
+            )
+            .unwrap();
+            let srt = rendered.srt.unwrap();
+            let blocks: Vec<&str> = srt.split("\n\n").filter(|b| !b.trim().is_empty()).collect();
+            assert_eq!(blocks.len(), 1, "{srt}");
+            let shown = blocks[0].lines().nth(2).unwrap_or_default();
+            assert_eq!(
+                shown, text,
+                "beautify={beautify}：字幕文字必须就是文稿那一行"
+            );
+        }
+
+        // ASS 也得走同一条：接线的标志位是 `opts.transcript.is_some()`。
+        let ass = render(
+            &tl,
+            &RenderOptions {
+                transcript: Some(text.into()),
+                srt: false,
+                ass: true,
+                ..all_options()
+            },
+        )
+        .unwrap()
+        .ass
+        .expect("ass");
+        let dialogue = ass
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .expect("dialogue");
+        assert_eq!(
+            dialogue.matches("\\h").count(),
+            4,
+            "文稿里的每个空格都该写成硬空格（从 token 拼就一个也不会剩）：{dialogue}"
+        );
+    }
+
     #[test]
     fn a_different_preset_reshapes_the_cues_without_touching_the_text() {
         let long: Vec<WordToken> = (0..24)

@@ -646,6 +646,7 @@ Usage:
   oneasr-cli align      --audio <media> --text <transcript> [options]
   oneasr-cli transcript inspect --input <transcript> [--audio-seconds <n>] [--json]
   oneasr-cli transcript split   --input <transcript> [--lang <code>] [--preset <id>] [--json]
+  oneasr-cli transcript polish  --input <transcript> [--audio-seconds <n>] [--json]
   oneasr-cli download   --model <id> [--app-root <dir>] [--data-root <dir>]
   oneasr-cli status     [--app-root <dir>] [--data-root <dir>] [--json]
   oneasr-cli probe      --input <media> [--json]
@@ -658,8 +659,10 @@ Commands:
                the transcript's own line breaks become the subtitle lines
                (one line = one cue). Forced to the CTC aligner, which takes the
                whole file in one pass
-  transcript   Read / summarize / smart-split a transcript without running the
-               pipeline (inspect); used by the GUI before alignment
+  transcript   Read / summarize / smart-split / beautify a transcript without
+               running the pipeline; used by the GUI before alignment. Your text
+               is the subtitle text: alignment only adds timestamps, so any
+               beautifying is done HERE, on the transcript, and never after it
   render       Re-present a measured timeline. No models, no ffmpeg, no audio:
                reads {stem}.timeline.json and writes a subtitle again
   download     Download one model (ASR / aligner / Demucs / hotword) into its
@@ -918,6 +921,9 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
   oneasr-cli asr-chunk  --wav <16k.wav> --start <秒> --end <秒> [选项]
   oneasr-cli render     --timeline <{stem}.timeline.json> [选项]
   oneasr-cli align      --audio <音视频> --text <文稿> [选项]
+  oneasr-cli transcript inspect --input <文稿> [--audio-seconds <秒>] [--json]
+  oneasr-cli transcript split   --input <文稿> [--lang <代码>] [--preset <id>] [--json]
+  oneasr-cli transcript polish  --input <文稿> [--audio-seconds <秒>] [--json]
   oneasr-cli download   --model <id> [--app-root <目录>] [--data-root <目录>]
   oneasr-cli status     [--app-root <目录>] [--data-root <目录>] [--json]
   oneasr-cli probe      --input <音视频> [--json]
@@ -927,9 +933,12 @@ oneasr-cli — 免界面的 Qwen ASR + ForcedAligner 流水线
   asr-chunk    只对一段时间做转写（排查幻觉 / 长度问题）
   render       重新呈现已测好的时间轴。不加载模型、不用 ffmpeg、不碰音频
   align        音视频 + 你自己的文稿 → 字幕，整个识别阶段跳过。文稿自己的分行
-               就是字幕的分行（一行 = 一条）。固定用 CTC 对齐器，它能整段一次
-               对齐，长音频不必切块：
-               读 {stem}.timeline.json，再写一遍字幕
+               就是字幕的分行（一行 = 一条），文稿那一行就是字幕那一行（逐字，
+               含空格）。固定用 CTC 对齐器，它能整段一次对齐，长音频不必切块：
+               对齐之后不再有任何改字步骤
+  transcript   读 / 摘要 / 智能断句 / 美化一份文稿，不跑流水线；GUI 在打轴之前
+               用它。美化只在这里做（改的是文稿本身），不会在后面再跑一遍：
+               文稿模式的文字就是文稿，机器只加时间戳
   download     下载一个模型（识别 / 对齐 / 人声分离 / 热词）到 settings.json
                里该模型自己的目录；没有配置时落到 {data-root}/models/<目录名>。
                已装好且校验通过的不重下
@@ -1281,6 +1290,13 @@ pub const CLI_HOTWORD_INLINE: Str = Str::new("命令行", "inline");
 pub const CLI_ALIGN_HOTWORDS_IGNORED: Str = Str::new(
     "align 不跑识别阶段，热词对它没有作用（已忽略）",
     "align skips recognition, so hotwords have no effect here (ignored)",
+);
+
+/// 文稿模式的字幕文字就是文稿本身，打轴之后不再改字，所以 `align --beautify`
+/// 没有作用。美化要提前到文稿上做（`transcript polish` / GUI 面板的「美化字幕」）。
+pub const CLI_ALIGN_BEAUTIFY_IGNORED: Str = Str::new(
+    "align 不改文稿的字（字幕就是你的原文），--beautify 已忽略；要美化请先对文稿跑 transcript polish",
+    "align never rewrites your transcript (the subtitle IS your text), so --beautify is ignored; run `transcript polish` on the transcript instead",
 );
 
 /// `--hotword-group` 找不到组：把**可用组全列出来**（id + 显示名），
@@ -2442,6 +2458,7 @@ mod tests {
             ("CLI_ASR_TEXT_END", CLI_ASR_TEXT_END),
             ("CLI_HOTWORD_INLINE", CLI_HOTWORD_INLINE),
             ("CLI_ALIGN_HOTWORDS_IGNORED", CLI_ALIGN_HOTWORDS_IGNORED),
+            ("CLI_ALIGN_BEAUTIFY_IGNORED", CLI_ALIGN_BEAUTIFY_IGNORED),
         ];
         for (name, s) in table {
             assert!(!s.zh.trim().is_empty(), "{name}: zh 侧为空");

@@ -35,6 +35,12 @@
 > **文稿匹配固定使用 CTC 对齐器**（产品规则，不是「默认」：整段一次对齐，块边界
 > 不伤词）。设置里的 `[CTC] [Qwen]` 只管识别任务；文稿芯片的 hover 写明这一点。
 
+> **2026-11 修订：字幕文字就是文稿那一行。** 早期把这条不变式写成「只允许
+> 增删空白字符」，实现也随之把每条字幕用 `join_words` 从对齐 token 拼回去——
+> 于是汉字之间按书写系统规则不插空格，用户排的字距在 SRT 里全部消失（用户
+> 报的就是这个）。现在文稿模式的文字直接取那一行原文，只加时间戳；「美化
+> 字幕」从全局设置提前成文稿面板上的显式动作，**对齐之后不再有任何改字**。
+
 ## 2. 契约与不变式
 
 > **文稿里的一行 = 生成字幕里的一条。**
@@ -43,7 +49,7 @@
 
 | 不变式 | 含义 | 怎么保证 |
 |---|---|---|
-| **机器不碰你的字** | 文稿任务全程只允许增删空白字符。全局「中文输出」设置对它**不生效** | `timeline::render` 的 `script` 由调用方给，文稿路径传 `TextScript::Original`；加测试断言非空白字符逐字不变 |
+| **机器不碰你的字** | 文稿任务产出的字幕文字**逐字**就是文稿那一行——行内空格、全角空格、标点全部原样；对齐只往上贴时间戳。全局「中文输出」与「美化字幕」两个设置对它都**不生效**：美化只能提前作用在文稿上（面板的「美化字幕」/ `transcript polish`），不在打轴之后跑 | `build_sentences_from_transcript` 直接拿文稿行当 cue 文本（`build_sentences_from_lines`），不拼 `join_words`；`timeline::render` 在 `transcript` 为 `Some` 时直接忽略 `beautify`；ASS 逐字扫光也走 `cue_body_from_text`（文字来自原文，`\h` 来自原文的空格）。用例：`a_transcript_line_is_itself_not_a_respelling_of_it`、`transcript_cues_are_the_authors_lines_and_beautify_never_runs`、`verbatim_karaoke_text_is_the_transcript_line` |
 | **分行只有一个来源** | 界面上看到的断句就是生成结果 | 智能断句与生成时兜底**共用同一个长度预算**（`profile::source_char_limit`）。切分算法不同（无时间的贪心 vs 有时间的 DP），预算是同一处 |
 | **不发明标点** | 沿用全代码库既有不变式 | 断行只在空白处切开，不插入任何非空白字符 |
 | **token 不重不漏** | 文稿分行接进 `sentence_boundary` 的硬边界层，所有 token 恰好被分配一次 | 纯函数 + 断言 |

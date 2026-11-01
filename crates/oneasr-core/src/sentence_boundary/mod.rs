@@ -31,7 +31,8 @@ mod vad_align;
 mod watchability_merge;
 
 use assembly::{
-    build_boundaries_from_split_points, build_micro_chunks, build_sentences_from_word_spans,
+    LineSpan, build_boundaries_from_split_points, build_micro_chunks, build_sentences_from_lines,
+    build_sentences_from_word_spans,
 };
 use preset::subtitle_length_preset_from_id;
 use semantic::{build_split_points_from_hard_boundaries, split_points_to_spans};
@@ -153,11 +154,14 @@ pub fn build_source_sentences_from_words(
     })
 }
 
-/// 文稿的**一行 = 一条字幕**：边界由文稿给，不再跑排版 DP。
+/// 文稿的**一行 = 一条字幕**：边界由文稿给，不再跑排版 DP，**文字逐字取原文**。
 ///
 /// 这是 `build_source_sentences_from_words` 的另一半形态。两条入口共享归一化、
-/// 装配和 micro chunk；只有「span 从哪来」不同——自动模式从切分点来，文稿模式
-/// 从文稿的行来。
+/// 装配和 micro chunk；只有两处不同：
+///
+/// - **span 从哪来**：自动模式从切分点来，文稿模式从文稿的行来；
+/// - **文字从哪来**：自动模式用 `join_words` 把词拼回去（空格按书写系统决定），
+///   文稿模式**直接用那一行的原文**。机器不碰用户的字——包括他排的字距。
 ///
 /// 不跑排版 DP 是有意的：用户已经分好行了，再让一个代价函数去重排，等于把他
 /// 刚做的决定悄悄抹掉。仍然过一遍 [`crate::sentence_boundary::line_break`] 的
@@ -179,11 +183,11 @@ pub fn build_sentences_from_transcript(
         return Err("failed to build micro chunks".to_string());
     }
 
-    let spans = spans_from_transcript_lines(&normalized_words, transcript_text);
+    let spans = transcript_line_spans(&normalized_words, transcript_text);
     if spans.is_empty() {
         return Err("文稿的行和词对不上".to_string());
     }
-    let translation_sentences = build_sentences_from_word_spans(&normalized_words, &spans);
+    let translation_sentences = build_sentences_from_lines(&normalized_words, &spans);
     if translation_sentences.is_empty() {
         return Err("文稿的行和词对不上".to_string());
     }
@@ -203,17 +207,23 @@ pub fn build_sentences_from_transcript(
     })
 }
 
-/// 文稿的行 → 词的区间。**每个词恰好落进一个区间，不重不漏。**
+/// 文稿的行 → （词的区间, 这一行的原文）。**每个词恰好落进一个区间，不重不漏。**
 ///
 /// 对齐器的 token 流是「文稿去掉空白之后的字符序列」——CJK 逐字、拉丁按词、
 /// 标点跟在词里。所以按**非空白字符数**分配就行：一个词跨过了行尾，就整个算给
 /// 前一行（宁可那一行长一点，也不把一个词劈成两半，两半各带半个时间戳）。
 ///
+/// 区间只回答时间，**文字来自 `text` 那一行本身**。两步分开是有意的：分配按字
+/// 数算，所以行内空格在这里权重是 0，一个字都不影响分配，却能被原样带进字幕。
+///
 /// 文稿没覆盖到的词（文本被改过、或标点被规范化掉）并进最后一条，**绝不丢**——
 /// 丢掉的词不会报错，只会让字幕无声地少几个字，那是最难查的一类错。
-fn spans_from_transcript_lines(words: &[WordTokenDto], text: &str) -> Vec<(usize, usize)> {
+///
+/// 反过来，词流被文稿超用（稿子比音频长）时，最后几行分不到词，也就没有时间
+/// 可言：它们不产出字幕条，这是这条路径唯一会「少行」的地方。
+fn transcript_line_spans<'a>(words: &[WordTokenDto], text: &'a str) -> Vec<LineSpan<'a>> {
     let weight = |w: &str| w.chars().filter(|c| !c.is_whitespace()).count();
-    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut out: Vec<LineSpan<'a>> = Vec::new();
     let mut cursor = 0usize;
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         let want = weight(line);
@@ -235,15 +245,19 @@ fn spans_from_transcript_lines(words: &[WordTokenDto], text: &str) -> Vec<(usize
             }
         }
         if cursor > start {
-            spans.push((start, cursor - 1));
+            out.push(LineSpan {
+                start,
+                end: cursor - 1,
+                text: line,
+            });
         }
     }
-    if let Some(last) = spans.last_mut()
+    if let Some(last) = out.last_mut()
         && cursor < words.len()
     {
-        last.1 = words.len() - 1;
+        last.end = words.len() - 1;
     }
-    spans
+    out
 }
 
 /// Union two sorted-ish split-point lists, keeping the first reason per index.

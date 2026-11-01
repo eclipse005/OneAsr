@@ -1926,8 +1926,7 @@ fn one_transcript_line_becomes_one_cue() {
 
 #[test]
 fn cue_text_keeps_every_character_the_user_typed() {
-    // 空格由 `join_words` 按书写系统决定（那是渲染 cue 时同一份规则），但**一个字
-    // 都不能少或多**——这条是这个功能存在的理由。
+    // 一个字都不能少或多——这条是这个功能存在的理由。
     let text = "最近看到一些关于AI与语音识别的负面评价。\n尤其是原版Whisper，表现并不像可靠。";
     let out =
         super::build_sentences_from_transcript(transcript_request(tokens_of(text), "zh"), text)
@@ -1938,6 +1937,55 @@ fn cue_text_keeps_every_character_the_user_typed() {
         .flat_map(|s| s.text.chars())
         .collect();
     assert_eq!(letters(&shown), letters(text));
+}
+
+/// 文稿模式的核心承诺：字幕那一行就是文稿那一行，**逐字**相同——包括用户自己
+/// 排的字距。对齐只往行上贴时间戳，不对文字做任何重拼。
+///
+/// 旧实现把每一条字幕用 `join_words` 从词拼回去，空格按书写系统猜（汉字之间不
+/// 插），所以「月亮 代表 我的 心」到 SRT 里变成「月亮代表我的心」；这一组用例
+/// 在旧代码上全红。
+#[test]
+fn a_transcript_line_is_itself_not_a_respelling_of_it() {
+    for text in [
+        "月亮 代表 我的 心",
+        "我在  这里",          // 连续空格
+        "月亮　代表　我的心",  // 全角空格
+        "我用 AI 做 字幕辅助", // 汉字与拉丁混排
+        "你好，Whisper在哪",   // 逗号后面不许多出一个空格
+        "Hello world, 这是 karaoke",
+    ] {
+        let out =
+            super::build_sentences_from_transcript(transcript_request(tokens_of(text), "zh"), text)
+                .expect("sentences");
+        assert_eq!(out.translation_sentences.len(), 1, "{text:?} 应是一条字幕");
+        assert_eq!(
+            out.translation_sentences[0].text, text,
+            "字幕文字必须是文稿原文：{text:?}"
+        );
+    }
+}
+
+/// 多行一起验：条数、顺序、每条的原文全对得上。空行不是字幕（SRT 里一个空块
+/// 就是文件写坏了），其余每一行恰好一条。
+#[test]
+fn every_transcript_line_comes_out_exactly_as_written() {
+    let lines = [
+        "第一行 有 空格。",
+        "第二行没有。",
+        "第三行  两个空格，还有 Whisper。",
+        "第四行 只有一个词",
+    ];
+    let text = lines.join("\n\n");
+    let out =
+        super::build_sentences_from_transcript(transcript_request(tokens_of(&text), "zh"), &text)
+            .expect("sentences");
+    let shown: Vec<&str> = out
+        .translation_sentences
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(shown, lines, "空行跳过，其余每行一条、逐字不变");
 }
 
 #[test]

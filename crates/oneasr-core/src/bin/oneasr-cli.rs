@@ -1763,6 +1763,14 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
             i18n::cli_warn(i18n::t(i18n::CLI_ALIGN_HOTWORDS_IGNORED))
         );
     }
+    // 同理，而且更强：文稿模式的字幕文字就是用户的文稿，打轴之后不再改字，所以
+    // 美化只能提前到文稿上（`transcript polish`）。静默失效比报错难查——说出来。
+    if flag(args, "--beautify") {
+        eprintln!(
+            "{}",
+            i18n::cli_warn(i18n::t(i18n::CLI_ALIGN_BEAUTIFY_IGNORED))
+        );
+    }
 
     // 与 transcribe 同一条规则：模型选择/目录以 settings.json 为准；没有配置
     // 时才扫描安装布局。align 固定 CTC，但 CTC 目录仍来自它的 per-model 配置。
@@ -1778,7 +1786,8 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
     settings.output_srt = !no_srt;
     settings.output_txt = want_txt;
     settings.output_ass = want_ass;
-    settings.subtitle_beautify = flag(args, "--beautify");
+    // 不给 `subtitle_beautify`：文稿模式不美化（文字是用户的）。旗标如果给了，
+    // 上面已经警告过它被忽略。
     if let Some(script) = script_flag {
         settings.text_script = script;
     } else if settings_found {
@@ -1901,6 +1910,7 @@ fn cmd_transcript(args: &[String]) -> Result<(), i32> {
     match args.first().map(String::as_str) {
         Some("inspect") => cmd_transcript_inspect(&args[1..]),
         Some("split") => cmd_transcript_split(&args[1..]),
+        Some("polish") => cmd_transcript_polish(&args[1..]),
         _ => {
             print_help();
             Err(2)
@@ -1996,6 +2006,30 @@ fn cmd_transcript_split(args: &[String]) -> Result<(), i32> {
         1
     })?;
     let text = oneasr_core::sentence_boundary::break_long_lines(&transcript.text, &lang, &preset);
+    if flag(args, "--json") {
+        println!(
+            "{}",
+            transcript_text_json(&text, transcript.kind, audio_seconds)
+        );
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
+/// `transcript polish`：成稿美化，**作用于文稿本身**。
+///
+/// 文稿匹配的产物就是这份文稿加上时间戳，所以美化只在这之前做一次；对齐之后
+/// 不再改一个字（`align --beautify` 已经被劝退）。换行一条不动：行数就是字幕
+/// 条数，这条在美化前后必须一样。
+fn cmd_transcript_polish(args: &[String]) -> Result<(), i32> {
+    let input = require_arg(args, "--input")?;
+    let audio_seconds = arg(args, "--audio-seconds").and_then(|s| s.parse::<f64>().ok());
+    let transcript = oneasr_core::transcript::read_transcript(Path::new(&input)).map_err(|e| {
+        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
+        1
+    })?;
+    let text = oneasr_core::subtitle::polish::polish_text(&transcript.text);
     if flag(args, "--json") {
         println!(
             "{}",

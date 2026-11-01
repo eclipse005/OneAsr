@@ -86,14 +86,18 @@ impl Default for KaraokeStyle {
 
 /// The karaoke rendering of finished sentences, one `\k` per aligned unit.
 pub fn to_ass(sentences: &SourceSentences, style: &KaraokeStyle) -> String {
-    to_ass_with(sentences, style, false)
+    to_ass_with(sentences, style, false, false)
 }
 
 /// [`to_ass`]，`polish` 为真时正文走字幕美化，扫光仍按原来的对齐单元。
+///
+/// `verbatim` 为真时（文稿匹配）正文**逐字取句子的文字**——那是用户写的原文，
+/// 扫光仍按 token 的时间走，见 [`cue_body_from_text`]。
 pub(crate) fn to_ass_with(
     sentences: &SourceSentences,
     style: &KaraokeStyle,
     polish: bool,
+    verbatim: bool,
 ) -> String {
     // The same times the SRT will carry, monotonicity included. Sentences come
     // out of the assembler in time order, which is what `enforce_monotonic`
@@ -121,7 +125,9 @@ pub(crate) fn to_ass_with(
             continue;
         };
         let tokens = &sentences.words[sentence.word_start..=sentence.word_end];
-        let body = if polish {
+        let body = if verbatim {
+            cue_body_from_text(cue, tokens)
+        } else if polish {
             cue_body_polished(cue, tokens)
         } else {
             cue_body(cue, tokens)
@@ -179,6 +185,75 @@ fn cue_body(cue: &Cue, tokens: &[WordTokenDto]) -> String {
     }
     // Whatever is left of the line after the last unit: the tail of the final
     // sweep, which the unit's own span would otherwise leave unsung.
+    let tail = (line_end_ms - at) / 10;
+    if tail > 0 {
+        body.push_str(&format!("{{\\k{tail}}}"));
+    }
+    body
+}
+
+/// 文稿模式的 Dialogue 正文：**文字逐字取这一行原文**，扫光仍按对齐单元。
+///
+/// 为什么不能像 [`cue_body`] 那样从 token 拼：token 流里根本没有用户写的空格
+/// （对齐器把文稿的空白读成「边界」，不是文字），拼回去只剩 `spacing_pieces`
+/// 按书写系统猜出来的那一份——汉字之间一个都不插。文稿模式的字幕文字必须与
+/// 旁边那份 SRT 逐字一致，所以这里反着来：**走一遍原文**，非空白字符按顺序向
+/// token 取时间。token 是同一份文稿去掉空白之后的一串字符，所以两边本应逐字
+/// 对得上；对不上（对齐器插值、文本被改过）时仍然输出原文，只是那一段扫光会
+/// 井到相邻单元——文字永远比扫光重要。
+fn cue_body_from_text(cue: &Cue, tokens: &[WordTokenDto]) -> String {
+    // 非空白字符 → 它属于哪个对齐单元。
+    let mut stream: Vec<(char, usize)> = Vec::new();
+    for (unit, token) in tokens.iter().enumerate() {
+        for ch in token.word.chars() {
+            if !ch.is_whitespace() {
+                stream.push((ch, unit));
+            }
+        }
+    }
+
+    let line_end_ms = cue.end_ms as i64;
+    let mut body = String::new();
+    // 上一个扫光结束的位置；第一个单元从行首开始，行首的静音算在它自己身上。
+    let mut at = cue.start_ms as i64;
+    let mut cursor = 0usize;
+    let mut shown: Option<usize> = None;
+    for ch in cue.text.trim().chars() {
+        if ch.is_whitespace() {
+            // 用户写的空格：写字幕时是硬空格（普通空格是换行点，会把已定好的
+            // 一条字幕拆开）。
+            body.push_str("\\h");
+            continue;
+        }
+        // 优先拿下一个字符对得上的单元；对不上就从后面找同一个字（镜像了文本
+        // 与 token 发生偏差时，宁可跳过一个单元也不把字写错）。
+        let Some(found) = stream[cursor..]
+            .iter()
+            .position(|(c, _)| *c == ch)
+            .map(|offset| cursor + offset)
+            .filter(|i| *i < stream.len())
+        else {
+            // token 用完了：文字照写，不再有新扫光。
+            body.push(ch);
+            continue;
+        };
+        let unit = stream[found].1;
+        cursor = found + 1;
+        if shown != Some(unit) {
+            let next_ms = tokens
+                .get(unit + 1)
+                .map(|t| (t.start * 1000.0).round() as i64)
+                .unwrap_or(line_end_ms)
+                .max(at);
+            let cs = (next_ms - at) / 10;
+            if cs > 0 {
+                body.push_str(&format!("{{\\k{cs}}}"));
+            }
+            at = at.max(next_ms);
+            shown = Some(unit);
+        }
+        body.push(ch);
+    }
     let tail = (line_end_ms - at) / 10;
     if tail > 0 {
         body.push_str(&format!("{{\\k{tail}}}"));
@@ -324,7 +399,8 @@ fn fmt_ass_time(total_ms: u64) -> String {
 mod tests {
     use super::*;
     use crate::sentence_boundary::{
-        SentenceBoundaryRequest, build_source_sentences_from_words, is_no_space_script,
+        SentenceBoundaryRequest, build_sentences_from_transcript,
+        build_source_sentences_from_words, is_no_space_script,
     };
 
     /// The tokens the aligners actually hand over: one per character where the
@@ -433,6 +509,53 @@ mod tests {
         out
     }
 
+    /// 文稿模式：ASS 去掉标记后必须逐字等于文稿那一行，**包括用户写的空格**。
+    ///
+    /// 这条是 `cue_body_from_text` 的理由：从 token 拼（`cue_body`）在汉字之间
+    /// 一个空格都不插，稿子里的字距就没了，ASS 与旁边那份 SRT 也就不再一致。
+    #[test]
+    fn verbatim_karaoke_text_is_the_transcript_line() {
+        for line in [
+            "月亮 代表 我的 心",
+            "我用 AI 做 字幕，真的",
+            "Hello world, 这是 karaoke",
+        ] {
+            let words: Vec<WordTokenDto> = aligner_tokens(line)
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let start = i as f64 * 0.4;
+                    WordTokenDto {
+                        start,
+                        end: start + 0.35,
+                        word: t,
+                    }
+                })
+                .collect();
+            let sentences = build_sentences_from_transcript(
+                SentenceBoundaryRequest {
+                    task_id: "t".into(),
+                    media_path: "clip.mp4".into(),
+                    source_lang: "zh".into(),
+                    subtitle_length_preset: "standard".into(),
+                    words,
+                    vad_speech_segments: vec![(0.0, 60.0)],
+                },
+                line,
+            )
+            .expect("sentences");
+            assert_eq!(sentences.translation_sentences.len(), 1, "{line:?}");
+            let ass = to_ass_with(&sentences, &KaraokeStyle::default(), false, true);
+            let srt = crate::sentence_boundary::source_sentences_to_srt(&sentences);
+            assert_eq!(
+                plain_lines(&ass),
+                srt_texts(&srt),
+                "ASS 去掉标记后必须与 SRT 逐字相同：{line:?}"
+            );
+            assert_eq!(plain_lines(&ass), vec![line.to_string()], "{line:?}");
+        }
+    }
+
     /// The whole point of a karaoke file: strip the markup and you must get
     /// back the SRT's text, character for character. A `\h` in the wrong place
     /// or a token dropped here would show up as a subtitle that no longer says
@@ -462,7 +585,7 @@ mod tests {
     #[test]
     fn polished_karaoke_text_matches_polished_srt() {
         let mut sentences = sentences_of("使用Whisper模型，共123人。");
-        let ass = to_ass_with(&sentences, &KaraokeStyle::default(), true);
+        let ass = to_ass_with(&sentences, &KaraokeStyle::default(), true, false);
         for sentence in &mut sentences.translation_sentences {
             sentence.text = crate::subtitle::polish::polish_cue_text(&sentence.text);
         }
@@ -479,7 +602,7 @@ mod tests {
     fn polished_space_inside_a_glued_token_stays_one_sweep() {
         for text in ["1500人", "8月29日"] {
             let sentences = sentences_of(text);
-            let ass = to_ass_with(&sentences, &KaraokeStyle::default(), true);
+            let ass = to_ass_with(&sentences, &KaraokeStyle::default(), true, false);
             let body = ass
                 .lines()
                 .find(|l| l.starts_with("Dialogue:"))
