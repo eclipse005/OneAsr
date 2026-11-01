@@ -95,8 +95,13 @@ fn push_word(word: &mut String, out: &mut Vec<String>) {
     }
 }
 
-/// 切分一行。放得下就**原样返回**——不碰用户的空格；放不下才切，切出的片段按
-/// `join_words` 重新拼（那是我们唯一一份「这段文字该怎么排」的知识）。
+/// 切分一行。放得下就**原样返回**——不碰用户的空格；放不下才切，切出的片段是
+/// **原文的切片**（按单元在原文里的位置取），所以中间的字距一个不差。
+///
+/// 以前这里用 `join_words` 重新拼每一段，那是错的：`join_words` 只按书写系统
+/// 决定空格（汉字之间永不插），用户排的字距在切分这一步会静默消失。这个函数
+/// 的承诺是「只动换行」，那就得拿原文切，而不是重新拼一份。切点旁边的空白
+/// 会被那个换行吸收（新的行从单元的首字开始），这是换行的应有语义。
 ///
 /// 切点来自转写路径的同两个阶段：先按句末标点划出语义句界，再让排版 DP 在仍然
 /// 超预算的句子里挑切点（语法好切点优先，找不到就宁可整句保留）。没有时间戳，
@@ -130,6 +135,23 @@ fn split_line(
         return vec![line.to_string()];
     }
 
+    // 每个单元在原文里的字节区间：单元都是原文的连续子串且顺序不重，按序
+    // 搜索就能定位。定位失败（理论上不会）就退回 `join_words` 拼——那一份会丢
+    // 字距，但不能丢字。
+    let ranges = unit_ranges(line, units);
+    let piece = |start: usize, end: usize| -> Option<String> {
+        match (ranges.get(start), ranges.get(end - 1)) {
+            (Some(first), Some(last)) => {
+                let text = line[first.0..last.1].trim();
+                (!text.is_empty()).then(|| text.to_string())
+            }
+            _ => {
+                let text = join_words(units[start..end].iter().map(String::as_str));
+                (!text.trim().is_empty()).then_some(text)
+            }
+        }
+    };
+
     let mut out: Vec<String> = Vec::new();
     let mut start = 0usize;
     for (last_of_left, _) in cuts {
@@ -138,12 +160,12 @@ fn split_line(
         // `split_points_to_spans` 对切点的期望一致。
         let end = last_of_left + 1;
         if end > start && end <= units.len() {
-            out.push(join_words(units[start..end].iter().map(String::as_str)));
+            out.extend(piece(start, end));
             start = end;
         }
     }
     if start < units.len() {
-        out.push(join_words(units[start..].iter().map(String::as_str)));
+        out.extend(piece(start, units.len()));
     }
     // 防御：DP 理论上不会给出空行，但空行进字幕文件是难查的错。
     out.retain(|piece| !piece.trim().is_empty());
@@ -152,6 +174,22 @@ fn split_line(
     } else {
         out
     }
+}
+
+/// `units` 每一项在 `line` 里的字节区间。定位不到时返回空表，调用方退回拼装
+/// （`join_words`）——那会丢字距，但不会丢字。
+fn unit_ranges(line: &str, units: &[String]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(units.len());
+    let mut cursor = 0usize;
+    for unit in units {
+        let Some(found) = line.get(cursor..).and_then(|rest| rest.find(unit.as_str())) else {
+            return Vec::new();
+        };
+        let start = cursor + found;
+        out.push((start, start + unit.len()));
+        cursor = start + unit.len();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -175,6 +213,28 @@ mod tests {
         // 包括它自己带的空格：不该被顺手规范化。
         let line = "你  好";
         assert_eq!(break_long_lines(line, "zh", "standard"), line);
+    }
+
+    /// 智能断句只动换行：切出来的片段是**原文的切片**，所以行内的字距原样
+    /// 留着。以前这里用 `join_words` 重拼，汉字之间的空格会被判成“书写系统
+    /// 不需要”，用户排的字距在切分这一步静默消失。
+    #[test]
+    fn splitting_moves_line_breaks_and_nothing_else() {
+        let zh = "最近看到一些关于人工智能与语音识别 的 负面评价尤其是应用最为广泛的原版Whisper。";
+        let out = break_long_lines(zh, "zh", "standard");
+        assert_only_newlines_changed(zh, &out);
+        assert!(out.lines().count() > 1, "这么长的一行必须被切开：{out:?}");
+        assert!(
+            out.lines().any(|l| l.contains("与语音识别 的 负面")),
+            "行内空格必须留在原处（切片而不是重拼）：{out:?}"
+        );
+
+        // 拉丁也是一样：双空格属于原文，切分不该把它压成一个。
+        let en =
+            "Hello  world. This  is a test of the emergency broadcast system that keeps going.";
+        let out = break_long_lines(en, "en", "short");
+        assert!(out.lines().count() > 1, "该切：{out:?}");
+        assert_eq!(out.lines().next(), Some("Hello  world."), "{out:?}");
     }
 
     #[test]
