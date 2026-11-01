@@ -568,6 +568,7 @@ function registerIpc(): void {
     jobs.saveTranscript(id, text)
   )
   ipcMain.handle('transcript:split', async (_e, id: string) => jobs.splitTranscript(id))
+  ipcMain.handle('transcript:polish', async (_e, id: string) => jobs.polishTranscript(id))
   ipcMain.handle('transcript:reread', async (_e, id: string) => jobs.rereadTranscript(id))
   ipcMain.handle('transcript:remove', (_e, id: string) => jobs.removeTranscript(id))
   // 行内改（运行中会被 JobManager.patch 挡掉）

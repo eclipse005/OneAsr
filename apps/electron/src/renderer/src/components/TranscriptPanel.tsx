@@ -16,6 +16,8 @@ interface TranscriptPanelProps {
   /** 只保存。打轴由这一行外面的开始按钮发起。 */
   onSave: (text: string) => Promise<boolean>
   onSplit: (text: string) => Promise<void>
+  /** 美化字幕：作用在暂存正文上（打轴之前），不是对齐之后的自动一遍 */
+  onPolish: (text: string) => Promise<void>
   onReread: () => Promise<void>
   onRemove: () => void
 }
@@ -34,6 +36,7 @@ export function TranscriptPanel({
   onClose,
   onSave,
   onSplit,
+  onPolish,
   onReread,
   onRemove
 }: TranscriptPanelProps) {
@@ -236,6 +239,14 @@ export function TranscriptPanel({
               >
                 {s.transcriptSmartSplit}
               </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={!editable || busy || !draft.trim()}
+                onClick={() => void run(() => onPolish(draft))}
+              >
+                {s.transcriptBeautify}
+              </button>
               {info.path && (
                 <button
                   type="button"
@@ -253,14 +264,6 @@ export function TranscriptPanel({
                   {s.transcriptReread}
                 </button>
               )}
-              <button
-                type="button"
-                className="btn btn-ghost btn-danger-ghost btn-sm"
-                disabled={!editable || busy}
-                onClick={onRemove}
-              >
-                {s.transcriptRemove}
-              </button>
             </div>
           </aside>
 
@@ -354,6 +357,17 @@ export function TranscriptPanel({
             }
           >
             {savedAck && !dirty ? s.saved : s.transcriptSave}
+          </button>
+          {/* 移除文稿是**破坏性**的那个动作：推到右下角，与左边正常的取消 / 保存
+              分开，免得和智能断句、美化字幕排在一起被当成油滑的同级动作。 */}
+          <span className="footer-spacer" />
+          <button
+            type="button"
+            className="btn btn-ghost btn-danger-ghost"
+            disabled={!editable || busy}
+            onClick={onRemove}
+          >
+            {s.transcriptRemove}
           </button>
         </div>
     </ModalShell>

@@ -368,6 +368,28 @@ export default function App() {
     notify('success', s.transcriptSplitDone)
   }
 
+  const polishTranscript = async (text: string) => {
+    if (!transcriptId) return
+    const id = transcriptId
+    // 先把面板里的当前草稿落成暂存，再交给 core 美化；源文件一个字都不动。
+    // 美化的时机是这里（打轴之前），不是对齐之后。
+    const saved = await window.oneasr.saveTaskTranscript(id, text)
+    if (!saved.ok) {
+      notify('error', saved.error || s.transcriptSaveFailed)
+      return
+    }
+    if (saved.tasks) setTasks(saved.tasks)
+    const r = await window.oneasr.polishTaskTranscript(id)
+    if (!r.ok) {
+      notify('error', r.error || s.transcriptPolishFailed)
+      return
+    }
+    if (r.tasks) setTasks(r.tasks)
+    if (r.text != null) setTranscriptText(r.text)
+    if (r.info) setTranscriptInfo(r.info)
+    notify('success', s.transcriptPolishDone)
+  }
+
   const rereadTranscript = async () => {
     if (!transcriptId) return
     const r = await window.oneasr.rereadTaskTranscript(transcriptId)
@@ -785,6 +807,7 @@ export default function App() {
             }}
             onSave={saveTranscript}
             onSplit={splitTranscript}
+            onPolish={polishTranscript}
             onReread={rereadTranscript}
             onRemove={removeTranscript}
           />

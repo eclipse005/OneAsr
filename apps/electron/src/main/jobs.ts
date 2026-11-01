@@ -30,6 +30,7 @@ import {
   failedTranscriptInfo,
   inspectTranscriptFile,
   inspectTranscriptText,
+  polishTranscriptText,
   removeTempTranscript,
   splitTranscriptText,
   writeTempTranscript
@@ -347,6 +348,32 @@ export class JobManager extends EventEmitter {
       staged.info.name,
       task.durationSec
     )
+    if (!r.ok || r.text == null || !r.info) {
+      return { ok: false, error: r.error, tasks: this.list() }
+    }
+    const info: TranscriptInfo = {
+      ...staged.info,
+      lines: r.info.lines,
+      chars: r.info.chars,
+      rate: r.info.rate,
+      edited: r.text !== staged.originalText,
+      needsRealign: this.transcriptNeedsRealign(task, staged, r.text)
+    }
+    staged.text = r.text
+    staged.info = info
+    task.transcript = info
+    this.emitUpdate()
+    return { ok: true, text: r.text, info, tasks: this.list() }
+  }
+
+  /** 美化字幕：同样只作用于当前暂存文本，源文件一字不动。 */
+  async polishTranscript(id: string): Promise<TranscriptEditResult> {
+    const task = this.tasks.find((t) => t.id === id)
+    const staged = this.transcripts.get(id)
+    if (!task || !staged || this.transcriptLocked(task)) {
+      return { ok: false, error: m().transcriptUnavailable, tasks: this.list() }
+    }
+    const r = await polishTranscriptText(staged.text, staged.info.name, task.durationSec)
     if (!r.ok || r.text == null || !r.info) {
       return { ok: false, error: r.error, tasks: this.list() }
     }
@@ -998,7 +1025,8 @@ export class JobManager extends EventEmitter {
     if (settings.output_txt) args.push('--txt')
     if (settings.output_ass) args.push('--ass')
     if (!settings.output_srt) args.push('--no-srt')
-    if (settings.subtitle_beautify) args.push('--beautify')
+    // 不传 `--beautify`：文稿模式的字幕文字就是文稿本身，对齐之后不改字。
+    // 美化是文稿面板上的一次显式动作（`transcript polish`），跑在打轴之前。
     args.push(...outputFlags(settings))
     if (task.vocalSeparation ?? settings.vocal_separation) {
       args.push('--vocal-separation')

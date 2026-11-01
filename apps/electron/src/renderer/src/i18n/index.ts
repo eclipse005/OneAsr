@@ -72,6 +72,7 @@ export const zh = {
   outputNoneOn: '三种都关掉时仍然会输出 SRT',
   chineseScript: '中文字形',
   subtitlePolish: '成稿字幕美化',
+  subtitlePolishAlign: '只影响转写（文稿模式用文稿面板的「美化字幕」）',
   outputPath: '输出目录',
   saveNextToSource: '保存到源文件旁',
   asrSize: 'ASR 尺寸',
@@ -188,6 +189,8 @@ export const zh = {
     '面板里的修改只改应用内的副本，源文件永远不会被写入。没保存就关掉面板会问你要不要丢改动。',
   guideTranscriptSplit:
     '智能断句把过长的行拆成短行，拆完仍然只留在应用里，源文件一个字都不动。',
+  guideTranscriptBeautify:
+    '美化字幕把成稿美化（标点、全角半角、汉字与英文之间的空格）作用在文稿上，换行一条不动。它只能在这时候做：打轴产出的字幕就是你写的这一行，逐字不变，对齐之后不会再改字。',
   guideTranscriptRealign:
     '保存只更新这一行的文稿。打轴用那一行外面的开始按钮 —— 文稿匹配跳过识别，直接对齐，产出的字幕跟转写那条路写在一起。改过正文之后，这一行会提示需要重新打轴。',
   guideTranscriptTimed:
@@ -249,6 +252,7 @@ export const zh = {
   transcriptDroppedTimecodes: '已忽略原 SRT 时间轴，将重新打轴',
   transcriptNeedsRealign: '文稿已修改，需要重新打轴',
   transcriptSmartSplit: '智能断句',
+  transcriptBeautify: '美化字幕',
   transcriptReread: '重新读取',
   transcriptRemove: '移除文稿',
   transcriptSave: '保存',
@@ -256,11 +260,13 @@ export const zh = {
   hotwordUnsupportedLanguage: '热词只用于中文和英文',
   transcriptSaved: '文稿已保存',
   transcriptSplitDone: '已智能断句',
+  transcriptPolishDone: '已美化文稿',
   transcriptRereadDone: '已重新读取源文件',
   transcriptRemoved: '已移除文稿',
   transcriptReadFailed: '读不到文稿',
   transcriptSaveFailed: '保存文稿失败',
   transcriptSplitFailed: '智能断句失败',
+  transcriptPolishFailed: '美化字幕失败',
   transcriptNoSource: '这份文稿没有源文件',
   transcriptUnsaved: '未保存',
   transcriptDensityStale: '保存后更新语速提示',
@@ -385,6 +391,7 @@ export const en: Dict = {
   outputNoneOn: 'SRT is still written when all three are off',
   chineseScript: 'Chinese script',
   subtitlePolish: 'Subtitle polish',
+  subtitlePolishAlign: 'Transcription only (transcript rows use Beautify in the panel)',
   outputPath: 'Output path',
   saveNextToSource: 'Save next to source',
   asrSize: 'ASR size',
@@ -501,6 +508,8 @@ export const en: Dict = {
     'Edits only change the copy inside the app; the source file is never written. Closing the panel with unsaved changes asks whether to discard them.',
   guideTranscriptSplit:
     'Smart split breaks long lines into short ones. The result still stays inside the app — not a single character of the source file is touched.',
+  guideTranscriptBeautify:
+    'Beautify applies the finished-subtitle polish (punctuation, full/half width, spacing between Han and Latin) to the transcript itself, leaving every line break alone. This is the only place it can happen: alignment output IS the line you wrote, character for character, so nothing rewrites the text afterwards.',
   guideTranscriptRealign:
     'Saving only updates this row’s transcript. Aligning is started with the row’s own start button: transcript matching skips recognition and aligns directly, writing its subtitle alongside the ones from transcription. Once the text changed, the row says it needs a new alignment.',
   guideTranscriptTimed:
@@ -562,6 +571,7 @@ export const en: Dict = {
   transcriptDroppedTimecodes: 'Original SRT timings ignored; the transcript will be realigned',
   transcriptNeedsRealign: 'Transcript changed; realign to update the subtitles',
   transcriptSmartSplit: 'Smart split',
+  transcriptBeautify: 'Beautify',
   transcriptReread: 'Re-read',
   transcriptRemove: 'Remove transcript',
   transcriptSave: 'Save',
@@ -569,11 +579,13 @@ export const en: Dict = {
   hotwordUnsupportedLanguage: 'Hotwords are only available for Chinese and English',
   transcriptSaved: 'Transcript saved',
   transcriptSplitDone: 'Smart split applied',
+  transcriptPolishDone: 'Transcript beautified',
   transcriptRereadDone: 'Reloaded from source',
   transcriptRemoved: 'Transcript removed',
   transcriptReadFailed: 'Could not read transcript',
   transcriptSaveFailed: 'Could not save transcript',
   transcriptSplitFailed: 'Smart split failed',
+  transcriptPolishFailed: 'Could not beautify the transcript',
   transcriptNoSource: 'This transcript has no source file',
   transcriptUnsaved: 'Unsaved',
   transcriptDensityStale: 'Save to refresh the rate check',

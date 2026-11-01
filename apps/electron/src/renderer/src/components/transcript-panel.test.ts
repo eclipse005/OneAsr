@@ -43,4 +43,25 @@ describe('文稿面板的文案分工', () => {
     // 号的来源是「字幕行」判据，不是物理行
     expect(panel).toMatch(/transcriptLineMarks/)
   })
+
+  /**
+   * 侧栏按钮的顺序与底栏分组是有意的（用户 2026-11 定的）：
+   *
+   * - 侧栏三颗是**干活**的：智能断句 / 美化字幕 / 重新读取（都是改文稿本身）；
+   * - 移除文稿是**破坏性**的那个，推到右下角跟保存同一排，免得被当成同级动作。
+   *
+   * 顺序变了、或者移除文稿又跑回侧栏，这条就红。
+   */
+  it('侧栏是智能断句 / 美化字幕 / 重新读取，移除文稿在右下角', () => {
+    const at = (key: string): number => panel.indexOf(key)
+    const actions = ['s.transcriptSmartSplit', 's.transcriptBeautify', 's.transcriptReread']
+    for (let i = 1; i < actions.length; i += 1) {
+      expect(at(actions[i - 1]), `${actions[i - 1]} 要在 ${actions[i]} 前面`).toBeLessThan(
+        at(actions[i])
+      )
+    }
+    // 移除文稿在保存之后 = 在底栏，不在侧栏
+    expect(at('s.transcriptRemove')).toBeGreaterThan(at('s.transcriptSave'))
+    expect(panel).toMatch(/footer-spacer/)
+  })
 })

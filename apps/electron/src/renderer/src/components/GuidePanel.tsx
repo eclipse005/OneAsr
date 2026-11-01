@@ -129,6 +129,7 @@ function TabBody({ tab, s }: { tab: GuideTab; s: Copy }) {
         <Entry title={s.transcriptPanelTitle} body={s.guideTranscriptPanel} />
         <Entry title={s.transcriptSave} body={s.guideTranscriptEdit} />
         <Entry title={s.transcriptSmartSplit} body={s.guideTranscriptSplit} />
+        <Entry title={s.transcriptBeautify} body={s.guideTranscriptBeautify} />
         <Entry title={s.transcriptStart} body={s.guideTranscriptRealign} />
         <Entry title={s.outputs} body={s.guideTranscriptTimed} />
       </div>

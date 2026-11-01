@@ -512,7 +512,9 @@ export function SettingsDrawer({
                   />
                 </div>
                 <div className="pref-row">
-                  <span className="pref-label">{s.subtitlePolish}</span>
+                  <span className="pref-label" title={s.subtitlePolishAlign}>
+                    {s.subtitlePolish}
+                  </span>
                   <Toggle on={draft.subtitle_beautify} onChange={(v) => set('subtitle_beautify', v)} />
                 </div>
                 <div className="pref-row">

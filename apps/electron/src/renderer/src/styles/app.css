@@ -551,6 +551,8 @@ html[lang='en'] .badge-slot { width: 100px; }
   flex-shrink: 0;
 }
 .modal-footer .hint { flex: 1; color: var(--warn); font-size: 0.82rem; font-weight: 600; }
+/* 底栏分左右两组：左边的取消 / 保存是主流程，右边的破坏性动作自己靠右。 */
+.modal-footer .footer-spacer { flex: 1; }
 /* 关闭未保存的浮窗：在浮窗内部居中确认，遮罩只盖当前面板，不再多出一条底栏。 */
 .modal-confirm-backdrop {
   position: absolute; inset: 0; z-index: 20;

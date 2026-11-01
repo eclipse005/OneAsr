@@ -56,6 +56,7 @@ const api: OneAsrApi = {
   saveTaskTranscript: (id: string, text: string) =>
     ipcRenderer.invoke('transcript:save', id, text),
   splitTaskTranscript: (id: string) => ipcRenderer.invoke('transcript:split', id),
+  polishTaskTranscript: (id: string) => ipcRenderer.invoke('transcript:polish', id),
   rereadTaskTranscript: (id: string) => ipcRenderer.invoke('transcript:reread', id),
   removeTaskTranscript: (id: string) => ipcRenderer.invoke('transcript:remove', id),
   setTaskLanguage: (id: string, language: string) =>

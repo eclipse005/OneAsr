@@ -144,6 +144,36 @@ export async function splitTranscriptText(
 }
 
 /**
+ * 美化字幕：把成稿美化作用在**文稿本身**上（换行一条不动）。
+ *
+ * 为什么在打轴之前：文稿模式的字幕就是这份文稿加时间戳，对齐之后不再改字。
+ * 所以美化是这里的一次显式动作，而不是跑完对齐之后的自动一遍。
+ */
+export async function polishTranscriptText(
+  text: string,
+  name: string,
+  audioSeconds?: number
+): Promise<TranscriptReadResult> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oneasr-transcript-'))
+  const file = path.join(dir, 'transcript.txt')
+  try {
+    fs.writeFileSync(file, text, 'utf8')
+    const r = await runCliJson<CliTranscript>(
+      ['transcript', 'polish', '--input', file, '--json', ...audioArgs(audioSeconds)],
+      60000
+    )
+    if (!r.ok || !r.data) return { ok: false, error: r.error ?? 'transcript polish failed' }
+    return { ok: true, text: r.data.text, info: toInfo(r.data, null, name) }
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* temp cleanup is best-effort */
+    }
+  }
+}
+
+/**
  * 编辑后的文稿要交给 align 读：写一份临时纯文本，CLI 读完就删。
  * 返回文件路径；调用方负责在子进程结束后 `removeTempTranscript`。
  */
