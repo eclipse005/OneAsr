@@ -41,6 +41,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # 预览版清单（空格分隔）：在这里 tag 上的 Release 标成 pre-release，且不抢
+  # master 的 "Latest"。Electron 线在预览期时往里加，正式发版时删。
+  PREVIEW_TAGS: "v2.0.0 v2.0.2"
 
 jobs:
   version:
@@ -264,10 +267,13 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: OneAsr ${{ needs.version.outputs.version }}
           body_path: RELEASE_BODY.md
-          # v2.0.0 是 Electron 线的第一个预览版：标成 prerelease，且不让它抢走
-          # master 的 "Latest" 标记（GitHub 首页仍指向稳定的 GPUI 版本）。
-          # 其余 tag 自动回到正式版，合并到 master 后无需改这里。
-          prerelease: ${{ github.ref_name == 'v2.0.0' }}
-          make_latest: ${{ github.ref_name == 'v2.0.0' && 'false' || 'true' }}
+          # Electron 线的预览版：标成 prerelease，且不让它抢走 master 的 "Latest"
+          # 标记（GitHub 首页仍指向稳定的 GPUI 版本）。其余 tag 自动回到正式版，
+          # 合并到 master 后无需改这里。
+          #
+          # 要发一个预览版，只把这个 tag 加进 PREVIEW_TAGS（空格分隔，不写 v 以外
+          # 的修饰）；正式发时删掉它即可，两处判断读的是同一个变量。
+          prerelease: ${{ contains(format(' {0} ', env.PREVIEW_TAGS), format(' {0} ', github.ref_name)) }}
+          make_latest: ${{ contains(format(' {0} ', env.PREVIEW_TAGS), format(' {0} ', github.ref_name)) && 'false' || 'true' }}
           fail_on_unmatched_files: true
           files: out/*
