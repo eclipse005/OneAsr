@@ -25,13 +25,13 @@
 
 ## 下载安装
 
-当前版本 **[v1.3.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.3.0)**（点文件名即下载）：
+当前版本 **[v1.4.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.4.0)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_macos.dmg) |
 
 ## 快速上手
 
@@ -84,13 +84,13 @@
 
 ## CLI 命令行
 
-安装包自带 `oneasr-cli`（与 GUI 同一条流水线），先用 GUI 下好模型再调用：
+安装包自带 `oneasr-cli`（与 GUI 同一条流水线），先用 GUI 下好模型（或 `oneasr-cli download --model 0.6b`）再调用：
 
 ```powershell
 oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --output "out.srt"
 ```
 
-`align` 挂文稿（`--text 文稿.txt`）打轴、不跑识别；`render` 从落盘的 `timeline.json` 免加载模型重渲染其它预设。`--txt` 额外出 txt、`--script original|simplified|traditional` 切中文字形、`--vocal-separation` 先做人声分离、`--hotword-group <组名>` 用保存的热词组、`--hotwords <词表>` 直接给词表（仅中文 / 英文任务）。`--help` 看完整参数。
+`align` 挂文稿（`--text 文稿.txt`）打轴、不跑识别；`render` 从落盘的 `timeline.json` 免加载模型重渲染其它预设。`transcript inspect|split|polish` 在打轴之前读文稿 / 智能断句 / 美化；`status` 报模型就绪、`probe` 报文件的时长与类型；`--events=json` 输出逐行 JSON 进度。`--txt` 额外出 txt、`--script original|simplified|traditional` 切中文字形、`--vocal-separation` 先做人声分离、`--hotword-group <组名>` 用保存的热词组、`--hotwords <词表>` 直接给词表（仅中文 / 英文任务）。`--help` 看完整参数。
 
 ## 配置要求
 

@@ -29,6 +29,18 @@ pub(crate) fn polish_cue_text(text: &str) -> String {
     polish_mapped(text).into_iter().map(|m| m.ch).collect()
 }
 
+/// 整份文稿的美化：**逐行**套用同一条成稿规则，换行一条不动。
+///
+/// 给文稿编辑面板的「美化字幕」用。它和字幕那条路的规则是同一份
+/// （[`polish_cue_text`]）——因为文稿对齐后的字幕就是这份文稿本身，人在面板里
+/// 看到什么，字幕里就是什么。
+///
+/// 这是**显式动作**：不勾就不跑。对齐之后不再有自动美化，文稿模式的文字
+/// 默认逐字就是用户写的那一行。
+pub fn polish_text(text: &str) -> String {
+    polish_cue_text(text)
+}
+
 pub(crate) fn polish_mapped(text: &str) -> Vec<MappedChar> {
     let chars: Vec<(usize, char)> = text
         .chars()
@@ -485,6 +497,23 @@ mod tests {
 
     fn polish(text: &str) -> String {
         polish_cue_text(text)
+    }
+
+    /// `polish_text` 是面板上那个「美化字幕」的入口：它吃整份文稿，所以
+    /// **行数必须一条不变**——一条文稿行就是一条字幕，美化只能改字不能改分行。
+    #[test]
+    fn polishing_a_transcript_keeps_every_line_break() {
+        let text = "使用Whisper模型，共123人。\n第二行 没有 英文\n第三行！\n";
+        let out = polish_text(text);
+        assert_eq!(out.lines().count(), text.lines().count(), "{out:?}");
+        assert!(
+            out.contains("使用 Whisper 模型"),
+            "汉字和拉丁之间该补空格：{out:?}"
+        );
+        assert!(
+            out.contains("第二行 没有 英文"),
+            "行内空格不被拆行：{out:?}"
+        );
     }
 
     #[test]

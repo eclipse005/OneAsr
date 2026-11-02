@@ -262,15 +262,10 @@ fn format_duration(sec: f64) -> String {
     }
 }
 
+/// 拖进来 / 粘贴进来的路径算不算媒体：问 core 那张唯一的表
+/// （[`oneasr_core::media::media_kind`]），界面层不再列第二份扩展名。
 fn is_media_path(path: &Path) -> bool {
-    const EXT: &[&str] = &[
-        "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mkv", "mov", "webm",
-        "avi", "flv", "ts", "m4v", "mpeg", "mpg", "wmv", "3gp",
-    ];
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| EXT.iter().any(|x| e.eq_ignore_ascii_case(x)))
-        .unwrap_or(false)
+    oneasr_core::media::media_kind(path) != oneasr_core::media::MediaKind::Other
 }
 
 /// Accept existing **media** files only (rejects `.srt` and other non-media).
@@ -298,6 +293,25 @@ mod tests {
         assert!(!accept_input_path(Path::new("a.srt")));
         assert!(is_media_path(Path::new("clip.WAV")));
         assert!(is_media_path(Path::new("v.mp4")));
+    }
+
+    /// 老短表漏掉的 .flv / .ts / .3gp 也是媒体：拖拽准入直接问 core，
+    /// 「拖得进来、对话框却选不到」的那条缝不再由界面层两张表的状态决定。
+    ///
+    /// 断骨锚点：把 `is_media_path` 改回写死的 14 项短表（缺
+    /// flv/ts/mpeg/mpg/wmv/3gp），下面三条断言立刻变红。
+    #[test]
+    fn is_media_path_accepts_the_whole_core_table() {
+        for ext in ["flv", "ts", "3gp"] {
+            let name = format!("x.{ext}");
+            assert!(is_media_path(Path::new(&name)), "{name} 该被当成媒体");
+        }
+        assert!(!is_media_path(Path::new("x.txt")));
+        // 逐条走一遍 core 的表：界面层不许比 core 少一个扩展名。
+        for ext in oneasr_core::media::supported_exts() {
+            let name = format!("x.{ext}");
+            assert!(is_media_path(Path::new(&name)), "{name}");
+        }
     }
 
     #[test]

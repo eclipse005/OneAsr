@@ -13,6 +13,13 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
   （两条 cargo 命令都必须带 `--workspace --all-targets`：只写 `-p oneasr` 时，
   `oneasr-core` 的 tests / examples 根本进不了 lint 视野——那正是 ci.yml 里留着的教训）
 - 测试：`cargo test --locked -p oneasr-core -p oneasr`（改动引擎或设置模型时必跑）
+- 模型选择与目录：以 `settings.json` 为唯一来源，**每个模型各记各的路径**（`asr_dirs` /
+  `aligner_dirs` / `demucs_model_dir` / `sensevoice_model_dir`）；CLI 的 `transcribe` / `align` /
+  `status` / `download` 都读它，显式旗标（`--asr-model-dir` 等）可覆盖。存进去的目录原样读回
+  （WYSIWYG），不替用户改写。
+- 文稿匹配：GUI 把同名 `.txt` / `.srt` 与媒体一起拖入，或把文稿拖到某一行；CLI 用
+  `align --audio <媒体> --text <文稿>`，摘要 / 智能断句 / 美化用
+  `transcript inspect|split|polish --input <文稿> --json`（都走 core，壳不复制规则）
 - 版本一致性：`python3 scripts/verify-version.py`（加 `--tag v<版本>` 可一并断言 tag）
 - 界面文案双语：`python3 scripts/verify-i18n.py`（改动 UI 文案后跑，CI 会拦）
 - 双语门禁的自测：`python3 scripts/test_verify_i18n.py`（改了门禁或它的测试就跑；CI 也跑）

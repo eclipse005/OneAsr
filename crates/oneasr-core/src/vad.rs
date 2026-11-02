@@ -19,6 +19,9 @@ use crate::asr::AsrError;
 const SILENCE_LOOKBACK: f32 = 30.0;
 const MIN_SILENCE_PREFER: f32 = 0.5;
 const MIN_SILENCE_FALLBACK: f32 = 0.3;
+/// 最后一层：任何能测出的短停顿（换气）也比把切刀落进词中间好。
+/// 调用方派生静音时用这个最宽的阈值，否则短停顿根本到不了 [`plan_chunks`]。
+pub const MIN_SILENCE_MICRO: f32 = 0.12;
 /// Any chunk shorter than this is absorbed into a neighbor so we avoid
 /// tiny ASR/align windows (e.g. 1–5 s remainder after ~chunk_target splits,
 /// or a sub-second sliver when the longest silence in the lookback window
@@ -33,6 +36,17 @@ pub struct Chunk {
     pub end: f32,
 }
 
+/// VAD 判定“这里真的断开了”所需的最少静音帧数（10ms/帧，默认 20 = 200ms）。
+/// 降到 10（100ms）后，`plan_chunks` 才有更多缝隙可选，尽量不盲切。
+const VAD_MIN_SILENCE_FRAME: usize = 10;
+
+fn vad_config() -> VadConfig {
+    VadConfig {
+        min_silence_frame: VAD_MIN_SILENCE_FRAME,
+        ..VadConfig::default()
+    }
+}
+
 /// Run FireRedVAD on a 16 kHz mono WAV and return speech segments.
 ///
 /// Each pair is `(start_sec, end_sec)`. Model weights are embedded in the
@@ -40,7 +54,7 @@ pub struct Chunk {
 pub fn run_vad(wav_path: &Path) -> Result<Vec<(f32, f32)>, AsrError> {
     let vad = Vad::new().map_err(|e| AsrError::Other(format!("VAD init failed: {e}")))?;
     let out = vad
-        .detect_wav(wav_path, &VadConfig::default())
+        .detect_wav(wav_path, &vad_config())
         .map_err(|e| AsrError::Other(format!("VAD detect failed: {e}")))?;
     Ok(out.timestamps)
 }
@@ -137,6 +151,10 @@ pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Ve
     let mut tiers = vec![prefer];
     if fallback < prefer - 1e-9 {
         tiers.push(fallback);
+    }
+    // 第三层：短停顿。宁可切在换气处，也不盲切进词中间。
+    if MIN_SILENCE_MICRO < fallback - 1e-9 {
+        tiers.push(MIN_SILENCE_MICRO);
     }
 
     let mut cuts: Vec<f32> = vec![0.0];
@@ -270,6 +288,35 @@ mod tests {
         assert!((chunks[0].end - 180.0).abs() < 0.1);
         assert!((chunks[1].end - 195.0).abs() < 0.1);
         assert!((chunks[1].end - chunks[1].start - 15.0).abs() < 0.1);
+    }
+
+    /// 断骨验证：目标点附近**只有一个 0.2s 的短停顿**（够不到 0.3s 兜底门槛）时，
+    /// 切点应该落在这个换气处，而不是在 180.0 盲切。拿掉第三层后这个测试会变红。
+    #[test]
+    fn micro_pause_beats_blind_cut() {
+        // 缺口 179.0–179.2（0.2s）：低于 0.3s 兜底、高于 0.12s 短停顿层，
+        // 且中点在目标 180 之前——只有第三层能切到这里。
+        let silences = vec![(179.0, 179.2)];
+        let chunks = plan_chunks(450.0, &silences, 180.0);
+        assert!(chunks.len() >= 2);
+        let cut = chunks[0].end;
+        assert!(
+            cut > 178.9 && cut < 179.3,
+            "切点没落在短停顿上，而是盲切了: {cut}"
+        );
+    }
+
+    /// 反向约束：**块长上限不因短停顿层而放宽**。
+    #[test]
+    fn micro_pause_does_not_widen_the_cap() {
+        // 180 之后才有 0.2s 缺口：目标点之前无可切点 → 仍然在 180.0 切
+        let silences = vec![(185.0, 185.2)];
+        let chunks = plan_chunks(450.0, &silences, 180.0);
+        assert!(
+            (chunks[0].end - 180.0).abs() < 0.1,
+            "上限被拖走了: {}",
+            chunks[0].end
+        );
     }
 
     #[test]

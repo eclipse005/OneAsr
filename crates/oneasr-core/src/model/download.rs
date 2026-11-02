@@ -456,7 +456,8 @@ fn download_one_file(
         .open(part_path)
         .map_err(|e| FileDownloadError::Permanent(e.to_string()))?;
 
-    let mut buf = [0_u8; 64 * 1024];
+    // 堆上分配：Windows 的主线程栈只有 1 MiB，下载路径不该在栈上放几十 KiB 以上的缓冲
+    let mut buf = vec![0_u8; 64 * 1024];
     loop {
         if ctx.cancelled() {
             // Keep `.part` so the next download resumes.
@@ -498,7 +499,10 @@ fn sha256_matches(path: &Path, expected_hex: &str) -> std::io::Result<bool> {
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 1024 * 1024];
+    // 堆上分配，**不要**写成 `[0_u8; 1024 * 1024]`：Windows 主线程默认栈就是 1 MiB，
+    // 那样会在校验大权重时直接 STATUS_STACK_OVERFLOW（本机实测退出码 0xC00000FD）；
+    // Linux 主线程 8 MiB、单测线程 2 MiB 都撞不到，所以只有 Windows 的 CLI 会暴露。
+    let mut buf = vec![0_u8; 1024 * 1024];
     loop {
         let n = file.read(&mut buf)?;
         if n == 0 {
@@ -559,6 +563,31 @@ mod tests {
         f.write_all(&[0u8; 1001]).unwrap();
         drop(f);
         assert!(!file_meets_ready_threshold(&path, 1000));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 跨缓冲区的分块读取：文件比内部缓冲还大，逐块喂进 hasher 也要和一次性 digest 一致。
+    ///
+    /// 旧实现只测过 3 字节的文件，分块循环从未被覆盖。**这条用例在 Linux 上照绿**，
+    /// 因为爆栈只在 Windows 的 1 MiB 主线程栈上发生——真正的断骨验证是实机跑一次
+    /// 完整下载（修前在 99% 处 0xC00000FD，修后 done）。
+    #[test]
+    fn sha256_matches_reads_files_larger_than_one_chunk() {
+        use sha2::{Digest, Sha256};
+        let dir = std::env::temp_dir().join(format!("oneasr-sha-chunk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.bin");
+
+        // 1 MiB + 1 字节：正好越过内部缓冲一块的边界
+        let content: Vec<u8> = (0..(1024 * 1024 + 1)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &content).unwrap();
+        let expected = format!("{:x}", Sha256::digest(&content));
+
+        assert!(sha256_matches(&path, &expected).unwrap());
+        assert!(sha256_matches(&path, &expected.to_uppercase()).unwrap());
+        assert!(!sha256_matches(&path, &format!("0{expected}")).unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

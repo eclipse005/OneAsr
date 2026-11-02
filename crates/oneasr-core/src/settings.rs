@@ -239,16 +239,30 @@ fn default_sound() -> bool {
     true
 }
 
+/// `close_to_tray` 默认关：老用户的关窗语义不变（直接退出），要托盘的显式
+/// 打开一次开关。
+fn default_close_to_tray() -> bool {
+    false
+}
+
 // 欢迎卡只该出现在全新安装上：settings.json 缺这个字段（老配置）落 `true`
 // 不弹，[`Settings::default`]（全新安装的落点）才显式给 `false`。
 fn default_welcome_done() -> bool {
     true
 }
 
-/// `close_to_tray` 默认关：老用户的关窗语义不变（直接退出），要托盘的显式
-/// 打开一次开关。
-fn default_close_to_tray() -> bool {
-    false
+/// 选中的输出里有没有**带时间轴**的那一种（SRT / ASS）。
+///
+/// 这条判据全仓库只有这一处，三处都问它：
+/// - [`Settings::can_start`]：带时间轴才需要对齐器（TXT 走纯文本路，不需要权重）；
+/// - [`Settings::can_start_transcript`]：文稿匹配必须有带时间轴的产物——纯 TXT
+///   的匹配没有时间轴可言（管线的 TXT-only 文稿匹配同样被拒）；
+/// - CLI 的用法校验（`align --no-srt --txt`）：那是「用法错」，要在碰模型
+///   之前就报出来，不该等门禁。
+///
+/// 写成自由函数而不是方法：CLI 那时只有两个旗标，还没有一份 [`Settings`]。
+pub fn timed_output_selected(output_srt: bool, output_ass: bool) -> bool {
+    output_srt || output_ass
 }
 
 impl Default for Settings {
@@ -300,6 +314,12 @@ pub struct SettingsLoadReport {
     /// `settings.json` 实际读到的那份（数据目录优先、安装目录兜底）；都没读到
     /// 时是数据目录里的写路径。写入永远只走数据目录。
     pub config_path: Option<PathBuf>,
+    /// **真的读到了**一份 settings.json（数据目录或安装目录）。
+    ///
+    /// 这不是诊断字段而是契约：CLI 的模型路径解析用它区分「用户配置了模型」
+    /// 与「一个都没有、按安装布局兜底」。没有它就只能靠目录是否为空来猜，
+    /// 而空目录恰好也是合法配置。
+    pub found: bool,
     /// Non-NotFound read failure (permission, file lock, …).
     pub read_error: Option<String>,
     /// File exists but is not valid settings JSON.
@@ -373,6 +393,7 @@ impl Settings {
             match std::fs::read_to_string(path) {
                 Ok(text) => {
                     report.config_path = Some(path.clone());
+                    report.found = true;
                     return Some(match serde_json::from_str::<Settings>(&text) {
                         Ok(mut s) => {
                             s.normalize_with_notes(&mut report.repairs);
@@ -804,7 +825,7 @@ impl Settings {
     /// to download a checkpoint whose output nothing consumes.
     pub fn can_start(&self) -> Result<(), String> {
         crate::asr::check_asr_model_dir(&self.asr_model_dir).map_err(|e| e.to_string())?;
-        if self.output_srt || self.output_ass {
+        if timed_output_selected(self.output_srt, self.output_ass) {
             crate::asr::check_aligner_model_dir(&self.aligner_model_dir)
                 .map_err(|e| e.to_string())?;
         }
@@ -813,6 +834,22 @@ impl Settings {
                 .map_err(|e| e.to_string())?;
         }
         self.check_hotword_ready()
+    }
+
+    /// 文稿匹配的门禁：文字来自用户，**不需要 ASR**；只要对齐器（以及人选的人声
+    /// 分离）在位，且至少有一个带时间轴的输出。热词在文稿路径上没有消费者，不查。
+    pub fn can_start_transcript(&self) -> Result<(), String> {
+        if !timed_output_selected(self.output_srt, self.output_ass) {
+            return Err(
+                crate::i18n::t(crate::i18n::ERR_TRANSCRIPT_REQUIRES_TIMED_OUTPUT).to_string(),
+            );
+        }
+        crate::asr::check_aligner_model_dir(&self.aligner_model_dir).map_err(|e| e.to_string())?;
+        if self.vocal_separation {
+            crate::asr::check_demucs_model_dir(&self.resolved_demucs_model_dir())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// 热词这一路的开跑前检查：选了组就必须有词、且粗转模型在位。
@@ -1043,6 +1080,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// 文稿路径的文字来自用户，ASR 没装也不该挡；但它仍然要求 CTC 对齐器与
+    /// 至少一个带时间轴的输出。断骨锚点：把 `can_start_transcript` 改回
+    /// `can_start()`，第一条断言变红。
+    #[test]
+    fn transcript_start_ignores_missing_asr_but_needs_a_timed_output() {
+        let root =
+            std::env::temp_dir().join(format!("oneasr_transcript_gate_{}", std::process::id()));
+        let align = root.join("align-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&align).unwrap();
+        let blob = vec![0u8; 4096];
+        for name in [
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "model.safetensors",
+        ] {
+            std::fs::write(align.join(name), &blob).unwrap();
+        }
+
+        let s = Settings {
+            asr_model_dir: root.join("missing-asr"),
+            aligner_model_dir: align,
+            output_srt: true,
+            output_ass: false,
+            ..Settings::default()
+        };
+        assert!(s.can_start().is_err(), "普通路径仍然要求 ASR");
+        assert!(
+            s.can_start_transcript().is_ok(),
+            "文稿路径不加载 ASR: {:?}",
+            s.can_start_transcript()
+        );
+
+        let mut txt_only = s.clone();
+        txt_only.output_srt = false;
+        txt_only.output_ass = false;
+        txt_only.output_txt = true;
+        let err = crate::i18n::with_ui_lang(crate::i18n::UiLang::Zh, || {
+            txt_only.can_start_transcript().unwrap_err()
+        });
+        assert!(err.contains("SRT") && err.contains("ASS"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 「有没有带时间轴的产物」这条判据全仓库只有一处：门禁
+    /// （`can_start` 要不要对齐器、`can_start_transcript` 放不放行）与 CLI 的
+    /// 用法校验（`align --no-srt --txt`）问的是同一个函数。
+    ///
+    /// 断骨锚点：把 `timed_output_selected` 改成 `output_srt`（丢掉 ASS），
+    /// 下面 ASS-only 那条断言立刻变红。
+    #[test]
+    fn the_timed_output_rule_has_one_home() {
+        assert!(timed_output_selected(true, false), "SRT 是带时间轴的");
+        assert!(timed_output_selected(false, true), "ASS 也是带时间轴的");
+        assert!(timed_output_selected(true, true), "两个都要时当然算");
+        assert!(!timed_output_selected(false, false), "纯 TXT 没有时间轴");
+
+        // 门禁跟这条判据一致：纯 TXT 的普通转写不需要对齐器（可以跑），
+        // 但文稿匹配必须拒（没有时间轴产物）。
+        let mut s = Settings {
+            output_srt: false,
+            output_ass: false,
+            output_txt: true,
+            ..Settings::default()
+        };
+        s.normalize();
+        assert!(
+            !timed_output_selected(s.output_srt, s.output_ass),
+            "normalize 不得把 TXT-only 变成有时间轴"
+        );
+        assert!(
+            s.can_start_transcript().is_err(),
+            "纯 TXT 的文稿匹配必须拒：{:?}",
+            s.can_start_transcript()
+        );
+    }
+
     /// 热词挡路的判据与 `can_start` **同源**（都走 `check_hotword_ready`）：选了组
     /// 就必须有词、且粗转模型在位；没选热词时永远是「不是热词的锅」。
     ///
@@ -1211,7 +1326,12 @@ mod tests {
         );
 
         // Each of the four variants remembers its own folder.
-        let custom_int8 = PathBuf::from(r"C:\custom\models\Qwen3-ASR-0.6B-int8");
+        // 路径用 join 构造：写死 r"C:\custom\models\..." 在 Linux 上是一整个
+        // 文件名（不是绝对路径），测的就不是「用户挑的目录」这件事了。
+        let custom_int8 = std::env::temp_dir()
+            .join("custom")
+            .join("models")
+            .join("Qwen3-ASR-0.6B-int8");
         s.set_asr_dir(custom_int8.clone());
         s.set_asr_quantized(false);
         assert_eq!(s.selected_asr_id(), ModelId::Qwen3Asr06B);
@@ -1263,7 +1383,12 @@ mod tests {
         // The macOS report this fixes: models moved out of the app bundle into a
         // custom root, 0.6B pointed at it, then a size switch threw the path back
         // to the install layout and the choice was gone for good.
-        let custom = PathBuf::from(r"C:\custom-models\Qwen3-ASR-0.6B-hf");
+        //
+        // 路径用 join 构造（AGENTS.md 的跨平台规矩）：写死 r"C:\custom-models\..."
+        // 在 Linux 上只是一个相对文件名，这条断言测的就不是「用户挑的目录」了。
+        let custom = std::env::temp_dir()
+            .join("custom-models")
+            .join("Qwen3-ASR-0.6B-hf");
         s.set_asr_dir(custom.clone());
         assert_eq!(s.asr_model_dir, custom);
 
@@ -1638,6 +1763,31 @@ mod tests {
         assert!(notes.is_empty(), "no-op repair must not record: {notes:?}");
     }
 
+    /// 存进配置的目录，原样取回：用户挑哪个目录，就加载哪个目录。
+    ///
+    /// 这条不变式（WYSIWYG）是 `asr_dir_for` / `aligner_dir_for` 的核心承诺：
+    /// 加载路径不许被「猜」出来。之前在这里给相对 pick 加过一层「按模型根
+    /// 绝对化」，结果把用户挑的相对目录改写成了另一个目录 —— Linux CI 上
+    /// `each_asr_size_keeps_its_own_dir` 变红才把它揪出来。
+    ///
+    /// 相对 pick 的含义本来就是**有歧义的**（相对于谁？），与其悄悄猜一个
+    /// 解释，不如原样加载：猜错了用户看到的是「模型未就绪」，而改写了目录
+    /// 用户看到的是「加载了一个我没挑过的目录」——后者更难查。
+    ///
+    /// 界面上要显示全路径，那是**显示层**的事：壳显示 CLI `status --json` 里
+    /// 已经解析好的那个目录，不让 core 替用户改配置。
+    #[test]
+    fn a_stored_pick_is_returned_verbatim() {
+        let mine = std::env::temp_dir().join("oneasr-my-weights");
+        let s = Settings {
+            aligner_dirs: BTreeMap::from([(QWEN_ALIGN_06B.to_string(), mine.clone())]),
+            asr_dirs: BTreeMap::from([(QWEN3_ASR_06B.to_string(), mine.clone())]),
+            ..Settings::default()
+        };
+        assert_eq!(s.aligner_dir_for(ModelId::QwenAlign06B), mine);
+        assert_eq!(s.asr_dir_for(ModelId::Qwen3Asr06B), mine);
+    }
+
     #[test]
     fn load_report_is_notable_reflects_errors() {
         // The report contract, without touching the real settings file on disk:
@@ -1701,6 +1851,7 @@ mod tests {
         let loaded = Settings::load_first_of(&candidates, &mut report).expect("legacy settings");
         assert_eq!(loaded.chunk_target_seconds, 90);
         assert_eq!(report.config_path.as_deref(), Some(legacy.as_path()));
+        assert!(report.found, "读到安装目录那份也算 found");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1717,6 +1868,7 @@ mod tests {
         let loaded = Settings::load_first_of(&candidates, &mut report).expect("data settings");
         assert_eq!(loaded.chunk_target_seconds, 120);
         assert_eq!(report.config_path.as_deref(), Some(data.as_path()));
+        assert!(report.found);
 
         let _ = std::fs::remove_dir_all(&root);
     }

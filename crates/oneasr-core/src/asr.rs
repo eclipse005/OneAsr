@@ -43,7 +43,7 @@ use std::time::Instant;
 use crate::diagnostics::trace_log;
 use crate::engine::{
     AlignRequest, AlignedToken, EngineProvider, SeparateRequest, SeparationEvent,
-    TranscribeRequest, degenerate_transcript,
+    TranscribeRequest, Transcript, degenerate_transcript,
 };
 use crate::hotword::HotwordRun;
 use crate::i18n::{self, UiLang, t};
@@ -150,8 +150,6 @@ impl AsrError {
     }
 }
 
-const MIN_SILENCE_FALLBACK: f32 = 0.3;
-
 /// Fine-grained pipeline stage for live UI status and timing breakdown.
 ///
 /// Order in a successful run:
@@ -204,6 +202,25 @@ impl AsrStage {
             (Self::Aligning, UiLang::En) => "Aligning",
             (Self::Exporting, UiLang::Zh) => "导出字幕",
             (Self::Exporting, UiLang::En) => "Exporting subtitles",
+        }
+    }
+
+    /// 机器可读的稳定标识（`--events=json` 的 `key` 字段）。
+    ///
+    /// 与 [`Self::label`] 分工：label 跟着界面语言变，key 永远是同一个英文蛇形名，
+    /// 上层按它做状态机 / 图标映射，不去解析人读文案。**改名等于改接口**——加阶段
+    /// 可以，别顺手改已有阶段的名字。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Converting => "converting",
+            Self::Separating => "separating",
+            Self::Planning => "planning",
+            Self::RoughTranscribing => "rough_transcribing",
+            Self::LoadingAsr => "loading_asr",
+            Self::Transcribing => "transcribing",
+            Self::LoadingAligner => "loading_aligner",
+            Self::Aligning => "aligning",
+            Self::Exporting => "exporting",
         }
     }
 }
@@ -387,6 +404,46 @@ struct ChunkTranscript {
     end_sec: f64,
     text: String,
     language: String,
+}
+
+/// 复读兜底能切到多细（秒）。再细就失去上下文，不如留着告警。
+const MIN_SPLIT_SEC: f32 = 6.0;
+/// 对半递归的最大层数：60s 块 → 30s → 15s → 7.5s。
+const MAX_SPLIT_DEPTH: u32 = 3;
+
+/// 把一段“解码退化”的音频对半切开重解，必要时再切一层。
+///
+/// 为什么只能靠换窗口：同一窗口重解是**确定性**的（实测两次 md5 相同），
+/// 所以“去掉热词再解一次”对复读无效。而换窗口有效：同一段齐喊音频
+/// 整块 60s 只出 11 字，对半切出的两半各出 300–600 字。
+///
+/// 返回 `None` = 切到最细仍然退化，调用方保留原结果并告警。
+fn recover_by_splitting<F>(
+    decode: &F,
+    start: f32,
+    end: f32,
+    depth: u32,
+) -> Option<Vec<(f32, f32, String)>>
+where
+    F: Fn(f32, f32) -> Result<Transcript, AsrError>,
+{
+    if depth == 0 || end - start < MIN_SPLIT_SEC {
+        return None;
+    }
+    let mid = 0.5 * (start + end);
+    let mut out = Vec::new();
+    for (lo, hi) in [(start, mid), (mid, end)] {
+        let report = decode(lo, hi).ok()?;
+        if degenerate_transcript(&report) {
+            out.extend(recover_by_splitting(decode, lo, hi, depth - 1)?);
+        } else {
+            let text = clean_asr_text(&report.text);
+            if !text.is_empty() {
+                out.push((lo, hi, text));
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Optional side exports from the pipeline (CLI / eval harness).
@@ -656,7 +713,10 @@ struct VadPlan {
 /// TXT 不吃时间轴（见 [`crate::txt`]），所以只勾 TXT 的任务连对齐模型都不用校验：
 /// 打轴产物在这条路上没有任何消费者。CLI 的 words-json / timeline sidecar 是例外
 /// ——它们要的正是测量结果。
-fn needs_alignment(settings: &Settings, export: &ProcessExportOptions) -> bool {
+///
+/// **公开**是因为它同时是「这一趟会不会有加载对齐模型 / 打轴两个阶段」的唯一判据：
+/// CLI 的 `--events=json` 阶段编号按它算，命令行不再重抄一遍条件。
+pub fn needs_alignment(settings: &Settings, export: &ProcessExportOptions) -> bool {
     settings.output_srt
         || settings.output_ass
         || export.words_json.is_some()
@@ -970,7 +1030,7 @@ impl<'a> Pipeline<'a> {
             match vad::run_vad(&conv.wav_path) {
                 Ok(speech) => {
                     let silences =
-                        vad::speech_to_silences(&speech, conv.duration, MIN_SILENCE_FALLBACK);
+                        vad::speech_to_silences(&speech, conv.duration, vad::MIN_SILENCE_MICRO);
                     let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
                     trace_log(format!(
                         "vad: duration={:.1}s speech={} silence_gaps={} chunks={}",
@@ -1204,9 +1264,58 @@ impl<'a> Pipeline<'a> {
             }
             let text = clean_asr_text(&report.text);
 
-            if vad.multi_chunk {
-                let _ = std::fs::remove_file(&chunk_tmp);
+            // 复读兜底：退化解码（撞顶 / 复读被折叠）就换窗口重解。
+            // 判据只管“是否退化了”，不与热词挂钩——日语从来没有热词 context，
+            // 以前那双重的 `had_context &&` 把它们全放过去了（一整块台词静默丢失）。
+            // 单块（短视频）同样走这条路：`slice_wav` 对它也成立。
+            if degenerate_transcript(&report) {
+                let decode_span = |lo: f32, hi: f32| -> Result<Transcript, AsrError> {
+                    slice_wav(&conv.wav_path, lo, hi, &chunk_tmp)?;
+                    asr.transcribe(TranscribeRequest {
+                        wav: chunk_tmp.as_path(),
+                        language: &force_lang,
+                        max_new_tokens: self.settings.max_new_tokens,
+                        context: None,
+                    })
+                    .map_err(|e| AsrError::TranscribeChunk(i + 1, e.message().to_string()))
+                };
+                if let Some(parts) =
+                    recover_by_splitting(&decode_span, chunk.start, chunk.end, MAX_SPLIT_DEPTH)
+                {
+                    trace_log(format!(
+                        "asr#{} degenerate (stop={:?}, {} chars) → recovered as {} piece(s)",
+                        i + 1,
+                        report.stop_reason,
+                        text.chars().count(),
+                        parts.len(),
+                    ));
+                    for (lo, hi, piece) in parts {
+                        transcripts.push(ChunkTranscript {
+                            start_sec: lo as f64,
+                            end_sec: hi as f64,
+                            text: piece,
+                            language: force_lang.clone(),
+                        });
+                    }
+                    continue;
+                }
+                trace_log(format!(
+                    "asr#{} degenerate and unrecoverable (stop={:?}, {} chars)",
+                    i + 1,
+                    report.stop_reason,
+                    text.chars().count(),
+                ));
+                self.emit(
+                    StageUpdate::with_chunk(AsrStage::Transcribing, i + 1, vad.chunks.len().max(1))
+                        .with_warning(i18n::asr_span_incomplete(
+                            chunk.start as f64,
+                            chunk.end as f64,
+                        )),
+                );
             }
+
+            // 单块（短视频）也可能因为兜底切出临时文件，无条件删即可。
+            let _ = std::fs::remove_file(&chunk_tmp);
 
             if text.is_empty() {
                 empty_chunks.push(i);
@@ -1582,7 +1691,69 @@ impl<'a> Pipeline<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::StopReason;
     use crate::paths::output_srt_path;
+
+    fn ok_transcript(text: &str) -> Transcript {
+        Transcript {
+            text: text.to_string(),
+            raw_output: text.to_string(),
+            stop_reason: StopReason::Eos,
+        }
+    }
+
+    fn degenerate() -> Transcript {
+        Transcript {
+            text: "ああ".to_string(),
+            raw_output: "ああ".to_string(),
+            stop_reason: StopReason::MaxTokens,
+        }
+    }
+
+    /// 断骨验证：窗口宽于 25s 就退化，窄于就正常；复读兜底必须把它切成
+    /// <25s 的子窗口并把文字拼回来。把 `recover_by_splitting` 的递归去掉
+    /// （直接返回 None）后，这个测试会变红。
+    #[test]
+    fn degenerate_chunk_is_recovered_by_splitting() {
+        let decode = |lo: f32, hi: f32| -> Result<Transcript, AsrError> {
+            if hi - lo > 25.0 {
+                Ok(degenerate())
+            } else {
+                Ok(ok_transcript(&format!("piece {lo:.1}-{hi:.1}")))
+            }
+        };
+        let parts = recover_by_splitting(&decode, 0.0, 60.0, MAX_SPLIT_DEPTH)
+            .expect("60s 块对半切后应该全部收敛为正常窗口");
+        assert!(
+            parts.len() >= 4,
+            "60s → 15s 应为 4 片，实际 {}",
+            parts.len()
+        );
+        // 覆盖连续、不重不漏
+        assert!((parts[0].0 - 0.0).abs() < 1e-3);
+        assert!((parts.last().unwrap().1 - 60.0).abs() < 1e-3);
+        for w in parts.windows(2) {
+            assert!((w[0].1 - w[1].0).abs() < 1e-3, "子窗口不连续");
+        }
+        for (_, _, text) in &parts {
+            assert!(text.starts_with("piece "), "子窗口文字丢了: {text}");
+        }
+    }
+
+    /// 切到最细仍然退化 → `None`，调用方保留原结果并发告警（不能假装成功、
+    /// 也不能把半截文字当成整块内容）。
+    #[test]
+    fn unrecoverable_chunk_returns_none() {
+        let decode = |_: f32, _: f32| -> Result<Transcript, AsrError> { Ok(degenerate()) };
+        assert!(recover_by_splitting(&decode, 0.0, 60.0, MAX_SPLIT_DEPTH).is_none());
+    }
+
+    /// 深度用尽也别再切（避免为了救一块而无限切片，把耗时打穿）。
+    #[test]
+    fn depth_zero_never_splits() {
+        let decode = |_: f32, _: f32| -> Result<Transcript, AsrError> { Ok(degenerate()) };
+        assert!(recover_by_splitting(&decode, 0.0, 60.0, 0).is_none());
+    }
 
     /// 普通转录保留视频文件名，文稿匹配固定加 `.aligned`。
     #[test]
@@ -1749,6 +1920,43 @@ mod tests {
         assert_eq!(AsrStage::Transcribing.label(UiLang::Zh), "转写");
         assert_eq!(AsrStage::Aligning.label(UiLang::Zh), "打轴");
         assert!(timing.has_breakdown());
+    }
+
+    /// 机器可读 key：9 个阶段各一个、互不相同、全是小写蛇形。
+    ///
+    /// 断骨锚点：把 `key()` 里任意两个分支写成同一个字符串（或改掉一个已有的名字），
+    /// 本用例立刻变红 —— 上层按 key 做状态机，重名 / 改名都是接口破坏。
+    #[test]
+    fn every_stage_has_a_distinct_machine_key() {
+        let keys: Vec<&str> = [
+            AsrStage::Converting,
+            AsrStage::Separating,
+            AsrStage::Planning,
+            AsrStage::RoughTranscribing,
+            AsrStage::LoadingAsr,
+            AsrStage::Transcribing,
+            AsrStage::LoadingAligner,
+            AsrStage::Aligning,
+            AsrStage::Exporting,
+        ]
+        .into_iter()
+        .map(AsrStage::key)
+        .collect();
+        assert_eq!(keys.len(), 9);
+        for key in &keys {
+            assert!(
+                !key.is_empty()
+                    && key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    && !key.starts_with('_'),
+                "key 必须是英文小写蛇形名: {key}"
+            );
+        }
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len(), "阶段 key 不能重名: {keys:?}");
+        assert_eq!(AsrStage::Transcribing.key(), "transcribing");
+        assert_eq!(AsrStage::RoughTranscribing.key(), "rough_transcribing");
     }
 
     #[test]

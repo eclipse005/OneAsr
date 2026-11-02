@@ -25,13 +25,13 @@ Optional vocal separation (HTDemucs) can run before either mode.
 
 ## Download
 
-Current version **[v1.3.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.3.0)** (click a file name to download):
+Current version **[v1.4.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.4.0)** (click a file name to download):
 
 | Platform | Download |
 |------|------|
-| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_windows_portable.zip) |
-| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_linux_x64.tar.gz) |
-| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.3.0/OneAsr_1.3.0_macos.dmg) |
+| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_windows_portable.zip) |
+| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_linux_x64.tar.gz) |
+| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.4.0/OneAsr_1.4.0_macos.dmg) |
 
 ## Quick start
 
@@ -84,13 +84,13 @@ Common setups total about 2.9–5.4 GB. Only the model download needs network; t
 
 ## CLI
 
-The installer ships `oneasr-cli` (same pipeline as the GUI). Download the models via the GUI first, then:
+The installer ships `oneasr-cli` (same pipeline as the GUI). Download the models via the GUI first (or `oneasr-cli download --model 0.6b`), then:
 
 ```powershell
 oneasr-cli.exe transcribe --input "video.mp4" --language zh --backend auto --output "out.srt"
 ```
 
-`align` attaches a transcript (`--text script.txt`) and stamps it with timestamps without recognition; `render` re-renders a saved `timeline.json` into another preset without loading any models. `--txt` also writes a text transcript, `--script original|simplified|traditional` switches the Chinese glyph set, `--vocal-separation` separates vocals first, `--hotword-group <name>` uses a saved hotword group and `--hotwords <list>` takes an inline list (Chinese / English tasks). See `--help` for all options.
+`align` attaches a transcript (`--text script.txt`) and stamps it with timestamps without recognition; `render` re-renders a saved `timeline.json` into another preset without loading any models. `transcript inspect|split|polish` summarizes, re-segments or beautifies a script before alignment; `status` reports model readiness and `probe` reports a file's duration and media kind; `--events=json` streams machine-readable progress. `--txt` also writes a text transcript, `--script original|simplified|traditional` switches the Chinese glyph set, `--vocal-separation` separates vocals first, `--hotword-group <name>` uses a saved hotword group and `--hotwords <list>` takes an inline list (Chinese / English tasks). See `--help` for all options.
 
 ## Requirements
 
