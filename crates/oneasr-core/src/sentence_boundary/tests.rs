@@ -2045,19 +2045,27 @@ fn words_the_transcript_does_not_cover_are_not_dropped() {
 }
 
 #[test]
-fn cue_times_come_from_the_words_at_each_end() {
-    // 契约的另一半：cue 的时间是首末词的时间，不是自己算的。
-    let text = "甲甲甲。\n乙乙乙。";
+fn cue_times_come_from_the_characters_at_each_end() {
+    // 契约的另一半：cue 的时间来自**首末字**，不是自己算的。
+    //
+    // 不能断言成「首末词的 start/end」：对齐器的 token 会把标点粘到前一个字上
+    // （真实数据里 `道：“` 是一个 token），而文稿的行边界落在字符上。按整词取时间
+    // 会在跨界时把一条字幕拖长整个 token（见
+    // `a_straddled_multi_character_token_does_not_delay_the_next_cue`）。
+    let text = "甲甲甲。
+乙乙乙。";
     let words = tokens_of(text);
     let out = super::build_sentences_from_transcript(transcript_request(words.clone(), "zh"), text)
         .expect("sentences");
-    for s in &out.translation_sentences {
-        assert_eq!(
-            s.start_ms,
-            (words[s.word_start].start * 1000.0).round() as u64
-        );
-        assert_eq!(s.end_ms, (words[s.word_end].end * 1000.0).round() as u64);
-    }
+    assert_eq!(out.translation_sentences.len(), 2);
+    // 这个夹具里 `。` 自成一个 token（有自己的时间），所以第一行的末字就是它：
+    // 结束 = 该 token 的 end，起点是第一行首字的 token 起点。
+    let first = &out.translation_sentences[0];
+    assert_eq!(first.start_ms, 0);
+    assert_eq!(first.end_ms, (words[3].end * 1000.0).round() as u64);
+    let second = &out.translation_sentences[1];
+    assert_eq!(second.start_ms, (words[4].start * 1000.0).round() as u64);
+    assert_eq!(second.end_ms, (words[7].end * 1000.0).round() as u64);
 }
 
 #[test]
@@ -2072,4 +2080,101 @@ fn latin_transcript_lines_keep_their_word_spacing() {
         .map(|s| s.text.as_str())
         .collect();
     assert_eq!(cues, ["First line here.", "Second line there."]);
+}
+
+// ── 文稿分行的时间必须落在那一行首字真正被说出来的时刻 ──────────────
+
+/// 对齐器风格的 token 夹具：CJK 逐字，标点零时长粘在前一个字上。
+///
+/// 与 [`tokens_of`] 的区别只在时间：这里把每个 token 的起止**显式写出来**，
+/// 测试自己就能算「某个字真正被说出来」的时刻，不必依赖夹具的时间公式——
+/// 用同一套公式算期望值的话，实现算错时测试也跟着错，等于没测。
+fn timed_tokens(items: &[(&str, f64, f64)]) -> Vec<WordTokenDto> {
+    items
+        .iter()
+        .map(|(text, start, end)| WordTokenDto {
+            start: *start,
+            end: *end,
+            word: text.to_string(),
+        })
+        .collect()
+}
+
+/// 用户的报告：文稿每一句都按原文断句了，但「文本落后于声音」，越往后越明显。
+///
+/// 根因是「文稿的行」与「对齐器的 token」边界不重合。对齐器的 token 会把标点粘
+/// 到前一个字上（真实数据里 `道：“` 是一个 token），而文稿的行常常正好切在这种
+/// token 中间。旧实现按**整词**分配：跨界那个 token 整块判给前一行，下一行的
+/// 首字就被推到它后面那个 token 的开头。一行推一点，攒到 12:40 附近已经晚了
+/// 1–2.7 秒。
+///
+/// 夹具把那个形状缩到最小：一个 token 里有两个发声的字（`车？”“` 这种真实
+/// 形状），文稿正好切在这两个字的中间。第一行只说到前一个字，就该在前一个字
+/// 说完时结束；整词口径会把第一行拖到整个 token 的结束。
+#[test]
+fn a_cue_ends_when_its_last_spoken_character_is_said() {
+    // token#1 `车？”“` 0.6–1.8 里有两个发声的字：`车` 0.6–1.2、`？` 零时长、
+    // `”` 零时长。等等——`车？”“` 里只有 `车` 一个字母数字，所以整 token 都算
+    // 给「车」。真正的多发声字形状是下面那条用例；这里用两字 token：
+    // token#1 `车雪` 0.6–1.8：`车` 0.6–1.2、`雪` 1.2–1.8（均匀插值）。
+    // 文稿把 `雪` 切到第二行——第一行只说到 `车`，就该在 1.2 s 结束。
+    let words = timed_tokens(&[("橇", 0.0, 0.6), ("车雪", 0.6, 1.8), ("是", 1.8, 2.1)]);
+    let text = "橇车
+雪是";
+    let out = super::build_sentences_from_transcript(transcript_request(words, "zh"), text)
+        .expect("sentences");
+    assert_eq!(out.translation_sentences.len(), 2, "一行 = 一条");
+    assert_eq!(
+        out.translation_sentences[0].end_ms, 1200,
+        "第一行只说到「车」，就该在 1.2 s 结束；整词口径会拖到整个 token 的 1.8 s"
+    );
+    assert_eq!(
+        out.translation_sentences[1].start_ms, 1200,
+        "第二行从「雪」开始，不该等整个 token 说完"
+    );
+}
+
+/// 同一个形状，但跨界 token 里有**两个**发声的字：这才是真实数据里的普遍情况
+/// （`雪橇车？”“` 这类 token 把标点和字混在一起，前面还挂着别的字）。
+/// 整词取时间会把第一行拖到整个 token 的结束，第二行于是被推迟。
+#[test]
+fn a_straddled_multi_character_token_does_not_delay_the_next_cue() {
+    // token#1 `车？”“` 占 0.6–1.8，里面有发声的 `车`（0.6–1.2）；`？` `”` 零时长。
+    // 文稿把 `”` 切到下一行，下一行真正发声的 `是` 在 token#2（1.8 起）。
+    let words = timed_tokens(&[("橇", 0.0, 0.6), ("车？”“", 0.6, 1.8), ("是", 1.8, 2.1)]);
+    let text = "橇车？\n”“是";
+    let out = super::build_sentences_from_transcript(transcript_request(words, "zh"), text)
+        .expect("sentences");
+    assert_eq!(out.translation_sentences.len(), 2);
+    // 第一行末字是「？」，零时长，跟着「车」一起结束 = 1.8（token 端点）。
+    assert_eq!(out.translation_sentences[0].end_ms, 1800);
+    assert_eq!(
+        out.translation_sentences[1].start_ms, 1800,
+        "第二行从真正发声的「是」开始"
+    );
+}
+
+/// 行首标点的那个坑：第二行以标点开头，而标点粘在前一行末字上。
+///
+/// 旧实现取「该 token 的 start」。标点所在的 token 起点就是上一行那个字开始被
+/// 说出来的时刻，于是这条字幕**提前**到上一行的字上——实测早 1–1.6 s。
+#[test]
+fn a_leading_punctuation_does_not_pull_the_cue_early() {
+    // token#1 `车？”“` 0.6–1.8：发声的只有 `车`（0.6–1.8 全部归它，标点零时长）。
+    // 文稿把 `”“` 切到第二行开头；第二行真正发声的首字是 `是`（token#2，1.8 起）。
+    let words = timed_tokens(&[
+        ("橇", 0.0, 0.6),
+        ("车？”“", 0.6, 1.8),
+        ("是", 1.8, 2.1),
+        ("的", 2.1, 2.4),
+    ]);
+    let text = "橇车？
+”“是的";
+    let out = super::build_sentences_from_transcript(transcript_request(words, "zh"), text)
+        .expect("sentences");
+    assert_eq!(out.translation_sentences.len(), 2);
+    assert_eq!(
+        out.translation_sentences[1].start_ms, 1800,
+        "第二行以标点开头，起点要落到真正发声的「是」上，不能回到「车」的 0.6 s"
+    );
 }

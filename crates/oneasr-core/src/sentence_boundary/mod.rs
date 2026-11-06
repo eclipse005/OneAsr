@@ -207,22 +207,25 @@ pub fn build_sentences_from_transcript(
     })
 }
 
-/// 文稿的行 → （词的区间, 这一行的原文）。**每个词恰好落进一个区间，不重不漏。**
+/// 文稿的行 → （字符区间, 这一行的原文）。**每个字符恰好落进一个区间，不重不漏。**
 ///
 /// 对齐器的 token 流是「文稿去掉空白之后的字符序列」——CJK 逐字、拉丁按词、
-/// 标点跟在词里。所以按**非空白字符数**分配就行：一个词跨过了行尾，就整个算给
-/// 前一行（宁可那一行长一点，也不把一个词劈成两半，两半各带半个时间戳）。
+/// 标点粘在前一个字上。分配按**非空白字符数**逐字算，不按词算：行边界落在 token
+/// 中间时，按词算只能整块判给一边，下一行的首字就被推到它后面那个 token 的
+/// 开头（字幕比声音晚出，而且一行推一点、越往后越偏）。按字算就没有这个损耗，
+/// 时间由 [`CharStream`] 在 token 内部插值给出。
 ///
 /// 区间只回答时间，**文字来自 `text` 那一行本身**。两步分开是有意的：分配按字
 /// 数算，所以行内空格在这里权重是 0，一个字都不影响分配，却能被原样带进字幕。
 ///
-/// 文稿没覆盖到的词（文本被改过、或标点被规范化掉）并进最后一条，**绝不丢**——
+/// 文稿没覆盖到的字符（文本被改过、或标点被规范化掉）并进最后一条，**绝不丢**——
 /// 丢掉的词不会报错，只会让字幕无声地少几个字，那是最难查的一类错。
 ///
-/// 反过来，词流被文稿超用（稿子比音频长）时，最后几行分不到词，也就没有时间
+/// 反过来，字符流被文稿超用（稿子比音频长）时，最后几行分不到字，也就没有时间
 /// 可言：它们不产出字幕条，这是这条路径唯一会「少行」的地方。
 fn transcript_line_spans<'a>(words: &[WordTokenDto], text: &'a str) -> Vec<LineSpan<'a>> {
     let weight = |w: &str| w.chars().filter(|c| !c.is_whitespace()).count();
+    let total: usize = words.iter().map(|word| weight(&word.word)).sum();
     let mut out: Vec<LineSpan<'a>> = Vec::new();
     let mut cursor = 0usize;
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
@@ -230,32 +233,20 @@ fn transcript_line_spans<'a>(words: &[WordTokenDto], text: &'a str) -> Vec<LineS
         if want == 0 {
             continue;
         }
-        let start = cursor;
-        let mut got = 0usize;
-        while cursor < words.len() {
-            let w = words[cursor].word.trim();
-            if w.is_empty() {
-                cursor += 1;
-                continue;
-            }
-            got += weight(w);
-            cursor += 1;
-            if got >= want {
-                break;
-            }
-        }
-        if cursor > start {
+        let first = cursor;
+        cursor = (cursor + want).min(total);
+        if cursor > first {
             out.push(LineSpan {
-                start,
-                end: cursor - 1,
+                first,
+                last: cursor - 1,
                 text: line,
             });
         }
     }
     if let Some(last) = out.last_mut()
-        && cursor < words.len()
+        && cursor < total
     {
-        last.end = words.len() - 1;
+        last.last = total - 1;
     }
     out
 }
