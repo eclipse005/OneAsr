@@ -43,7 +43,7 @@ env:
   CARGO_INCREMENTAL: "0"
   # 预览版清单（空格分隔）：在这里 tag 上的 Release 标成 pre-release，且不抢
   # master 的 "Latest"。Electron 线在预览期时往里加，正式发版时删。
-  PREVIEW_TAGS: "v2.0.0 v2.0.2"
+  PREVIEW_TAGS: "v2.0.0 v2.0.2 v2.0.3"
 
 jobs:
   version:
