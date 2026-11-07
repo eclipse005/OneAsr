@@ -21,6 +21,10 @@ pub mod L {
     use super::Str;
 
     // ---- 设置抽屉骨架 ----
+    pub const QUEUE: Str = Str::new("队列", "Queue");
+    pub const MODELS: Str = Str::new("模型", "Models");
+    pub const SUBTITLES: Str = Str::new("字幕", "Subtitles");
+    pub const PREFERENCES: Str = Str::new("偏好", "Preferences");
     pub const SETTINGS: Str = Str::new("设置", "Settings");
     pub const UNSAVED: Str = Str::new("未保存", "Unsaved");
     pub const RESET: Str = Str::new("重置", "Reset");
@@ -39,6 +43,9 @@ pub mod L {
     /// 语言按钮上直接渲染的字形（endonym，两种界面语言相同）。
     pub const UI_LANG_ZH_GLYPH: Str = Str::new("中", "中");
     pub const UI_LANG_EN_GLYPH: Str = Str::new("En", "En");
+    pub const UI_LANGUAGE: Str = Str::new("界面语言", "Interface language");
+    pub const SWITCH_ON: Str = Str::new("开", "On");
+    pub const SWITCH_OFF: Str = Str::new("关", "Off");
 
     // ---- 设置已保存提示 ----
     pub const SETTINGS_SAVED_READY: Str =
@@ -104,6 +111,15 @@ pub mod L {
     pub const TIP_OPEN_OUTPUT: Str = Str::new("打开输出位置", "Open output location");
     pub const TIP_START: Str = Str::new("开始", "Start");
     pub const TIP_DELETE: Str = Str::new("删除", "Delete");
+    pub const ST_PENDING: Str = Str::new("等待", "Waiting");
+    pub const ST_QUEUED: Str = Str::new("排队", "Queued");
+    pub const ST_RUNNING: Str = Str::new("处理中", "Running");
+    pub const ST_DONE: Str = Str::new("完成", "Done");
+    pub const ST_FAILED: Str = Str::new("失败", "Failed");
+    pub const CHOOSE_FOLDER: Str = Str::new("选择目录", "Choose folder");
+    pub const NOT_MEDIA: Str = Str::new("只接受音视频文件", "Audio and video files only");
+    pub const BACKEND_GPU: Str = Str::new("GPU", "GPU");
+    pub const BACKEND_CPU: Str = Str::new("CPU", "CPU");
     pub const TIMING_TITLE: Str = Str::new("处理耗时", "Processing time");
     pub const SEP_CHIP: Str = Str::new("分离", "Sep");
     pub const TIP_SEP_ON: Str = Str::new(
@@ -445,8 +461,8 @@ pub mod L {
         "Download the ASR and aligner models in Settings",
     );
     pub const WELCOME_STEP2: Str = Str::new(
-        "把音视频拖进窗口，或点「添加」",
-        "Drop audio or video into the window, or click Add",
+        "把音视频拖进窗口，或点「添加文件」",
+        "Drop audio or video into the window, or click Add files",
     );
     pub const WELCOME_STEP3: Str = Str::new(
         "完成后字幕自动保存到视频同目录",
@@ -555,9 +571,22 @@ pub fn n_tasks(lang: UiLang, n: usize) -> String {
 /// `{n} 行` / `{n} lines`。
 pub fn n_lines(n: u64) -> String {
     match ui_lang() {
-        UiLang::Zh => format!("{} 行", crate::app::ui::util::format_thousands(n)),
-        UiLang::En => format!("{} lines", crate::app::ui::util::format_thousands(n)),
+        UiLang::Zh => format!("{} 行", thousands(n)),
+        UiLang::En => format!("{} lines", thousands(n)),
     }
+}
+
+/// `12483` → `12,483`。
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// `{n} 个 · 全部成功` / `{n} · all successful`。

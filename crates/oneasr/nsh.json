@@ -1,0 +1,7 @@
+{
+  "name": "OneAsr",
+  "id": "com.eclipse005.oneasr",
+  "rust": ".",
+  "root": "App",
+  "appearance": "light"
+}

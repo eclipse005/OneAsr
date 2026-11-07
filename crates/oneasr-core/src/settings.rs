@@ -52,7 +52,7 @@ pub fn clamp_chunk_target_seconds(value: u32) -> u32 {
 /// - Completing a download for a **non-selected** size only installs files on
 ///   disk; it must not change the active selection (see
 ///   [`Self::bind_download_if_active`]).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     /// Active ASR catalog id (`Qwen3-ASR-0.6B-hf` | `Qwen3-ASR-1.7B-hf`).
     #[serde(default = "default_asr_model")]

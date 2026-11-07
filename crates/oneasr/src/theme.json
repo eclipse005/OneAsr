@@ -1,0 +1,23 @@
+{
+  "cssVars": {
+    "theme": {
+      "radius": "0.7rem"
+    },
+    "light": {
+      "background": "#f4f6f8",
+      "foreground": "#0f172a",
+      "card": "#ffffff",
+      "card-foreground": "#0f172a",
+      "primary": "#0d9488",
+      "primary-foreground": "#ffffff",
+      "secondary": "#f1f5f9",
+      "secondary-foreground": "#0f172a",
+      "muted": "#f8fafc",
+      "muted-foreground": "#64748b",
+      "accent": "#ccfbf1",
+      "accent-foreground": "#0f766e",
+      "border": "#e2e8f0",
+      "ring": "#0d9488"
+    }
+  }
+}

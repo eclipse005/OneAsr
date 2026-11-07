@@ -24,12 +24,7 @@ anyhow = "1"
 lto = "thin"
 codegen-units = 1
 
-# Vendored gpui 0.2.2 with the Windows NC-button fix (upstream Zed PR #48330:
-# `default_prevented` must not make GPUI swallow WM_NCLBUTTONDOWN — otherwise
-# custom-titlebar drag / min / max / close are all dead). Revert to crates.io
-# once a released gpui includes the fix. Local patch details: vendor/gpui/PATCHES.md.
+# 这条分支的界面是 Native Shell，不再链 gpui。gpu-allocator 仍要钉在
+# 与 wgpu-hal 30 的 DX12 类型一致的 0.28（vendor 补丁）。
 [patch.crates-io]
-gpui = { path = "vendor/gpui" }
-# Force windows 0.62 so gpu-allocator matches wgpu-hal 30 DX12 types (sysinfo
-# 0.31 via optional zed-scap would otherwise unify gpu-allocator onto 0.57).
 gpu-allocator = { path = "vendor/gpu-allocator" }
