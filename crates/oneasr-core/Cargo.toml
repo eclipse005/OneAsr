@@ -22,6 +22,11 @@ ferrous-opencc = "0.4"
 # 以及汉字/假名等「不空格书写系统」的字符判定。见 src/hotword/。
 pinyin = "0.11"
 unicode-general-category = "1.1"
+# 文稿（用户给的 .txt / .srt）的编码解码：GB18030 与 UTF-16 的映射表在这套
+# 表里。只做解码、不做统计判别（见 src/text_decode.rs 的「不做的事」）。
+# 它本来就在依赖图里（symphonia-metadata 的传递依赖），提成直接依赖不新增
+# 任何第三方代码面。
+encoding_rs = "0.8"
 punkt = { git = "https://github.com/eclipse005/rust-punkt.git", rev = "ca9187276d9478c0bc67c1cc3cd787de88f6e293" }
 # 四个 git 依赖全部钉到具体提交（rev）。`git` 依赖不写 rev/tag 时，Cargo 会在
 # 需要重新解析锁文件的时候（新 clone、CI 缓存未命中、`cargo update -p ...`）

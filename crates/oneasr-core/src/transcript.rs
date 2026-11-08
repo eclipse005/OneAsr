@@ -3,17 +3,24 @@
 //! 文稿是这个功能的**唯一文字来源**，所以读进来这一段要处理干净三件事，
 //! 剩下的都不是这一层该管的：
 //!
-//! 1. **BOM / CRLF**。`\u{feff}你好` 会让第一行凭空多一个字符（对齐器认不出来，
-//!    会被当成词表外字符插值），CRLF 不处理则整篇变成一行、一个 cue 都切不出来。
+//! 1. **编码 / BOM / CRLF**。字节 → 文字这一步在 [`crate::text_decode`]：
+//!    BOM 在字节层吃掉，UTF-16 按 BOM 认，GBK/GB18030 兜底，看不懂就报错——
+//!    绝不 `from_utf8_lossy` 出一片 U+FFFD 还说自己成功了。读到这一层时
+//!    `\u{feff}` 只剩「调用方自己塞进来的」那一种来源（比如从编辑器粘贴）。
+//!    CRLF 不处理则整篇变成一行、一个 cue 都切不出来。
 //! 2. **SRT 的序号与时间轴**。它们不是文稿，剥掉；时间轴整个丢掉——对齐会从零
 //!    重新给，这才是这个功能的意义。
 //! 3. **一个 cue 的多行合成一行**。SRT 里的换行是**排版产物**（那个播放器、那个
 //!    字号、那个边距算出来的），不是编辑决定。冻进文稿等于把一个字体相关的决定
 //!    变成不可改的意图。合成用 `join_words`，和我们渲染 cue 时是同一条规则。
 
-use std::path::Path;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
+use crate::i18n::{self, t};
 use crate::sentence_boundary::join_words;
+pub use crate::text_decode::TextEncoding;
+use crate::text_decode::{self, DecodeError};
 
 /// 文稿扩展名（全小写、不带点）。`status --json` 把它交给壳做文件过滤与配对；
 /// 与 [`TranscriptKind::from_path`] 是同一份真相。只收纯文本与 SRT，Markdown
@@ -53,6 +60,13 @@ pub struct Transcript {
     pub kind: TranscriptKind,
     /// 读进来的原始内容，一字未动。文稿界面上的「恢复原始内容」用它。
     pub original: String,
+    /// 从文件读进来时用的编码；`None` = 调用方给的就是文字（界面里粘贴的、
+    /// 程序自己生成的），没有字节层可谈。
+    ///
+    /// 存下来是因为 GB18030 是**猜**的：猜错时（Shift_JIS / Big5 文稿）文字
+    /// 会变成另一种乱码，界面必须能说出「按 GB18030 读的」，用户才知道该
+    /// 另存为 UTF-8 再来。
+    pub encoding: Option<TextEncoding>,
 }
 
 impl Transcript {
@@ -223,29 +237,96 @@ pub fn speech_rate(text: &str, audio_seconds: f64) -> Option<SpeechRate> {
     text_stats(text).rate(audio_seconds)
 }
 
-/// 读一份文稿。扩展名不认识就报错，不猜。
-pub fn read_transcript(path: &Path) -> Result<Transcript, String> {
+/// 读一份文稿。扩展名不认识就报错，不猜；编码看不懂也报错（见
+/// [`crate::text_decode`]）。
+pub fn read_transcript(path: &Path) -> Result<Transcript, TranscriptError> {
     let kind = TranscriptKind::from_path(path)
-        .ok_or_else(|| format!("不是支持的文稿格式: {}", path.display()))?;
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    parse_transcript(kind, &String::from_utf8_lossy(&bytes))
+        .ok_or_else(|| TranscriptError::UnsupportedExtension(path.to_path_buf()))?;
+    let bytes = std::fs::read(path).map_err(|e| TranscriptError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let decoded = text_decode::decode(&bytes).map_err(|kind| TranscriptError::Decode {
+        path: path.to_path_buf(),
+        kind,
+    })?;
+    build(kind, &decoded.text, Some(decoded.encoding))
 }
 
-/// 按格式解析已经读成字符串的内容。
-pub fn parse_transcript(kind: TranscriptKind, raw: &str) -> Result<Transcript, String> {
+/// 按格式解析**已经是文字**的内容（界面粘贴、程序生成、测试）。
+///
+/// 从文件来的内容走 [`read_transcript`]：那里才有字节与编码这回事。
+pub fn parse_transcript(kind: TranscriptKind, raw: &str) -> Result<Transcript, TranscriptError> {
+    build(kind, raw, None)
+}
+
+fn build(
+    kind: TranscriptKind,
+    raw: &str,
+    encoding: Option<TextEncoding>,
+) -> Result<Transcript, TranscriptError> {
     let text = match kind {
         TranscriptKind::Plain => normalize_lines(raw),
         TranscriptKind::SubRip => normalize_lines(&srt_to_lines(raw)?),
     };
     if text.trim().is_empty() {
-        return Err("文稿是空的".to_string());
+        return Err(TranscriptError::Empty);
     }
     Ok(Transcript {
         text,
         kind,
         original: raw.to_string(),
+        encoding,
     })
 }
+
+/// 文稿读不进来。
+///
+/// 以前这里是一个预先拼好的 `String`，于是文案在**出错的那一刻**就定成了某种
+/// 语言（而且三处是硬编码中文）。换成枚举后，话在展示时才按当前语言取（与
+/// [`crate::asr::AsrError`] 同一条口径），界面也能按变体决定怎么提示。
+#[derive(Debug)]
+pub enum TranscriptError {
+    /// 扩展名不是 [`TRANSCRIPT_EXTS`]。
+    UnsupportedExtension(PathBuf),
+    /// 文件读不了（不存在、没权限、被占着）。
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// 字节解不成文字——编码看不懂，不是「文件坏了」。
+    Decode { path: PathBuf, kind: DecodeError },
+    /// 解出来的文稿是空的。
+    Empty,
+    /// SRT 剥完时间轴一条字幕也不剩。
+    NoCues,
+}
+
+impl fmt::Display for TranscriptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedExtension(path) => {
+                write!(f, "{}", i18n::transcript_extension_unsupported(path))
+            }
+            Self::Io { path, source } => {
+                write!(
+                    f,
+                    "{}",
+                    i18n::transcript_read_failed(path, &source.to_string())
+                )
+            }
+            Self::Decode { path, kind } => match kind {
+                DecodeError::Utf32 => write!(f, "{}", i18n::transcript_utf32_unsupported(path)),
+                DecodeError::NotText => write!(f, "{}", i18n::transcript_not_text(path)),
+                DecodeError::Unknown => write!(f, "{}", i18n::transcript_encoding_unknown(path)),
+            },
+            Self::Empty => write!(f, "{}", t(i18n::ERR_EMPTY_TRANSCRIPT)),
+            Self::NoCues => write!(f, "{}", t(i18n::ERR_TRANSCRIPT_NO_CUES)),
+        }
+    }
+}
+
+impl std::error::Error for TranscriptError {}
 
 /// BOM 去掉、CRLF 变 LF、行尾空白去掉、首尾空行去掉。**不碰行内的空格**——
 /// 用户自己排的字距是他写的，我们只负责不让编码问题混进去。
@@ -267,7 +348,7 @@ fn normalize_lines(raw: &str) -> String {
 /// 按空行分块，逐块判断哪几行是正文：时间轴行（带 `-->`）在第二行时正文从第三行
 /// 开始；正文自己就是一个数字时（「2025」当字幕）不能被当成序号吃掉，所以**序号
 /// 只在「它是块首且块里还有别的行」时丢弃**。
-fn srt_to_lines(raw: &str) -> Result<String, String> {
+fn srt_to_lines(raw: &str) -> Result<String, TranscriptError> {
     let body = raw.strip_prefix('\u{feff}').unwrap_or(raw);
     let body = body.replace("\r\n", "\n").replace('\r', "\n");
     let mut out: Vec<String> = Vec::new();
@@ -295,7 +376,7 @@ fn srt_to_lines(raw: &str) -> Result<String, String> {
         }
     }
     if out.is_empty() {
-        return Err("SRT 里没有可用的字幕行".to_string());
+        return Err(TranscriptError::NoCues);
     }
     Ok(out.join("\n"))
 }
@@ -574,5 +655,112 @@ mod tests {
             );
         }
         assert!(TranscriptKind::from_path(Path::new("x.mp4")).is_none());
+    }
+
+    // ---- 文件级：编码 ----
+
+    /// GBK / GB18030 字节字面量（“今天我们聊一聊字幕。”）。用字节写死而不是把
+    /// 字符串编回去：测试要断言的是「这些字节能读成这句话」，拿编码器造输入
+    /// 等于用被测规则自己证明自己。
+    const GBK_LINE: &[u8] = &[
+        0xbd, 0xf1, 0xcc, 0xec, 0xce, 0xd2, 0xc3, 0xc7, 0xc1, 0xc4, 0xd2, 0xbb, 0xc1, 0xc4, 0xd7,
+        0xd6, 0xc4, 0xbb, 0xa1, 0xa3,
+    ];
+    const CHINESE_LINE: &str = "今天我们聊一聊字幕。";
+
+    /// 临时文件：每个用例一个独立目录，并行跑也不会互相踩。
+    fn temp_file(name: &str, bytes: &[u8]) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "oneasr_transcript_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// 用户报告的那一条：记事本按 ANSI（GBK）存的 .txt 挂进文稿匹配，以前
+    /// `from_utf8_lossy` 读成一片 U+FFFD 还返回成功 → 字幕出来就是乱码。
+    #[test]
+    fn a_gbk_file_reads_back_as_the_chinese_it_holds() {
+        let path = temp_file("gbk.txt", GBK_LINE);
+        let t = read_transcript(&path).expect("GBK 文稿要能读");
+        assert_eq!(t.text, CHINESE_LINE);
+        assert_eq!(
+            t.encoding,
+            Some(TextEncoding::Gb18030),
+            "按哪种编码读的必须记下来，界面才能说出来"
+        );
+    }
+
+    /// 格式解析在解码**之后**，所以 GBK 的 SRT 一样能剥掉序号与时间轴。
+    #[test]
+    fn a_gbk_srt_is_decoded_before_its_timecodes_are_stripped() {
+        let mut srt = b"1\n00:00:01,000 --> 00:00:02,000\n".to_vec();
+        srt.extend_from_slice(GBK_LINE);
+        srt.extend_from_slice(b"\n\n");
+        let path = temp_file("gbk.srt", &srt);
+        let t = read_transcript(&path).expect("GBK 的 SRT 要能读");
+        assert_eq!(t.text, CHINESE_LINE);
+        assert!(t.dropped_timecodes());
+    }
+
+    /// 记事本「Unicode」存出来的：UTF-16LE + BOM。以前读成夹着 NUL 的乱码，
+    /// 连 `-->` 都认不出来。
+    #[test]
+    fn a_utf16_bom_file_is_decoded_instead_of_mangled_into_nuls() {
+        let mut bytes = b"\xff\xfe".to_vec();
+        bytes.extend(CHINESE_LINE.encode_utf16().flat_map(u16::to_le_bytes));
+        let path = temp_file("unicode.txt", &bytes);
+        let t = read_transcript(&path).expect("UTF-16LE 文稿要能读");
+        assert_eq!(t.text, CHINESE_LINE);
+        assert_eq!(t.encoding, Some(TextEncoding::Utf16Le));
+    }
+
+    /// 本程序自己导出的就是这一种：UTF-8、无 BOM，不换码也不提示。
+    #[test]
+    fn a_utf8_file_is_read_as_utf8_with_no_conversion() {
+        let path = temp_file("plain.txt", "第一行。\n第二行。".as_bytes());
+        let t = read_transcript(&path).unwrap();
+        assert_eq!(t.text, "第一行。\n第二行。");
+        assert_eq!(t.encoding, Some(TextEncoding::Utf8));
+    }
+
+    /// 两头都不成立时说「看不懂」，而不是产出一份“能读出来”的乱码。
+    #[test]
+    fn undecodable_bytes_are_an_error_not_mojibake() {
+        let path = temp_file("broken.txt", &[0xff, 0xff, 0xff]);
+        match read_transcript(&path) {
+            Err(TranscriptError::Decode {
+                kind: DecodeError::Unknown,
+                ..
+            }) => {}
+            other => panic!("应当是编码错误，实际: {other:?}"),
+        }
+    }
+
+    /// 改名成 .txt 的二进制（zip/docx）不许被当成文稿读成乱码。
+    #[test]
+    fn a_binary_file_renamed_to_txt_is_refused() {
+        let path = temp_file("fake.txt", b"PK\x03\x04\x00\x00rest");
+        match read_transcript(&path) {
+            Err(TranscriptError::Decode {
+                kind: DecodeError::NotText,
+                ..
+            }) => {}
+            other => panic!("应当是「不像文本文件」，实际: {other:?}"),
+        }
+    }
+
+    /// 版面层给的文字（粘贴、程序生成）没有字节层：编码字段是空的，
+    /// 不许冒充成 `Utf8` —— 那会让界面说一句它并不知道的话。
+    #[test]
+    fn text_that_never_went_through_bytes_has_no_encoding() {
+        let t = parse_transcript(TranscriptKind::Plain, "粘贴进来的一行。").unwrap();
+        assert_eq!(t.encoding, None);
     }
 }

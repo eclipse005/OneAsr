@@ -171,6 +171,9 @@ pub const ERR_EMPTY_ALIGNMENT: Str =
     Str::new("对齐后词列表为空", "Word list is empty after alignment");
 /// 见 [`ERR_EMPTY_ALIGNMENT`]。
 pub const ERR_EMPTY_TRANSCRIPT: Str = Str::new("文稿是空的", "Transcript is empty");
+/// SRT 块全被剥成了空行——文件在，但没有一条能当字幕的文字。
+pub const ERR_TRANSCRIPT_NO_CUES: Str =
+    Str::new("SRT 里没有可用的字幕行", "SRT has no usable subtitle lines");
 pub const ERR_TRANSCRIPT_REQUIRES_TIMED_OUTPUT: Str = Str::new(
     "文稿匹配需要至少启用 SRT 或 ASS 输出",
     "Transcript matching requires SRT or ASS output",
@@ -526,6 +529,69 @@ pub fn gpu_probe_hint(gpu: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("（{gpu}）"),
         UiLang::En => format!(" ({gpu})"),
+    }
+}
+
+// ---- 文稿读取（编码） ----
+
+/// `读不了 {path}: {e}` / `Cannot read {path}: {e}`。
+///
+/// IO 错误的底层文本（系统给的）原样带上，只翻译外框。
+pub fn transcript_read_failed(path: &std::path::Path, e: &str) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("读不了 {}: {e}", path.display()),
+        UiLang::En => format!("Cannot read {}: {e}", path.display()),
+    }
+}
+
+/// `不是支持的文稿格式: {path}` / `Unsupported transcript format: {path}`。
+pub fn transcript_extension_unsupported(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("不是支持的文稿格式: {}", path.display()),
+        UiLang::En => format!("Unsupported transcript format: {}", path.display()),
+    }
+}
+
+/// `看不懂 {} 的编码：既不是 UTF-8，也不是 GBK/GB18030；内容也可能已损坏；请用 UTF-8 另存后重试`
+/// / `Cannot decode {}: it is neither UTF-8 nor GBK/GB18030, or the content is damaged; re-save it as UTF-8 and retry`。
+///
+/// 「另存为 UTF-8」是用户手上唯一有效的动作，所以必须写进文案，而不是只说
+/// 「解码失败」——那等于让用户自己猜下一步。「可能已损坏」半句是为带 BOM 的
+/// UTF-16 / UTF-8 准备的：它编码是判断出来了的，只是内容有半截。
+pub fn transcript_encoding_unknown(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "看不懂 {} 的编码：既不是 UTF-8，也不是 GBK/GB18030；内容也可能已损坏；请用 UTF-8 另存后重试",
+            path.display()
+        ),
+        UiLang::En => format!(
+            "Cannot decode {}: it is neither UTF-8 nor GBK/GB18030, or the content is damaged; re-save it as UTF-8 and retry",
+            path.display()
+        ),
+    }
+}
+
+/// `{} 是 UTF-32 编码，不支持；请另存为 UTF-8`
+/// / `{} is UTF-32, which is not supported; re-save it as UTF-8`。
+pub fn transcript_utf32_unsupported(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("{} 是 UTF-32 编码，不支持；请另存为 UTF-8", path.display()),
+        UiLang::En => format!(
+            "{} is UTF-32, which is not supported; re-save it as UTF-8",
+            path.display()
+        ),
+    }
+}
+
+/// `{} 不像文本文件（里面有 NUL 字节）`
+/// / `{} does not look like a text file (it contains NUL bytes)`。
+pub fn transcript_not_text(path: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!("{} 不像文本文件（里面有 NUL 字节）", path.display()),
+        UiLang::En => format!(
+            "{} does not look like a text file (it contains NUL bytes)",
+            path.display()
+        ),
     }
 }
 
@@ -1236,11 +1302,17 @@ pub fn cli_script_unknown(raw: &str) -> String {
     }
 }
 
-/// `读不了文稿: {e}` / `cannot read transcript: {e}`。
-pub fn cli_transcript_read_failed(e: &str) -> String {
+/// `文稿按 {name} 读取（不是 UTF-8；字不对就另存为 UTF-8）`
+/// / `transcript read as {name} (not UTF-8; re-save it as UTF-8 if the text looks wrong)`。
+///
+/// GB18030 / UTF-16 是**换过码**的：靠 BOM 猜、或靠 GB18030 兑下来，都有猜
+/// 错的可能（Shift_JIS 就是典型）。说一句比不说好——用户至少知道字是从哪来的。
+pub fn cli_transcript_encoding(name: &str) -> String {
     match ui_lang() {
-        UiLang::Zh => format!("读不了文稿: {e}"),
-        UiLang::En => format!("cannot read transcript: {e}"),
+        UiLang::Zh => format!("文稿按 {name} 读取（不是 UTF-8；字不对就另存为 UTF-8）"),
+        UiLang::En => format!(
+            "transcript read as {name} (not UTF-8; re-save it as UTF-8 if the text looks wrong)"
+        ),
     }
 }
 

@@ -20,6 +20,7 @@ pub mod sentence_boundary;
 pub mod settings;
 pub mod stats;
 pub mod subtitle;
+pub mod text_decode;
 pub mod text_script;
 pub mod timeline;
 pub mod transcript;

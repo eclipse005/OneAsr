@@ -4983,6 +4983,7 @@ version = "1.4.1"
 dependencies = [
  "ctc-forced-aligner-wgpu",
  "demucs-core",
+ "encoding_rs",
  "ferrous-opencc",
  "fireredvad",
  "hound",

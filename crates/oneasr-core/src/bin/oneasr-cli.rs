@@ -1337,13 +1337,7 @@ fn cmd_render(args: &[String]) -> Result<(), i32> {
         None => None,
         Some(path) => {
             let path = PathBuf::from(path);
-            match oneasr_core::transcript::read_transcript(&path) {
-                Ok(t) => Some(t.text),
-                Err(e) => {
-                    eprintln!("{}", i18n::cli_transcript_read_failed(&e));
-                    return Err(1);
-                }
-            }
+            Some(read_transcript_or_exit(&path)?.text)
         }
     };
     let rendered = oneasr_core::timeline::render(
@@ -1717,10 +1711,7 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         return Err(1);
     }
     let text_path = PathBuf::from(require_arg(args, "--text")?);
-    let transcript = oneasr_core::transcript::read_transcript(&text_path).map_err(|e| {
-        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
-        1
-    })?;
+    let transcript = read_transcript_or_exit(&text_path)?;
 
     // 输出格式先判：**用法错**要在碰 ffmpeg、模型与目录解析之前就报出来。
     //
@@ -1943,9 +1934,32 @@ fn transcript_json(
         "text": &transcript.text,
         "lines": stats.lines,
         "chars": stats.chars,
+        // GB18030 是猜的：机器可读的出口也要能说「按什么编码读的」。
+        "encoding": transcript.encoding.map(|e| e.id()),
         "dropped_timecodes": transcript.dropped_timecodes(),
         "speech_rate": transcript_speech_rate(audio_seconds.and_then(|s| stats.rate(s))),
     })
+}
+
+/// 读一份文稿，失败就打一行诊断；换过码的（GB18030 / UTF-16）把编码说出来。
+///
+/// 五个入口共用：`align --text`、`render --transcript`、
+/// `transcript inspect|split|polish --input` —— 文稿只有这一个读入口。
+fn read_transcript_or_exit(input: &Path) -> Result<oneasr_core::transcript::Transcript, i32> {
+    match oneasr_core::transcript::read_transcript(input) {
+        Ok(transcript) => {
+            if let Some(encoding) = transcript.encoding.filter(|e| !e.is_utf8()) {
+                eprintln!("{}", i18n::cli_transcript_encoding(encoding.name()));
+            }
+            Ok(transcript)
+        }
+        Err(e) => {
+            // `TranscriptError` 自己就是一句完整的话（带路径、带下一步动作），
+            // 不再套一层「读不了文稿」——套了英文会变成「cannot read: Cannot decode」。
+            eprintln!("{e}");
+            Err(1)
+        }
+    }
 }
 
 /// 断句 / 编辑后的纯文本 JSON。kind 仍取源文稿，好让界面继续说
@@ -1972,10 +1986,7 @@ fn transcript_text_json(
 fn cmd_transcript_inspect(args: &[String]) -> Result<(), i32> {
     let input = require_arg(args, "--input")?;
     let audio_seconds = arg(args, "--audio-seconds").and_then(|s| s.parse::<f64>().ok());
-    let transcript = oneasr_core::transcript::read_transcript(Path::new(&input)).map_err(|e| {
-        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
-        1
-    })?;
+    let transcript = read_transcript_or_exit(Path::new(&input))?;
     if flag(args, "--json") {
         println!("{}", transcript_json(&transcript, audio_seconds));
     } else {
@@ -2001,10 +2012,7 @@ fn cmd_transcript_split(args: &[String]) -> Result<(), i32> {
         return Err(2);
     }
     let audio_seconds = arg(args, "--audio-seconds").and_then(|s| s.parse::<f64>().ok());
-    let transcript = oneasr_core::transcript::read_transcript(Path::new(&input)).map_err(|e| {
-        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
-        1
-    })?;
+    let transcript = read_transcript_or_exit(Path::new(&input))?;
     let text = oneasr_core::sentence_boundary::break_long_lines(&transcript.text, &lang, &preset);
     if flag(args, "--json") {
         println!(
@@ -2025,10 +2033,7 @@ fn cmd_transcript_split(args: &[String]) -> Result<(), i32> {
 fn cmd_transcript_polish(args: &[String]) -> Result<(), i32> {
     let input = require_arg(args, "--input")?;
     let audio_seconds = arg(args, "--audio-seconds").and_then(|s| s.parse::<f64>().ok());
-    let transcript = oneasr_core::transcript::read_transcript(Path::new(&input)).map_err(|e| {
-        eprintln!("{}", i18n::cli_transcript_read_failed(&e));
-        1
-    })?;
+    let transcript = read_transcript_or_exit(Path::new(&input))?;
     let text = oneasr_core::subtitle::polish::polish_text(&transcript.text);
     if flag(args, "--json") {
         println!(
