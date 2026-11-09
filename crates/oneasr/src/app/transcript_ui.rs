@@ -73,7 +73,10 @@ impl OneAsrApp {
                 self.transcript_card_pinned = true;
             }
             Err(e) => {
-                self.flash_hint(expand(t(L::TRANSCRIPT_UNREADABLE), &[("e", &e)]), cx);
+                self.flash_hint(
+                    expand(t(L::TRANSCRIPT_UNREADABLE), &[("e", &e.to_string())]),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -152,7 +155,10 @@ impl OneAsrApp {
                 self.transcript_card_note = Some(t(L::TRANSCRIPT_REREAD).to_string());
             }
             Err(e) => {
-                self.transcript_card_note = Some(expand(t(L::TRANSCRIPT_UNREADABLE), &[("e", &e)]));
+                self.transcript_card_note = Some(expand(
+                    t(L::TRANSCRIPT_UNREADABLE),
+                    &[("e", &e.to_string())],
+                ));
             }
         }
         cx.notify();

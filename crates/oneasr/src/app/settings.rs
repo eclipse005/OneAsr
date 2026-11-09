@@ -261,7 +261,10 @@ impl OneAsrApp {
                     Some(text_path.clone()),
                 )),
                 Err(e) => {
-                    self.flash_hint(expand(t(L::TRANSCRIPT_UNREADABLE), &[("e", &e)]), cx);
+                    self.flash_hint(
+                        expand(t(L::TRANSCRIPT_UNREADABLE), &[("e", &e.to_string())]),
+                        cx,
+                    );
                     None
                 }
             };
