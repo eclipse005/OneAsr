@@ -50,12 +50,14 @@ OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rus
 - `crates/oneasr/src/i18n.rs` —— GUI 界面标签的双语表（复用 core 机制）
 - `vendor/gpui/` —— 打过补丁的 gpui；每处改动都要登记进 `vendor/gpui/PATCHES.md`
 - `installer/` —— Windows Inno Setup 脚本；`installer/macos/` 是 macOS 的安装说明与安装脚本源文件
-- `scripts/` —— 打包脚本与图标生成，外加四道校验与它们的自测：
+- `scripts/` —— 打包脚本与图标生成，外加五道校验与它们的自测：
   `verify-version.py`（版本一致性）、`verify-i18n.py`（界面文案双语）、
-  `verify-ffmpeg-manifest.py`（ffmpeg 哈希清单）、`ffmpeg-checksums.txt`（清单本体）；
-  以及 `test_verify_i18n.py`（双语门禁自己的单测）、
+  `verify-ffmpeg-manifest.py`（ffmpeg 哈希清单）、`ffmpeg-checksums.txt`（清单本体）、
+  `verify-dxc-manifest.py`（DX12 着色器编译器的哈希清单，含 `# extract` 成员哈希）
+  与 `dxc-checksums.txt`（清单本体）；
+  以及 `test_verify_i18n.py` / `test_verify_dxc_manifest.py`（门禁自己的单测）、
   `bonebreak-verify-i18n.py`（门禁的断骨验证）、`_verify_common.py`
-  （三个校验脚本共用的输出编码处理 —— 同一件事只写一份，改一次三处都跟着）、
+  （各校验脚本共用的输出编码处理 —— 同一件事只写一份，改一次几处都跟着）、
   `export-phrases.py`（热词短语词典资产 `phrases.bin` 的生成器：要一份装了 pypinyin
   的 Python，不进 CI；`--check` 只核对不写盘。改了资产要连 manifest 一起提交，
   单测会拿 sha256 对账）
@@ -179,6 +181,17 @@ CI 只在 `push: master` 与 PR 上跑，直接提交到 `master` 同样会拿�
   新脚本不再读它
 - 上面这套「来源声明 + 哈希」在 `scripts/ffmpeg-checksums.txt` 里是**单一出处**（`# base-url <URL>`
   一行机器可读），两个打包脚本与 CI 的 `verify-ffmpeg-manifest.py` 都从那里读
+- **DX12 的着色器编译器也随产物分发**：`dxcompiler.dll` + `dxil.dll`（取自微软官方 NuGet 包
+  `Microsoft.Direct3D.DXC`，现钉 1.9.2609.5），与上面同一套「来源声明 + 哈希」——清单是
+  `scripts/dxc-checksums.txt`，校验脚本 `scripts/verify-dxc-manifest.py`（CI 的 supply-chain
+  job 会跑），打包脚本解出后还会逐枚比对 `# extract` 行。为什么必须带：D3D12 的着色器编译
+  **在应用侧**，Windows 只自带冻结在 SM 5.1 的 FXC；wgpu 找不到 `dxcompiler.dll` 就静默退
+  FXC，而我们的 72 条管线在 FXC 上首次装载实测 **1051 s（17.5 分钟）**，带上这两枚是
+  **4.7–5.6 s**（同一份二进制、同一台机）。两枚 DLL 必须与 exe **同层**：wgpu 用
+  `LoadLibrary("dxcompiler.dll")` 按可执行文件目录找，放 `bin/` 找不到。许可：dxcompiler 是
+  NCSA/LLVM，dxil.dll 走微软的 DISTRIBUTABLE CODE 条款，三份许可文本随产物进 `licenses/`
+- 换 DXC 版本：改清单里的 `base-url`（NuGet 版本号）→ `python3 scripts/verify-dxc-manifest.py
+  --print-manifest` 更新哈希段。**别跟随 `-preview` 版本**：生产只钉稳定版
 - 已知待办：这批 ffmpeg 的 configure 行带 `--enable-nonfree`，FFmpeg 官方 LICENSE.md 写明这样的
   产物不可再分发。换 LGPL 构建**只动清单一个文件**（base-url + 哈希），不用改打包脚本
 - `scripts/pack-release.ps1` 必须带 UTF-8 BOM：Windows PowerShell 5.1 没有 BOM 时按 ANSI 代码页

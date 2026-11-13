@@ -1,0 +1,54 @@
+# 随产物分发的 DirectX Shader Compiler（DXC）——来源声明 + 供应链哈希清单。
+#
+# 本文件是 DXC 来源的**唯一出处**：打包脚本与 CI 的校验脚本都从这里读来源
+# URL 与哈希。换版本只改下面那条 base-url 与这些哈希。
+#
+# 注意：base-url 那一行必须独占一行、后面不能再跟任何文字（与
+# ffmpeg-checksums.txt 同一条规矩，踩过的坑见那边）。
+#
+# base-url https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.dxc/1.9.2609.5
+#
+# 为什么要随产物带一份编译器
+# --------------------------
+# D3D12 的着色器编译是**应用的事**，不在显卡驱动里（这一点与 Vulkan 相反：
+# Vulkan 的驱动自己吃 SPIR-V）。Windows 只自带一个冻结在 Shader Model 5.1 的
+# 老编译器 d3dcompiler_47.dll（FXC），新编译器 DXC 由微软独立发行、由应用自带。
+# wgpu 在 DX12 上的策略是「找到 dxcompiler.dll 就用它，找不到就静默退 FXC」。
+#
+# 实测（同一台机、同一份二进制、0.6B 模型、30 s 语音，首次装载）：
+#
+#   FXC（没带 DLL，等于所有没装 Windows SDK 的用户）   1051 s ≈ 17.5 分钟
+#   DXC（带这两枚，串行建管线）                         16.4 s
+#   DXC + 并行建管线（OneAsr v1.4.1 之后那一版）        4.1 ~ 5.6 s
+#
+# 也就是说：不带这两枚 DLL，任何落到 DX12 的用户都要等十几分钟，而且它在
+# 「加载识别模型」阶段没有任何输出，看起来就是卡死。这不是优化项，是能不能用的
+# 问题。Chrome / Epic / 钉钉 / Unity 都各自在程序目录带一份，是同一个理由。
+#
+# 来源：微软官方 NuGet 包 Microsoft.Direct3D.DXC（DXC 官方文档指的就是它）。
+# 为什么钉 NuGet 而不是 GitHub release 的 dxc_*.zip —— 两者的字节都是微软官方构建，
+# 但 NuGet 的**包版本不可变**（只能下架，不能重传成不同内容），正好补上 GitHub
+# release 资产可以被重传的那个缺口。信任锚点仍然是内容哈希，不是 URL。
+#
+# 包里取了这四类文件：
+#   build/native/bin/x64/dxcompiler.dll   运行时着色器编译器（wgpu 找的就是它）
+#   build/native/bin/x64/dxil.dll         DXIL 校验/签名（D3D12 拒收未签名的）
+#   LICENSE-LLVM.txt / LICENSE-MS.txt / LICENCE-MIT.txt   随包分发的许可要求
+#
+# 许可：dxcompiler 是 University of Illinois/NCSA（即 LICENSE-LLVM.txt，宽松，
+# 可随应用分发）；dxil.dll 与其他部分按 LICENSE-MS.txt 的「DISTRIBUTABLE CODE」
+# 条款 —— 允许随应用分发目标代码，要求随附该条款、不得用微软商标暗示背书。
+# 三份许可文件都必须进产物（见 licenses\ 目录）。
+#
+# 升级：改 base-url 里的版本号，然后
+#   python scripts/verify-dxc-manifest.py --print-manifest
+# 用输出替换下面的哈希段（--print-manifest 会重新下载并按实际内容打印）。
+#
+# <!-- hash-section -->
+
+73cfa082245918c2cc1ec6740250eb7377e83a757b3b3a3e16e0d71535bfbfc3  microsoft.direct3d.dxc.1.9.2609.5.nupkg
+
+# 解出来的这两枚 DLL 再各自钉一次哈希：包哈希证明「下到的是那个包」，这两行证明
+# 「从包里取出来的是这两枚」——打包脚本解压后逐枚比对，取错成员会当场失败。
+# extract build/native/bin/x64/dxcompiler.dll 0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59
+# extract build/native/bin/x64/dxil.dll 64be2368211d257a038a7d4ea6bb3e24c878eb8d588c7b8414fccf759b69c2ac

@@ -13,6 +13,9 @@
       oneasr.exe          # GUI subsystem (no black console); assets embedded
       oneasr-cli.exe      # console CLI (same pipeline; Python / scripts)
       bin/ffmpeg.exe
+      dxcompiler.dll      # DX12 着色器编译器（不带它 = 退 FXC，装载慢两个数量级）
+      dxil.dll            # 上面那枚的 DXIL 签名器
+      licenses/           # 第三方许可文本（DXC）
       models/ output/ runs/
 
   No assets/ folder — SVG/WAV are compile-time embedded.
@@ -86,8 +89,8 @@ function Get-FfmpegBase {
 # 清单缺失、清单里没有这个归档、内容不匹配 —— 全部 throw；绝不放行。
 # 为什么：GitHub 的 release 资产默认仍可被重新上传，URL 不保证内容，
 # 唯一可信的锚点是哈希。
-function Assert-Checksum([string]$Path, [string]$Asset) {
-  $manifest = Join-Path $Root "scripts\ffmpeg-checksums.txt"
+function Assert-Checksum([string]$Path, [string]$Asset, [string]$ManifestName = "ffmpeg-checksums.txt", [string]$Regen = "python scripts/verify-ffmpeg-manifest.py --print-manifest") {
+  $manifest = Join-Path $Root "scripts\$ManifestName"
   if (-not (Test-Path -LiteralPath $manifest)) {
     throw "Checksum manifest missing: $manifest"
   }
@@ -97,18 +100,16 @@ function Assert-Checksum([string]$Path, [string]$Asset) {
   $pattern = "^\s*([0-9a-fA-F]{64})\s+" + [regex]::Escape($Asset) + "\s*$"
   $entry = Select-String -Path $manifest -Pattern $pattern | Select-Object -First 1
   if (-not $entry) {
-    throw "No sha256 for '$Asset' in manifest"
+    throw "No sha256 for '$Asset' in $manifest"
   }
   $want = $entry.Matches[0].Groups[1].Value.ToLower()
   $got = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower()
   if ($got -ne $want) {
     throw ("Checksum mismatch for {0}`n  file:     {1}`n  expected: {2}`n  actual:   {3}`n" +
-      "The ffmpeg archive does not match scripts/ffmpeg-checksums.txt. Either it is not`n" +
-      "the pinned file, or the asset behind`n" +
-      "  {4}/{0}`n" +
-      "was re-uploaded. Do not ship it. Delete dist\ffmpeg-cache\{0} and re-run; if`n" +
-      "upstream legitimately changed, refresh the manifest:`n" +
-      "  python scripts/verify-ffmpeg-manifest.py --print-manifest") -f $Asset, $Path, $want, $got, (Get-FfmpegBase)
+      "The file does not match scripts\{4}. Either it is not the pinned file, or`n" +
+      "the upstream asset behind it was re-uploaded. Do not ship it. Delete the cached`n" +
+      "copy and re-run; if upstream legitimately changed, refresh the manifest:`n" +
+      "  {5}") -f $Asset, $Path, $want, $got, $ManifestName, $Regen
   }
   Write-Host "    sha256 ok  $Asset  $want"
 }
@@ -157,6 +158,105 @@ function Expand-Ffmpeg([string]$Archive, [string]$Dest) {
     Write-Host "    extracted ffmpeg.exe -> $Dest"
   } finally {
     Remove-Item -Recurse -Force -LiteralPath $extractDir -ErrorAction SilentlyContinue
+  }
+}
+
+# DXC（DirectX Shader Compiler）的来源同样只声明在清单里（scripts/dxc-checksums.txt）。
+#
+# 为什么产物要带它：D3D12 的着色器编译是**应用的责任**，不在驱动里（Vulkan 相反）。
+# Windows 只自带冻结在 SM 5.1 的 FXC；wgpu 找不到 dxcompiler.dll 就静默退 FXC，
+# 而我们的 72 条管线在 FXC 上首次装载实测 1051 s（17.5 分钟）—— 同一份二进制带上
+# 这两枚 DLL 之后是 4.7–5.6 s。见清单里的实测表与许可说明。
+function Get-DxcBase {
+  $manifest = Join-Path $Root "scripts\dxc-checksums.txt"
+  if (-not (Test-Path -LiteralPath $manifest)) {
+    throw "Checksum manifest missing: $manifest"
+  }
+  $entry = Select-String -Path $manifest -Pattern '^\s*#\s*base-url\s+(\S+)\s*$' | Select-Object -First 1
+  if (-not $entry) { throw "No '# base-url <URL>' line (alone on its line) in $manifest" }
+
+  $bad = Select-String -Path $manifest -Pattern '^\s*#\s*base-url\s+\S+\s+\S+' | Select-Object -First 1
+  if ($bad) {
+    throw "Malformed '# base-url' line at $($bad.LineNumber) in $manifest (must be exactly: '# base-url <URL>')"
+  }
+
+  $url = $entry.Matches[0].Groups[1].Value
+  if ($url -notmatch '^https://') {
+    throw "base-url must be an https:// URL, got '$url' in $manifest"
+  }
+  return $url
+}
+
+# 取一份**已校验**的 DXC NuGet 包（缓存优先）。与 ffmpeg 一样：缓存命中与否都要
+# 过哈希，内容哈希才是可信凭证。
+function Get-DxcPackage([string]$Asset) {
+  $manifestName = "dxc-checksums.txt"
+  $regen = "python scripts/verify-dxc-manifest.py --print-manifest"
+  $cacheDir = Join-Path $Root "dist\dxc-cache"
+  $package = Join-Path $cacheDir $Asset
+  New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+  if (Test-Path -LiteralPath $package) {
+    try {
+      Assert-Checksum $package $Asset $manifestName $regen
+      Write-Host "    cached   $Asset"
+      return $package
+    } catch {
+      Write-Host "    cached copy rejected, re-downloading"
+      Remove-Item -Force -LiteralPath $package
+    }
+  }
+  Write-Host "==> downloading $Asset"
+  $url = "$(Get-DxcBase)/$Asset"
+  & curl.exe -L --fail --retry 3 -o $package $url
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $package)) {
+    throw "Failed to download $url"
+  }
+  Assert-Checksum $package $Asset $manifestName $regen
+  return $package
+}
+
+# 从 nupkg 里只取出产物需要的成员，并逐枚比对清单里 `# extract` 钉的哈希。
+# 用 ZipFile 而不是 Expand-Archive：后者的路径必须是 .zip，nupkg 会被拒。
+function Expand-Dxc([string]$Package, [string]$DestDir) {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $members = [ordered]@{
+    "build/native/bin/x64/dxcompiler.dll" = "dxcompiler.dll"
+    "build/native/bin/x64/dxil.dll"       = "dxil.dll"
+    "LICENSE-LLVM.txt"                    = "licenses\DXC-LICENSE-LLVM.txt"
+    "LICENSE-MS.txt"                      = "licenses\DXC-LICENSE-MS.txt"
+    "LICENCE-MIT.txt"                     = "licenses\DXC-LICENCE-MIT.txt"
+  }
+  $zip = [System.IO.Compression.ZipFile]::OpenRead($Package)
+  try {
+    foreach ($member in $members.Keys) {
+      $entry = $zip.GetEntry($member)
+      if ($null -eq $entry) { throw "Expected member '$member' inside $Package" }
+      $dest = Join-Path $DestDir $members[$member]
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+      [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+    }
+  } finally {
+    $zip.Dispose()
+  }
+  # 包哈希证明「下到的是那个包」；这两行证明「取出来的是那两枚」。
+  Assert-ExtractedDxc (Join-Path $DestDir "dxcompiler.dll") "build/native/bin/x64/dxcompiler.dll"
+  Assert-ExtractedDxc (Join-Path $DestDir "dxil.dll") "build/native/bin/x64/dxil.dll"
+  Write-Host "    extracted dxcompiler.dll + dxil.dll (+ licenses)"
+}
+
+function Assert-ExtractedDxc([string]$Path, [string]$Member) {
+  $manifest = Join-Path $Root "scripts\dxc-checksums.txt"
+  if (-not (Test-Path -LiteralPath $manifest)) {
+    throw "Checksum manifest missing: $manifest"
+  }
+  $pattern = "^\s*#\s*extract\s+" + [regex]::Escape($Member) + "\s+([0-9a-fA-F]{64})\s*$"
+  $entry = Select-String -Path $manifest -Pattern $pattern | Select-Object -First 1
+  if (-not $entry) { throw "No '# extract $Member <sha256>' line in $manifest" }
+  $want = $entry.Matches[0].Groups[1].Value.ToLower()
+  $got = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower()
+  if ($got -ne $want) {
+    throw ("Extracted {0} does not match {1}`n  expected: {2}`n  actual:   {3}`n" +
+      "The package hash matched but the member did not — do not ship it.") -f $Member, $manifest, $want, $got
   }
 }
 
@@ -230,6 +330,12 @@ Expand-Ffmpeg $archive $verifiedFfmpeg
 $ffmpeg = Join-Path $Root "bin\ffmpeg.exe"
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "bin") | Out-Null
 Copy-Item -LiteralPath $verifiedFfmpeg -Destination $ffmpeg -Force
+
+# DXC 同样从已校验的包现场取出（见 scripts/dxc-checksums.txt）。两枚 DLL 进产物
+# 根目录 —— wgpu 用 LoadLibrary("dxcompiler.dll") 按**可执行文件所在目录**找它，
+# 放 bin\ 找不到。dxil.dll 也得跟它同目录（编译器自己按同一条规则加载签名器）。
+$dxcAsset = "microsoft.direct3d.dxc.1.9.2609.5.nupkg"
+$dxcPackage = Get-DxcPackage $dxcAsset
 # UI assets are embedded in the binary; only need source assets at compile time.
 $ico = Join-Path $Root "assets\icons\app-icon.ico"
 if (-not (Test-Path -LiteralPath $ico)) {
@@ -276,6 +382,9 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stage "runs") | Out-Null
 Copy-Item -LiteralPath $exeSrc -Destination (Join-Path $stage "oneasr.exe") -Force
 Copy-Item -LiteralPath $cliSrc -Destination (Join-Path $stage "oneasr-cli.exe") -Force
 Copy-Item -LiteralPath $ffmpeg -Destination (Join-Path $stage "bin\ffmpeg.exe") -Force
+# DX12 用到的着色器编译器（含许可文本）。wgpu 找不到它就会退到 Windows 自带的
+# FXC，首次装载从几秒变成十几分钟，所以它跟 exe 必须同层。
+Expand-Dxc $dxcPackage $stage
 Assert-GuiSubsystem (Join-Path $stage "oneasr.exe")
 Assert-ConsoleSubsystem (Join-Path $stage "oneasr-cli.exe")
 
@@ -294,6 +403,9 @@ Layout
   oneasr.exe      main app (icons/sfx embedded)
   oneasr-cli.exe  headless CLI (same pipeline; for scripts / Python)
   bin\ffmpeg.exe  media convert
+  dxcompiler.dll  HLSL shader compiler for the DX12 backend (keep next to the exes)
+  dxil.dll        DXIL signing for the above
+  licenses\       third-party licence texts (DXC)
   models\         ASR / Aligner weights (Settings -> download models)
   output\         exported *.srt
   runs\           intermediate work files (safe to delete)

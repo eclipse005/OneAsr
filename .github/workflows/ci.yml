@@ -129,6 +129,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/verify-ffmpeg-manifest.py
+      # DXC：DX12 的着色器编译器，不带它任何落到 DX12 的用户首次装载要十几分钟
+      # （数据与许可说明在 scripts/dxc-checksums.txt）。来源是 NuGet（包版本不可变），
+      # 但下载路径最终给什么字节仍要自己验：这里下 53 MB 的包，比对包与两枚 DLL 的 sha256。
+      - name: Verify bundled DXC digests
+        run: |
+          python3 scripts/verify-dxc-manifest.py
+          python3 scripts/test_verify_dxc_manifest.py
       # 依赖漏洞 + 依赖来源（deny.toml：只允许 crates.io 与本组织 GitHub 仓库，
       # 且 git 依赖必须带 tag/rev）。
       #
