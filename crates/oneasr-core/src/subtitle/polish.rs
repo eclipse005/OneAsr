@@ -189,6 +189,10 @@ fn apply_punct(input: &[MappedChar]) -> Vec<MappedChar> {
             // 千分位不论全角半角都留下，并收成半角逗号。句中的逗号才换成空格。
             '，' | ',' if both_neighbors_digits(input, i) => Some(','),
             '，' | ',' => Some(' '),
+            // 分号与逗号同档：都是句内停顿，简体字幕里统一收成一个空格。
+            // 以前它落在 `is_sticky_punct`（粘着前一个字、不插空格），于是
+            // "美化过"和"没美化"在分号这一段读起来完全一样（#22）。
+            '；' | ';' => Some(' '),
             // 时刻保持半角冒号。网址、盘符（一边是字母或 `/`）也不改成全角，
             // 否则 `https://` 会被拆开。其余冒号按简体字幕收成全角。
             ':' | '：' if keep_colon(input, i) => Some(':'),
@@ -529,6 +533,16 @@ mod tests {
         assert_eq!(polish("你好,世界."), "你好 世界");
         assert_eq!(polish("结束。"), "结束");
         assert_eq!(polish("第一行。\n第二行，还行"), "第一行\n第二行 还行");
+    }
+
+    /// 分号与逗号同档：句内停顿收成一个空格（#22）。纯英文那条路整体短路，
+    /// 所以 `a; b` 不该被改。
+    #[test]
+    fn semicolons_become_one_space_like_commas() {
+        assert_eq!(polish("甲，乙；丙。丁"), "甲 乙 丙 丁");
+        assert_eq!(polish("甲;乙"), "甲 乙");
+        assert_eq!(polish("其一；其二；其三"), "其一 其二 其三");
+        assert_eq!(polish("a; b"), "a; b");
     }
 
     #[test]
