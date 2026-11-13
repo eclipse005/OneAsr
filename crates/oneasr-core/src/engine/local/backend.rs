@@ -30,6 +30,13 @@ pub(crate) struct GpuProbe {
     /// journal before any model is loaded, so a GPU that dies later still has
     /// its make/model/API/driver on record.
     pub(crate) report: String,
+    /// How many of those adapters wgpu reported through **Vulkan**.
+    ///
+    /// 0 is a real answer and the one that matters: `Auto` walks Vulkan first,
+    /// so zero Vulkan adapters is exactly why a run falls through to DX12 (and
+    /// therefore to the shader-compiler question). Kept here rather than
+    /// recomputed because a second enumeration costs ~1 s on DX12.
+    pub(crate) vulkan_adapters: usize,
 }
 
 /// Multi-line adapter report for the task journal.
@@ -66,6 +73,18 @@ pub fn gpu_report() -> String {
         Ok(probe) => probe.report.clone(),
         Err(error) => format!("unavailable ({error})"),
     }
+}
+
+/// How many Vulkan adapters wgpu enumerated on this machine (cached).
+///
+/// The journal needs this number next to the OS-level Vulkan check: 0 here
+/// with a healthy loader/ICD list means the driver registered Vulkan but no
+/// card came through, which is a different problem from "Vulkan is not
+/// installed at all". Both used to look identical ("only dx12 lines").
+///
+/// A probe failure also counts as 0 — the reason is in [`gpu_report`].
+pub fn vulkan_adapter_count() -> usize {
+    probe_gpu_device().map_or(0, |probe| probe.vulkan_adapters)
 }
 
 /// Probe adapters once per process. A driver is enough; there is no extra
@@ -120,6 +139,10 @@ pub(super) fn probe_gpu_device() -> Result<&'static GpuProbe, String> {
             Ok(PROBE.get_or_init(|| GpuProbe {
                 description: t.describe(),
                 report: format_gpu_report(&descriptions, Some(t.spec.as_str())),
+                vulkan_adapters: targets
+                    .iter()
+                    .filter(|t| t.spec.starts_with("vulkan:"))
+                    .count(),
             }))
         }
         None => Err(crate::i18n::no_gpu_detected()),

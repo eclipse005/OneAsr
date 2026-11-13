@@ -731,7 +731,7 @@ fn build_journal_context(
         .map(|lines| format!("\n  gpu_memory:\n{}", indented(&lines)))
         .unwrap_or_default();
     format!(
-        "  file: {}\n  media_duration: {duration}\n  asr_model: {} ({})\n  backend: {}\n  language: {}\n  chunk_target: {}s\n  max_new_tokens: {}\n  aligner: {}\n  hotword: {hotword}\n  output: {output}\n  vocal_separation: {}\n  transcript_mode: {transcript_mode}\n  process: {process}\n  gpu:\n{}{gpu_memory}",
+        "  file: {}\n  media_duration: {duration}\n  asr_model: {} ({})\n  backend: {}\n  language: {}\n  chunk_target: {}s\n  max_new_tokens: {}\n  aligner: {}\n  hotword: {hotword}\n  output: {output}\n  vocal_separation: {}\n  transcript_mode: {transcript_mode}\n  process: {process}\n  gpu:\n{}\n  {}{gpu_memory}",
         path.display(),
         settings.selected_asr_id().as_str(),
         settings.asr_model_dir.display(),
@@ -742,6 +742,7 @@ fn build_journal_context(
         settings.selected_aligner_id().as_str(),
         settings.vocal_separation,
         indented(&oneasr_core::engine::local::gpu_report()),
+        crate::sysinfo::vulkan_report(),
     )
 }
 

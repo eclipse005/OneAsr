@@ -347,12 +347,14 @@ fn reg_dword(subkey: &str, value: &str) -> Option<u32> {
 }
 
 #[cfg(windows)]
-use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::Foundation::{ERROR_SUCCESS, FreeLibrary};
 #[cfg(windows)]
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
     IDXGIAdapter3, IDXGIFactory1,
 };
+#[cfg(windows)]
+use windows::Win32::System::LibraryLoader::LoadLibraryW;
 #[cfg(windows)]
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 #[cfg(windows)]
@@ -444,5 +446,136 @@ mod tests {
         assert_eq!(win10, "Windows 10 22H2 (build 19045)");
         let unknown = os_label_from(None, None, None);
         assert!(unknown.contains(std::env::consts::OS), "{unknown}");
+    }
+}
+
+// ── Vulkan stack probe ────────────────────────────────────────────────
+//
+// `gpu_report()` 只说 wgpu 枚举到了哪些适配器。答案是"没有 Vulkan 适配器"时，
+// 那一个事实解释不了原因，而两种原因完全不是一回事：
+//
+//   loader 缺失（System32 里没有 vulkan-1.dll） → 显卡驱动没装好 / 精简版驱动
+//   loader 在、token 0 张卡                    → 驱动装了但没注册 Vulkan，或该卡被系统屏蔽
+//
+// 这两种在 journal 里原先长得一模一样（只有 dx12 那几行），"为什么没走 Vulkan"
+// 只能靠猜。这里把系统层的事实与 wgpu 实际拿到的数量放在一行。
+//
+// 不查 ICD 注册表：本机实测 `HKLM\SOFTWARE\Khronos\Vulkan\Drivers` 不存在，
+// 但 Vulkan 有 2 张可用适配器（驱动注册在别处或该键 ACL 不可读），拿它当判据会
+// 报假阴性 —— 宁可少一行，也不能给一个会误导人的结论。
+//
+// **只写进 journal，不上界面**：用户无感。
+
+/// OS-level Vulkan facts. Split from the formatter so the text is testable on
+/// every CI OS without touching the real stack.
+#[derive(Debug, Default)]
+struct VulkanFacts {
+    /// `vulkan-1.dll` 在 System32 里（驱动安装时放的）。
+    loader: bool,
+    /// wgpu 通过 Vulkan 枚举到的适配器数。
+    adapters: usize,
+}
+
+/// One journal line: the OS-level stack plus what wgpu actually got.
+pub(crate) fn vulkan_report() -> String {
+    format_vulkan(&collect_vulkan())
+}
+
+fn format_vulkan(facts: &VulkanFacts) -> String {
+    let loader = if facts.loader {
+        "loader ok"
+    } else {
+        "loader MISSING"
+    };
+    format!("vulkan: {loader} | wgpu adapters {}", facts.adapters)
+}
+
+#[cfg(windows)]
+fn collect_vulkan() -> VulkanFacts {
+    VulkanFacts {
+        loader: vulkan_loader_present(),
+        adapters: oneasr_core::engine::local::vulkan_adapter_count(),
+    }
+}
+
+/// `vulkan-1.dll` 能不能加载出来 —— 用 LoadLibrary 而不是查文件路径：
+/// 搜索顺序与 wgpu 拿到的是同一条（应用目录 → System32 → PATH）。本机就是
+/// 反例：System32 里没有 loader，Vulkan SDK 的 bin 在 PATH 上，按路径查会
+/// 报假阴性（把"正常"写成"缺失"）。
+#[cfg(windows)]
+fn vulkan_loader_present() -> bool {
+    let name = wide("vulkan-1.dll");
+    match unsafe { LoadLibraryW(PCWSTR(name.as_ptr())) } {
+        Ok(module) => {
+            let _ = unsafe { FreeLibrary(module) };
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn collect_vulkan() -> VulkanFacts {
+    // Linux 的 loader 是 libvulkan.so.1，由驱动或 mesa 提供。
+    const LOADERS: [&str; 4] = [
+        "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+        "/usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+        "/usr/lib/libvulkan.so.1",
+        "/usr/lib64/libvulkan.so.1",
+    ];
+    VulkanFacts {
+        loader: LOADERS.iter().any(|p| std::path::Path::new(p).exists()),
+        adapters: oneasr_core::engine::local::vulkan_adapter_count(),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn collect_vulkan() -> VulkanFacts {
+    // macOS 上 wgpu 只跑 Metal；这一行的价值只在"数量"。
+    VulkanFacts {
+        loader: false,
+        adapters: oneasr_core::engine::local::vulkan_adapter_count(),
+    }
+}
+
+#[cfg(test)]
+mod vulkan_tests {
+    use super::*;
+
+    /// 两种"没有 Vulkan"必须打印成不同的句子 —— 否则 journal 里又是一行
+    /// 没有信息量的东西，还是得靠猜。
+    #[test]
+    fn missing_loader_and_empty_enumeration_read_differently() {
+        let no_loader = format_vulkan(&VulkanFacts {
+            loader: false,
+            adapters: 0,
+        });
+        assert_eq!(no_loader, "vulkan: loader MISSING | wgpu adapters 0");
+
+        let no_adapter = format_vulkan(&VulkanFacts {
+            loader: true,
+            adapters: 0,
+        });
+        assert_eq!(no_adapter, "vulkan: loader ok | wgpu adapters 0");
+        assert_ne!(no_loader, no_adapter);
+    }
+
+    /// 正常机器上这一行得能看出"栈没问题"。
+    #[test]
+    fn healthy_stack_shows_the_count() {
+        let line = format_vulkan(&VulkanFacts {
+            loader: true,
+            adapters: 2,
+        });
+        assert_eq!(line, "vulkan: loader ok | wgpu adapters 2");
+    }
+
+    /// journal 的每一行都必须是单行；顺便打出来，本地 `--nocapture` 可见。
+    #[test]
+    fn report_line_is_single_line() {
+        let line = vulkan_report();
+        println!("{line}");
+        assert!(line.starts_with("vulkan: "), "{line}");
+        assert_eq!(line.lines().count(), 1, "{line}");
     }
 }
