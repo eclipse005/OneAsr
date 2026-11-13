@@ -41,7 +41,7 @@ ctc-forced-aligner-wgpu = { git = "https://github.com/eclipse005/ctc-forced-alig
 fireredvad = { git = "https://github.com/eclipse005/FireRedVad.git", tag = "v1.0.0" }
 # 热词的第一趟粗转（SenseVoiceSmall，wgpu）。只服务「先粗转再召回」，不参与
 # 正式转写；钉 rev 不跟默认分支漂。
-sensevoice-small-wgpu = { git = "https://github.com/eclipse005/sensevoice-small-wgpu.git", rev = "5f5b5edb1956242cc312ced95510cf89f627b2d1" }
+sensevoice-small-wgpu = { git = "https://github.com/eclipse005/sensevoice-small-wgpu.git", rev = "ac4175a89202cb67bca101de0f4f167180b123b7" }
 # HTDemucs v4 vocals (CPU + wgpu). Same backend policy as ASR/Align.
 demucs-core = { git = "https://github.com/eclipse005/demucs-wgpu.git", rev = "45f40c18ad171fa04640ae018a3f248d9f6587f1" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
