@@ -5808,7 +5808,7 @@ dependencies = [
 [[package]]
 name = "qwen3-asr-wgpu"
 version = "0.2.0"
-source = "git+https://github.com/eclipse005/qwen3-asr-wgpu.git?rev=de3ccce482c5701731191e2d00578b5dd1fd2a56#de3ccce482c5701731191e2d00578b5dd1fd2a56"
+source = "git+https://github.com/eclipse005/qwen3-asr-wgpu.git?rev=22fbdbc195c0ab370ecb048e85c60249517b096a#22fbdbc195c0ab370ecb048e85c60249517b096a"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -8735,7 +8735,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
