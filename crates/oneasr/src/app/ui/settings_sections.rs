@@ -486,6 +486,30 @@ impl OneAsrApp {
         settings_section(body)
     }
 
+    /// 反馈问题：把诊断摘要拼进 issue，完整日志进剪贴板。
+    pub(super) fn render_settings_feedback(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(setting_title(
+                "tip-feedback",
+                t(L::FEEDBACK),
+                t(L::TIP_FEEDBACK),
+            ))
+            .child(div().flex().gap_1p5().child(btn(
+                t(L::FEEDBACK_BUTTON),
+                BtnKind::Secondary,
+                true,
+                cx.listener(|this, _, _, cx| this.open_feedback(cx)),
+            )))
+            .into_any_element();
+        settings_section(body)
+    }
+
     /// 语音识别模型
     pub(super) fn render_settings_asr_model(
         &mut self,

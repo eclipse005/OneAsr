@@ -337,6 +337,22 @@ pub mod L {
         "Plays a click for actions, and a chime when a run finishes",
     );
 
+    // ---- 反馈 ----
+    pub const FEEDBACK: Str = Str::new("反馈问题", "Report a problem");
+    pub const TIP_FEEDBACK: Str = Str::new(
+        "打开一个已填好诊断摘要的 GitHub issue，并把完整日志复制到剪贴板（正文里按 Ctrl+V 粘贴即可）",
+        "Opens a GitHub issue prefilled with the diagnostics, and copies the full log to the clipboard (paste it with Ctrl+V)",
+    );
+    pub const FEEDBACK_BUTTON: Str = Str::new("打开 issue 页", "Open the issue page");
+    pub const FEEDBACK_OPENED: Str = Str::new(
+        "已复制日志并打开 issue 页",
+        "Log copied; the issue page is open",
+    );
+    pub const FEEDBACK_NO_LOG: Str = Str::new(
+        "已复制诊断并打开 issue 页（暂无任务日志）",
+        "Diagnostics copied; the issue page is open (no task log yet)",
+    );
+
     // ---- 热词（独立面板 + 任务行下拉） ----
     pub const HOTWORD: Str = Str::new("热词", "Hotwords");
     pub const TIP_HOTWORD: Str = Str::new(

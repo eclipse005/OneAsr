@@ -12,6 +12,7 @@ use crate::app::ui::transcript_card::TranscriptCardView;
 
 pub(crate) mod close;
 pub(crate) mod downloads;
+pub(crate) mod feedback;
 pub(crate) mod overlays;
 pub(crate) mod prelude;
 pub(crate) mod rows;

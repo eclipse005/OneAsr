@@ -38,6 +38,8 @@ impl OneAsrApp {
                 self.render_settings_backend(&form, cx).into_any_element(),
                 // One switch, no essay: taps and the run reminder together.
                 self.render_settings_sound(&form, cx).into_any_element(),
+                // 反馈：预填 issue + 日志进剪贴板（不联网、无凭证）。
+                self.render_settings_feedback(cx).into_any_element(),
             ],
             DrawerPage::Hotword => self.render_hotword_cards(cx),
         };
