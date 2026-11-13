@@ -57,7 +57,7 @@ The main window and the settings drawer (same window size, side by side):
 - **Transcript matching**: already have a verified script? Attach it and recognition is skipped — your lines keep their wording and get real timestamps
 - **ASS karaoke output**: CJK characters (words in spaced languages) each carry their own timing for player highlighting
 - **Local aligner (default)**: frame-synchronous and fully local, no language coverage limits
-- **Legacy aligner**: the Qwen forced aligner is still selectable in Settings if you prefer it
+- **Two aligners, your pick**: CTC (default, frame-synchronous) or the Qwen forced aligner — switchable in Settings
 - **11 source languages**: 中文普通话, English, 粤语, 日本語, 한국어, Français, Deutsch, Italiano, Español, Português, Русский (set manually per task; no auto-detection)
 - **Two ASR sizes**: 0.6B (faster / less VRAM) · 1.7B (more accurate / more resources)
 - **Output options**: SRT / ASS / TXT, in any combination; saved next to the video by default

@@ -538,6 +538,37 @@ fn collect_vulkan() -> VulkanFacts {
     }
 }
 
+/// DX12 用的是哪个 HLSL 编译器 —— 装载慢十几分钟时，这一行就是答案。
+///
+/// D3D12 的着色器编译在应用侧：找到 `dxcompiler.dll` 用 DXC（秒级），找不到就
+/// 静默退 Windows 自带的 FXC（同一批管线实测 1051 s vs 4.7 s）。wgpu 不做任何
+/// 提示，所以把结论写进 journal。判据用 LoadLibrary，与 wgpu 的搜索顺序一致
+/// （应用目录 → System32 → PATH）；产物里随包带了一份，正常机器上永远是 DXC，
+/// 这一行没出现 DXC 就说明那份 DLL 丢了或被安全软件拦了。
+///
+/// 非 Windows 没有 DX12，直接返回 `None`（不占一行）。
+#[cfg(windows)]
+pub(crate) fn dx12_compiler_report() -> Option<String> {
+    let name = wide("dxcompiler.dll");
+    let found = match unsafe { LoadLibraryW(PCWSTR(name.as_ptr())) } {
+        Ok(module) => {
+            let _ = unsafe { FreeLibrary(module) };
+            true
+        }
+        Err(_) => false,
+    };
+    Some(if found {
+        "dx12 compiler: DXC".to_string()
+    } else {
+        "dx12 compiler: FXC (dxcompiler.dll not found; shader builds are ~100x slower)".to_string()
+    })
+}
+
+#[cfg(not(windows))]
+pub(crate) fn dx12_compiler_report() -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod vulkan_tests {
     use super::*;
@@ -577,5 +608,27 @@ mod vulkan_tests {
         println!("{line}");
         assert!(line.starts_with("vulkan: "), "{line}");
         assert_eq!(line.lines().count(), 1, "{line}");
+    }
+}
+
+#[cfg(test)]
+mod dx12_tests {
+    use super::*;
+
+    /// 只有 Windows 才有 DX12：这一行在别的平台不该出现。
+    #[test]
+    fn dx12_line_only_exists_on_windows() {
+        let line = dx12_compiler_report();
+        if cfg!(windows) {
+            let line = line.expect("Windows 上必须给出一行");
+            println!("{line}");
+            assert!(
+                line.starts_with("dx12 compiler: "),
+                "journal 行前缀固定：{line}"
+            );
+            assert!(!line.contains('\n'), "{line}");
+        } else {
+            assert!(line.is_none(), "非 Windows 不该有 DX12 行");
+        }
     }
 }

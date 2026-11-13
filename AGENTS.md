@@ -2,7 +2,9 @@
 
 OneAsr —— 本地、离线的音视频转字幕桌面应用（Qwen3-ASR，Rust + gpui/wgpu），
 支持 Windows / Linux / macOS（Apple Silicon）。转写全程在本机跑，不依赖在线 API。
-对齐默认走 CTC（omniASR-CTC-300M-v2），Qwen3-ForcedAligner 仅作兼容老档保留。
+对齐器有两个，用户自己选：CTC（omniASR-CTC-300M-v2，默认）与 Qwen3-ForcedAligner-0.6B。
+两者是并列的可选项，不是「新/旧」或「兼容」关系——不要在文档或代码注释里把它们写成
+遗留兼容（那会把后来读的人带偏，也确实带偏过一次）。
 
 ## 常用命令
 
