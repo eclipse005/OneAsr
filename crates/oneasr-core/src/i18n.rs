@@ -1334,6 +1334,24 @@ pub fn cli_align_needs_timed_output() -> &'static str {
 
 /// `未知的对齐引擎：{raw}（可选 ctc | qwen，或完整目录名）`
 /// / `Unknown aligner engine: {raw} (choose ctc | qwen, or an exact directory name)`。
+/// 文稿匹配只吃 CTC 对齐器目录。
+///
+/// 把 Qwen3-ForcedAligner 那种目录传给 `--aligner-model-dir` 时，CTC 引擎会去解析
+/// 它的 config，报 `missing field conv_dim`，再被包成「加载语音识别模型失败」——
+/// 三个词全都指向错误的方向（模型没坏、配置没坏、也不是识别模型）。
+pub fn cli_align_needs_ctc_dir(dir: &std::path::Path) -> String {
+    match ui_lang() {
+        UiLang::Zh => format!(
+            "文稿匹配固定用 CTC 对齐器：{} 不是 CTC 模型目录（缺 vocab.json）。请去掉 --aligner-model-dir，或指向 omniASR-CTC-300M 那类目录。",
+            dir.display()
+        ),
+        UiLang::En => format!(
+            "align always uses the CTC aligner: {} is not a CTC model directory (no vocab.json). Drop --aligner-model-dir, or point it at an omniASR-CTC-300M style directory.",
+            dir.display()
+        ),
+    }
+}
+
 pub fn cli_aligner_unknown(raw: &str) -> String {
     match ui_lang() {
         UiLang::Zh => format!("未知的对齐引擎：{raw}（可选 ctc | qwen，或完整目录名）"),

@@ -1694,6 +1694,13 @@ fn resolve_cli_hotwords(
     }
 }
 
+/// 文稿匹配认的「CTC 对齐器目录」：CTC 那份带 `vocab.json`，Qwen3-ForcedAligner
+/// 带 `tokenizer.json` 而没有 `vocab.json`。与
+/// `asr::model_check::check_aligner_model_dir` 里分两支用的是同一条判据。
+fn looks_like_ctc_aligner_dir(dir: &Path) -> bool {
+    dir.join("vocab.json").is_file()
+}
+
 /// `align` —— 音频 + 文稿 → 字幕，**整个识别阶段跳过**。
 ///
 /// 与 `transcribe` 的差别只有一句：文字从哪来。所以这里没有识别模型的检查、
@@ -1813,6 +1820,14 @@ fn cmd_align(args: &[String]) -> Result<(), i32> {
         settings.sensevoice_model_dir = saved.resolved_sensevoice_model_dir();
     }
     if let Some(dir) = aligner_dir_flag {
+        // 文稿匹配固定 CTC（见上面三处 select_aligner_model），而 `--aligner-model-dir`
+        // 照样生效。把 Qwen3-ForcedAligner 那类目录塞进来，要跑到引擎里解析 config
+        // 才炸，报的还是「加载语音识别模型失败: missing field conv_dim」—— 模型没坏、
+        // 配置没坏、也不是识别模型，三个词全指错方向。参数层直接挡掉。
+        if dir.is_dir() && !looks_like_ctc_aligner_dir(&dir) {
+            eprintln!("{}", i18n::cli_align_needs_ctc_dir(&dir));
+            return Err(2);
+        }
         settings.aligner_model_dir = dir;
     }
     if let Some(dir) = demucs_dir_flag {
@@ -4055,6 +4070,33 @@ mod tests {
         assert_eq!(
             probe_info(&no_ext).unwrap().kind,
             oneasr_core::MediaKind::Other
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 文稿匹配固定用 CTC。`--aligner-model-dir` 指向 Qwen3-ForcedAligner 那种
+    /// 目录时必须在这里被挡掉 —— 否则 CTC 引擎会去解析 Qwen 的 config，报
+    /// `missing field conv_dim`，再包成「加载语音识别模型失败」（三个词全指错）。
+    #[test]
+    fn align_rejects_a_dir_that_is_not_the_ctc_aligner() {
+        let root = env::temp_dir().join(format!("oneasr-align-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ctc = root.join("omniASR-CTC-300M-v2-hf");
+        let qwen = root.join("Qwen3-ForcedAligner-0.6B-hf");
+        std::fs::create_dir_all(&ctc).unwrap();
+        std::fs::create_dir_all(&qwen).unwrap();
+        // CTC 那份：config.json + vocab.json（没有 tokenizer.json）。
+        std::fs::write(ctc.join("config.json"), "{}").unwrap();
+        std::fs::write(ctc.join("vocab.json"), "{}").unwrap();
+        // Qwen 那份：config.json + tokenizer.json/tokenizer_config.json（没有 vocab.json）。
+        for f in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
+            std::fs::write(qwen.join(f), "{}").unwrap();
+        }
+
+        assert!(looks_like_ctc_aligner_dir(&ctc));
+        assert!(
+            !looks_like_ctc_aligner_dir(&qwen),
+            "Qwen3-ForcedAligner 目录不该被当成交稿匹配的 CTC 目录放行"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
