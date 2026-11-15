@@ -663,6 +663,25 @@ pub fn process_media_file_with_transcript<'a>(
         .run_with_transcript(input, media_name, data_root, transcript, export)
 }
 
+/// [`media::quiet_point_near`] 的适配层：读不到就返回 `None`，分段退回盲切。
+///
+/// 读失败不该改变分段的可预测性：一次 seek 失败不应该让一条音轨的两个块
+/// 一次切在能量点上、一次切在目标点上。
+fn quiet_finder<'a>(
+    wav: &'a Path,
+    hits: &'a std::cell::Cell<usize>,
+) -> impl FnMut(f32) -> Option<f32> + 'a {
+    move |around| {
+        let point = crate::media::quiet_point_near(wav, around, vad::QUIET_SEARCH_HALF_SEC)
+            .ok()
+            .flatten();
+        if point.is_some() {
+            hits.set(hits.get() + 1);
+        }
+        point
+    }
+}
+
 /// Converted 16 kHz mono PCM WAV + the scratch dir that owns it.
 ///
 /// The scratch dir is removed on drop (success, failure, or panic). Set
@@ -1026,12 +1045,22 @@ impl<'a> Pipeline<'a> {
     fn stage_vad_plan(&self, conv: &ConvertedAudio) -> Result<VadPlan, AsrError> {
         self.emit(StageUpdate::new(AsrStage::Planning));
 
+        // VAD 找不到停顿时的最后一次机会：在目标点附近找能量最低的点。
+        // 计数只为了写一行 trace：「这一趟到底有几刀是靠能量点落的」。
+        let energy_cuts = std::cell::Cell::new(0usize);
+        let mut quiet = quiet_finder(&conv.wav_path, &energy_cuts);
+
         let (chunks, speech_segments) = if conv.duration > conv.chunk_sec {
             match vad::run_vad(&conv.wav_path) {
                 Ok(speech) => {
                     let silences =
                         vad::speech_to_silences(&speech, conv.duration, vad::MIN_SILENCE_MICRO);
-                    let planned = vad::plan_chunks(conv.duration, &silences, conv.chunk_sec);
+                    let planned = vad::plan_chunks_with_quiet(
+                        conv.duration,
+                        &silences,
+                        conv.chunk_sec,
+                        &mut quiet,
+                    );
                     trace_log(format!(
                         "vad: duration={:.1}s speech={} silence_gaps={} chunks={}",
                         conv.duration,
@@ -1047,13 +1076,14 @@ impl<'a> Pipeline<'a> {
                     // VAD improves cut placement but is not a hard requirement:
                     // fall back to fixed-duration cuts so a VAD failure does
                     // not abort the whole job (boundary scoring then degrades
-                    // to punctuation + length budget).
+                    // to punctuation + length budget). 能量点兜底照旧生效——
+                    // 这条路上每一刀本来都是盲切。
                     trace_log(format!(
                         "VAD failed, falling back to {:.0}s fixed chunks: {e}",
                         conv.chunk_sec
                     ));
                     (
-                        vad::plan_chunks(conv.duration, &[], conv.chunk_sec),
+                        vad::plan_chunks_with_quiet(conv.duration, &[], conv.chunk_sec, &mut quiet),
                         Vec::new(),
                     )
                 }
@@ -1071,10 +1101,11 @@ impl<'a> Pipeline<'a> {
         let multi_chunk = chunks.len() > 1;
 
         trace_log(format!(
-            "plan: duration={:.1}s chunk_target={:.0}s chunks={}",
+            "plan: duration={:.1}s chunk_target={:.0}s chunks={} energy_cuts={}",
             conv.duration,
             conv.chunk_sec,
             chunks.len(),
+            energy_cuts.get(),
         ));
         for (i, c) in chunks.iter().enumerate() {
             trace_log(format!(
@@ -1708,6 +1739,44 @@ mod tests {
             raw_output: "ああ".to_string(),
             stop_reason: StopReason::MaxTokens,
         }
+    }
+
+    /// [`quiet_finder`] 的一亩地：读得到就返回并计数，读不到就 `None`。
+    ///
+    /// 这是管线里那层接线的全部——它一旦接错（路径不对 / 不计数），分段会静悄悄
+    /// 退回盲切，而单元测试仍然全绿。所以这里直接拿一份临时 WAV 打它。
+    #[test]
+    fn quiet_finder_reads_the_wav_and_counts_hits() {
+        let dir = std::env::temp_dir().join(format!("oneasr_finder_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("tone.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: crate::media::TARGET_SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        {
+            let mut w = hound::WavWriter::create(&src, spec).unwrap();
+            for _ in 0..crate::media::TARGET_SAMPLE_RATE {
+                w.write_sample(0i16).unwrap();
+            }
+            w.finalize().unwrap();
+        }
+
+        let hits = std::cell::Cell::new(0usize);
+        let mut finder = quiet_finder(&src, &hits);
+        assert!(finder(0.5).is_some(), "1 s 的素材里该找得到能量点");
+        assert_eq!(hits.get(), 1);
+
+        // 不存在的文件：`None`，不 panic、不计数。
+        let missing = dir.join("missing.wav");
+        let mut finder = quiet_finder(&missing, &hits);
+        assert_eq!(finder(0.5), None);
+        assert_eq!(hits.get(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 断骨验证：窗口宽于 25s 就退化，窄于就正常；复读兜底必须把它切成

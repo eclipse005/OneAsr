@@ -591,6 +591,100 @@ pub fn slice_wav(
     Ok(out_wav.to_path_buf())
 }
 
+/// 能量估计窗口：100 ms。官方 Qwen3-ASR 的 `min_window_ms` 就是它。
+const QUIET_ENERGY_WINDOW_SEC: f32 = 0.1;
+
+/// 目标 PCM 里能量最低的一点（秒），供 VAD 找不到停顿时的兜底切点用。
+///
+/// 做法照官方 Qwen3-ASR 的 `split_audio_into_chunks`：在 `around_sec` 两侧
+/// `half_window_sec` 内，用 100 ms 滑动窗口的**绝对值之和**找能量最低的那一格，
+/// 再在格内取绝对值最小的采样当切点——切在波形最平静的地方，而不是随便落在
+/// 目标点上把半个字切两半。
+///
+/// `Ok(None)`：窗口内没有可用音频（越界 / 太短 / 读不到）；非目标 PCM 是
+/// `Err`，与 [`slice_wav`] 同一条判据。
+pub fn quiet_point_near(
+    input: &Path,
+    around_sec: f32,
+    half_window_sec: f32,
+) -> Result<Option<f32>, MediaError> {
+    let mut reader = hound::WavReader::open(input)
+        .map_err(|e| MediaError::Wav(format!("open {}: {e}", input.display())))?;
+    let spec = reader.spec();
+    if spec.sample_rate != TARGET_SAMPLE_RATE
+        || spec.channels != TARGET_CHANNELS
+        || spec.sample_format != hound::SampleFormat::Int
+        || spec.bits_per_sample != 16
+    {
+        return Err(MediaError::Wav(format!(
+            "quiet point expects {} Hz mono s16le, got {} Hz {}ch {}bit {:?}",
+            TARGET_SAMPLE_RATE,
+            spec.sample_rate,
+            spec.channels,
+            spec.bits_per_sample,
+            spec.sample_format
+        )));
+    }
+
+    let total = reader.duration();
+    let sr = f64::from(TARGET_SAMPLE_RATE);
+    let start_i = ((around_sec as f64 - half_window_sec as f64) * sr)
+        .round()
+        .clamp(0.0, f64::from(total)) as u32;
+    let end_i = ((around_sec as f64 + half_window_sec as f64) * sr)
+        .round()
+        .clamp(f64::from(start_i), f64::from(total)) as u32;
+    let n = end_i.saturating_sub(start_i) as usize;
+    // 100 ms 窗口都装不下（比如目标落在文件最开头）时没什么可选的。
+    let win = ((QUIET_ENERGY_WINDOW_SEC as f64 * sr).round() as usize).min(n);
+    if win == 0 {
+        return Ok(None);
+    }
+
+    reader
+        .seek(start_i)
+        .map_err(|e| MediaError::Wav(format!("seek: {e}")))?;
+    let samples: Vec<i16> = reader
+        .samples::<i16>()
+        .take(n)
+        .collect::<Result<_, _>>()
+        .map_err(|e| MediaError::Wav(format!("read samples: {e}")))?;
+    // 头里写的长度比实际数据长（截断的录像 / 没写完的头）时，读到的样本会比
+    // `win` 还少——下面两个切片的下标就不能再假定 `win` 装得下。
+    if samples.len() < win {
+        return Ok(None);
+    }
+
+    // 前缀和用 i64：i16 的绝对值累加到几十万也精确无损。
+    let mut prefix: Vec<i64> = Vec::with_capacity(samples.len() + 1);
+    prefix.push(0);
+    for &s in &samples {
+        prefix.push(prefix[prefix.len() - 1] + i64::from(s.unsigned_abs()));
+    }
+
+    let mut best = (0usize, i64::MAX);
+    for pos in 0..=samples.len() - win {
+        let energy = prefix[pos + win] - prefix[pos];
+        if energy < best.1 {
+            best = (pos, energy);
+        }
+    }
+
+    // 格内取绝对值最小的那个采样：真正切在波形最平静的一点上。
+    let (pos, _) = best;
+    let mut inner = pos;
+    let mut inner_abs = i64::MAX;
+    for (offset, &s) in samples[pos..pos + win].iter().enumerate() {
+        let abs = i64::from(s.unsigned_abs());
+        if abs < inner_abs {
+            inner_abs = abs;
+            inner = pos + offset;
+        }
+    }
+
+    Ok(Some(((start_i as usize + inner) as f64 / sr) as f32))
+}
+
 // ── Bounded duration-probe pool (UI batch import) ─────────────────────
 
 type ProbeJob = (PathBuf, Box<dyn FnOnce(Option<f64>) + Send>);
@@ -841,6 +935,51 @@ mod tests {
             samples.last().copied(),
             Some(start_i + (samples.len() as i16) - 1)
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 断骨验证：能量最低点必须落在**那段安静里**，而不是随便取个零交叉。
+    ///
+    /// 素材：10 s 400 Hz 正弦，振幅 20000，只有 4.4–4.6 s 那段降到 10。正弦本身
+    /// 到处都有零交叉，所以只有「100 ms 窗口的绝对值之和」才能把判定拉到安静段
+    /// ——把窗口压到 1 个采样（或把 argmin 写成 argmax）本测试就变红。
+    #[test]
+    fn quiet_point_finds_the_notch() {
+        let dir = std::env::temp_dir().join(format!("oneasr_quiet_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("tone.wav");
+
+        let spec = hound::WavSpec {
+            channels: TARGET_CHANNELS,
+            sample_rate: TARGET_SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        {
+            let mut w = hound::WavWriter::create(&src, spec).unwrap();
+            let sr = f64::from(TARGET_SAMPLE_RATE);
+            for i in 0..(10 * TARGET_SAMPLE_RATE) {
+                let t = f64::from(i) / sr;
+                let amp = if (4.4..4.6).contains(&t) {
+                    10.0
+                } else {
+                    20_000.0
+                };
+                let s = amp * (2.0 * std::f64::consts::PI * 400.0 * t).sin();
+                w.write_sample(s as i16).unwrap();
+            }
+            w.finalize().unwrap();
+        }
+
+        let point = quiet_point_near(&src, 5.0, 5.0)
+            .unwrap()
+            .expect("安静段应该找得到");
+        assert!((4.4..4.6).contains(&point), "能量点落在安静段之外：{point}");
+
+        // 目标超出文件尾：没有可用音频 → None，不报错。
+        assert_eq!(quiet_point_near(&src, 100.0, 5.0).unwrap(), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

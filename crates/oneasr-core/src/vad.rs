@@ -5,6 +5,10 @@
 //! that align to silence midpoints near a target duration
 //! ([`crate::settings::CHUNK_TARGET_MIN_SEC`]..=[`crate::settings::CHUNK_TARGET_MAX_SEC`]).
 //!
+//! If the lookback window holds no usable pause at all, the caller can hand in
+//! the quietest point around the boundary instead of blind-cutting there
+//! ([`plan_chunks_with_quiet`], same idea as the official Qwen3-ASR splitter).
+//!
 //! Cut placement mirrors the validated Python `asr.py` pipeline; any chunk
 //! shorter than `MIN_TAIL_SEGMENT_SEC` is merged into a neighbor (VoxTrans
 //! merges only the tail — see `merge_short_segments`).
@@ -28,6 +32,15 @@ pub const MIN_SILENCE_MICRO: f32 = 0.12;
 /// sits right after the previous cut).
 /// Max merged length is `chunk_target + just under this value`.
 const MIN_TAIL_SEGMENT_SEC: f32 = 15.0;
+
+/// 两条停顿算「一样长」的门槛（秒）。
+///
+/// 不能写成 1e-6：时长是 f32 秒，60 s 附近一个 ULP 就有 3.8e-6，同长度的
+/// 停顿 `e - s` 会抖出 2~4e-6 的差。门槛压在噪声以下时，「一样长就取更靠
+/// 目标的那条」时灵时不灵，退化成「取窗口里第一条」——实测 60 s 目标的
+/// 头一刀落在 31.7 s（见 `equal_length_pauses_cut_near_target`）。
+/// 1 ms 高于这个噪声、又低于 VAD 的 10 ms 帧精度，两档停顿不会被并成一档。
+const SILENCE_DURATION_TIE_SEC: f32 = 1e-3;
 
 /// A planned continuous audio range `[start, end)` (seconds, global timeline).
 #[derive(Debug, Clone)]
@@ -110,8 +123,10 @@ fn pick_silence_cut(
         if mid <= prev || mid > target {
             continue;
         }
-        if let Some((bd, _bm)) = best {
-            if sil_dur > bd + 1e-6 || (abs_diff(sil_dur, bd) <= 1e-6 && mid > _bm) {
+        if let Some((bd, best_mid)) = best {
+            if sil_dur > bd + SILENCE_DURATION_TIE_SEC
+                || (abs_diff(sil_dur, bd) <= SILENCE_DURATION_TIE_SEC && mid > best_mid)
+            {
                 best = Some((sil_dur, mid));
             }
         } else {
@@ -126,12 +141,17 @@ fn abs_diff(a: f32, b: f32) -> f32 {
     (a - b).abs()
 }
 
+/// 兜底切点的搜索半窗口（秒）：VAD 一条合格停顿都没找到时，在目标点两侧
+/// 这么大范围里找能量最低的点。量级同官方 Qwen3-ASR 的 `search_expand_sec`（5 s）。
+pub const QUIET_SEARCH_HALF_SEC: f32 = 5.0;
+
 /// Plan continuous `[start, end)` ranges covering the full timeline.
 ///
 /// Near each ~`chunk_sec` boundary, look left within `SILENCE_LOOKBACK` (~30 s)
-/// for the best pause: prefer >= 0.5 s, then >= 0.3 s, else hard-cut at the
-/// nominal boundary. Among matches, prefer the longest pause, then the one
-/// closest to the boundary.
+/// for the best pause: prefer >= 0.5 s, then >= 0.3 s, else a cut at the quietest
+/// point around the nominal boundary ([`plan_chunks_with_quiet`]; this entry
+/// point has no audio to look at, so it hard-cuts). Among matches, prefer the
+/// longest pause, then the one closest to the boundary.
 /// Cut at silence midpoint.
 ///
 /// After cuts are built, any chunk shorter than `MIN_TAIL_SEGMENT_SEC` is
@@ -139,6 +159,29 @@ fn abs_diff(a: f32, b: f32) -> f32 {
 /// longest-silence rule can otherwise cut a sub-second sliver mid-stream).
 /// Coverage always remains continuous from `0` to `duration`.
 pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Vec<Chunk> {
+    plan_chunks_with_quiet(duration, silences, chunk_sec, &mut |_| None)
+}
+
+/// [`plan_chunks`] with the last-tier escape hatch: `quiet(around_sec)` returns
+/// the energy minimum near a nominal boundary, in seconds.
+///
+/// The three silence tiers need **some** pause in the 30 s lookback window; a
+/// speaker who talks straight through the target leaves none, and the blind cut
+/// then lands wherever the nominal boundary falls — mid-word, on a syllable's
+/// loudest sample. `quiet` answers "where is the waveform calmest around here"
+/// (the product path uses [`crate::media::quiet_point_near`], same idea as the
+/// official Qwen3-ASR splitter). `None` keeps the blind cut, so a caller with no
+/// audio (and every unit test) behaves exactly as before.
+///
+/// The quiet point may sit up to [`QUIET_SEARCH_HALF_SEC`] on either side of the
+/// nominal boundary (the official splitter does the same), so one chunk can run
+/// `chunk_sec + QUIET_SEARCH_HALF_SEC` long on this tier only.
+pub fn plan_chunks_with_quiet(
+    duration: f32,
+    silences: &[(f32, f32)],
+    chunk_sec: f32,
+    quiet: &mut dyn FnMut(f32) -> Option<f32>,
+) -> Vec<Chunk> {
     if duration <= chunk_sec + 1e-3 {
         return vec![Chunk {
             start: 0.0,
@@ -182,8 +225,16 @@ pub fn plan_chunks(duration: f32, silences: &[(f32, f32)], chunk_sec: f32) -> Ve
                 if hard - prev < 0.05 {
                     break;
                 }
-                target = hard + chunk_sec;
-                hard
+                // 最后一层：连续讲了 30 s 没给出一条合格停顿。切在目标点附近
+                // **能量最低**的地方，而不是盲切在目标点上——盲切会落在半个字
+                // 中间，两边各丢半截。读不到音频（`None`）就还是盲切。
+                let quiet_cut = quiet(hard).map(|c| c.clamp(prev + 0.05, duration));
+                let next_cut = match quiet_cut {
+                    Some(c) if c > prev + 0.05 => c,
+                    _ => hard,
+                };
+                target = next_cut + chunk_sec;
+                next_cut
             }
         };
         cuts.push(next);
@@ -304,6 +355,58 @@ mod tests {
             cut > 178.9 && cut < 179.3,
             "切点没落在短停顿上，而是盲切了: {cut}"
         );
+    }
+
+    /// 断骨验证：**同长度**的停顿成串出现时，切点要落在最靠目标的那条上。
+    ///
+    /// 素材是等间隔的 0.6s 停顿（`speech_to_silences` 产出的时长会因 f32
+    /// 抖动差 2~4e-6）。把 `SILENCE_DURATION_TIE_SEC` 改回 1e-6 之后，
+    /// 「一样长就取更靠目标的那条」会被这点抖动打断，头一刀退到 31.7s，
+    /// 本测试变红。
+    #[test]
+    fn equal_length_pauses_cut_near_target() {
+        let mut speech = Vec::new();
+        let mut t = 0.0_f32;
+        while t + 8.0 < 300.0 {
+            speech.push((t, t + 7.4));
+            t += 8.0;
+        }
+        let silences = speech_to_silences(&speech, 300.0, MIN_SILENCE_MICRO);
+        let chunks = plan_chunks(300.0, &silences, 60.0);
+        assert!(
+            chunks[0].end > 55.0 && chunks[0].end <= 60.0,
+            "同长度停顿里没选最靠目标的那条，切在 {}",
+            chunks[0].end
+        );
+    }
+
+    /// 反向约束：等长门槛不能宽到把**真的不一样长**的停顿算成一档。
+    ///
+    /// 目标前 2s 是 0.5s 的停顿，更靠左是 0.7s 的：取长的那条。
+    /// 把 `SILENCE_DURATION_TIE_SEC` 放大到 0.5 就会改选近的这条，本测试变红。
+    #[test]
+    fn longer_pause_beats_closer_pause() {
+        let silences = vec![(50.0, 50.7), (58.0, 58.5)];
+        let chunks = plan_chunks(450.0, &silences, 60.0);
+        let cut = chunks[0].end;
+        assert!((cut - 50.35).abs() < 0.05, "更长的停顿没被选中，切在 {cut}");
+    }
+
+    /// 断骨验证：一条合格停顿都找不到时，兜底切点必须用 `quiet` 给的能量点，
+    /// 而不是盲切在目标点上。`quiet` 返回 `None`（或拿掉这根线）时头一刀就回到
+    /// 60.0，本测试变红。
+    #[test]
+    fn hard_cut_uses_quiet_point_when_no_pause_exists() {
+        let mut quiet = |around: f32| Some(around - 1.2);
+        let chunks = plan_chunks_with_quiet(300.0, &[], 60.0, &mut quiet);
+        assert!(
+            (chunks[0].end - 58.8).abs() < 0.05,
+            "能量点没被用上，切在 {}",
+            chunks[0].end
+        );
+        // 覆盖依然连续到结尾。
+        let last = chunks.last().unwrap();
+        assert!((last.end - 300.0).abs() < 0.01);
     }
 
     /// 反向约束：**块长上限不因短停顿层而放宽**。
