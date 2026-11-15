@@ -140,6 +140,22 @@ pub(crate) struct OneAsrApp {
     empty_wave_amp: f32,
     /// Epoch for time-based shimmer under the bulge.
     empty_wave_clock: Instant,
+    // ── 列表滚动（可见窗口渲染 + 自绘滚动条）────────────────────────────
+    //
+    // 任务列表只渲染**可见窗口**内的行（见 `ui::task_list`），滚动状态与滚动条
+    // 都从这一个 handle 读：`track_scroll` 每帧挂一次，滚轮事件在 notify 之前
+    // 就已经把 offset 写进去了，所以渲染时读到的是这一帧的值。
+    /// 列表滚动状态（`uniform_list` 的句柄）：offset / 视口高 / 内容高都在里面，
+    /// 自绘滚动条只读它，不自己算。
+    list_scroll: UniformListScrollHandle,
+    /// 指针落在列表右侧的滚动条热区上（滚动条只在此时淡入）。
+    scrollbar_hover: bool,
+    /// 正在拖拽滚动条：抓取点相对 thumb 顶部的偏移（px）。
+    scrollbar_grab: Option<f32>,
+    /// 滚动条淡入淡出：progress source → target（0 = 隐藏，1 = 完全显示）。
+    scrollbar_from: f32,
+    scrollbar_to: f32,
+    scrollbar_t0: Instant,
     tasks: Vec<Task>,
     /// Rows just added — opacity 0→1 over `ROW_ENTER_SECS`.
     entering: HashMap<String, Instant>,
@@ -266,6 +282,12 @@ impl OneAsrApp {
             empty_wave_smooth_x: 0.5,
             empty_wave_amp: 0.0,
             empty_wave_clock: Instant::now(),
+            list_scroll: UniformListScrollHandle::new(),
+            scrollbar_hover: false,
+            scrollbar_grab: None,
+            scrollbar_from: 0.0,
+            scrollbar_to: 0.0,
+            scrollbar_t0: Instant::now(),
             tasks: Vec::new(),
             entering: HashMap::new(),
             exiting: HashMap::new(),

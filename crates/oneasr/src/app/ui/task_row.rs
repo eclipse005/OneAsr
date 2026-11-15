@@ -42,7 +42,8 @@ pub(super) fn task_row_view(
     ix: usize,
     row: &TaskRowView,
     ctx: &RowCtx,
-    cx: &mut Context<OneAsrApp>,
+    entity: &Entity<OneAsrApp>,
+    window: &Window,
 ) -> impl IntoElement + use<> {
     let interactive = row.interactive;
     let row_opacity = row.opacity;
@@ -134,7 +135,8 @@ pub(super) fn task_row_view(
                 &format!("lang-opt-{id_lang_pick}"),
                 LangSelectTarget::Task(id_lang_pick.clone()),
                 LangMenuLayout::Chip,
-                cx,
+                entity,
+                window,
             )
             .into_any_element(),
         )
@@ -185,7 +187,8 @@ pub(super) fn task_row_view(
                 hw_current.as_deref(),
                 id_hw_pick.clone(),
                 &ctx.hotword_groups,
-                cx,
+                entity,
+                window,
             )
             .into_any_element(),
         )
@@ -211,7 +214,7 @@ pub(super) fn task_row_view(
         .border_color(LINE_SOFT)
         .bg(row_bg)
         .opacity(row_opacity)
-        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+        .on_hover(window.listener_for(entity, move |this, hovered: &bool, _, cx| {
             if !interactive {
                 return;
             }
@@ -358,7 +361,7 @@ pub(super) fn task_row_view(
                                                                 .hover(|s| {
                                                                     s.bg(ACCENT_SOFT)
                                                                 })
-                                                                .on_hover(cx.listener(
+                                                                .on_hover(window.listener_for(entity,
                                                                     move |this,
                                                                           hovered: &bool,
                                                                           _,
@@ -407,7 +410,7 @@ pub(super) fn task_row_view(
                                                                         .clone()
                                                                         .map(SharedString::from),
                                                                     timing_pop_p,
-                                                                    cx.listener(
+                                                                    window.listener_for(entity,
                                                                         move |this,
                                                                               hovered: &bool,
                                                                               _,
@@ -507,7 +510,7 @@ pub(super) fn task_row_view(
                                                     })
                                                 })
                                                 .when(can_edit_lang, |el| {
-                                                    el.on_click(cx.listener(
+                                                    el.on_click(window.listener_for(entity,
                                                         move |this, _, _, cx| {
                                                             this.toggle_lang_menu(
                                                                 &id_lang, cx,
@@ -612,7 +615,7 @@ pub(super) fn task_row_view(
                                                     })
                                                 })
                                                 .when(can_edit_hw, |el| {
-                                                    el.on_click(cx.listener(
+                                                    el.on_click(window.listener_for(entity,
                                                         move |this, _, _, cx| {
                                                             this.toggle_hotword_menu(
                                                                 &id_hw, cx,
@@ -727,7 +730,7 @@ pub(super) fn task_row_view(
                                             })
                                         })
                                         .when(can_edit_lang, |el| {
-                                            el.on_click(cx.listener(
+                                            el.on_click(window.listener_for(entity,
                                                 move |this, _, _, cx| {
                                                     this.toggle_task_separation(
                                                         &id_sep, cx,
@@ -822,7 +825,7 @@ pub(super) fn task_row_view(
                                                 s.bg(ACCENT_SOFT).border_color(ACCENT)
                                             })
                                         })
-                                        .on_hover(cx.listener(
+                                        .on_hover(window.listener_for(entity,
                                             move |this, hovered: &bool, _, cx| {
                                                 if *hovered {
                                                     this.transcript_hover_enter(&id_hover, cx);
@@ -835,7 +838,7 @@ pub(super) fn task_row_view(
                                         // 和「用时」芯片一样：点它什么也不做，卡片靠悬停出。
                                         // 取消 / 换文稿走卡片里的按钮，那才是它们的家。
                                         .when(!has && can_edit_transcript, |chip| {
-                                            chip.on_click(cx.listener(
+                                            chip.on_click(window.listener_for(entity,
                                                 move |this, _, _, cx| {
                                                     this.pick_transcript_for(&id_click, cx);
                                                 },
@@ -862,7 +865,7 @@ pub(super) fn task_row_view(
                                     let id_card = row.id.clone();
                                     let progress = row.transcript_card_progress;
                                     let view = row.transcript_card.clone().unwrap_or_default();
-                                    wrap.child(transcript_card(id_card, progress, view, cx))
+                                    wrap.child(transcript_card(id_card, progress, view, entity, window))
                                 })
                         })
                         // Two fixed slots: primary (开始 | 打开字幕) + 删除.
@@ -878,7 +881,7 @@ pub(super) fn task_row_view(
                                     primary_kind,
                                     primary_tip,
                                     primary_enabled,
-                                    cx.listener(move |this, _, _, cx| {
+                                    window.listener_for(entity, move |this, _, _, cx| {
                                         this.close_floating_overlays();
                                         if this
                                             .tasks
@@ -900,7 +903,7 @@ pub(super) fn task_row_view(
                                     IconKind::Trash,
                                     t(L::TIP_DELETE),
                                     can_delete,
-                                    cx.listener(move |this, _, _, cx| {
+                                    window.listener_for(entity, move |this, _, _, cx| {
                                         this.close_floating_overlays();
                                         this.delete_task(&id_del, cx);
                                     }),

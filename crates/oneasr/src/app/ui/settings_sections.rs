@@ -84,6 +84,7 @@ impl OneAsrApp {
     pub(super) fn render_settings_language(
         &mut self,
         form: &SettingsFormState,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let body = {
@@ -151,13 +152,15 @@ impl OneAsrApp {
                                         ),
                                 )
                                 .when(open, |el| {
+                                    let entity = cx.entity();
                                     el.child(floating_lang_menu(
                                         "settings-lang-menu".into(),
                                         &form.language,
                                         "settings-lang-opt",
                                         LangSelectTarget::Settings,
                                         LangMenuLayout::FullWidth,
-                                        cx,
+                                        &entity,
+                                        window,
                                     ))
                                 }),
                         ),

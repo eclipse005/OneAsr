@@ -675,7 +675,10 @@ impl OneAsrApp {
             > 0.002
             || self.transcript_hover_since.is_some()
             || self.transcript_leave_since.is_some();
-        drawer || row_anim || empty_wave || timing_pop || transcript_card
+        // 滚动条淡入淡出：没有这一项的话，指针进热区只会画一帧就停，
+        // 滚动条会停在淡入一半的位置。
+        let scrollbar = (self.scrollbar_progress() - self.scrollbar_to).abs() > 0.002;
+        drawer || row_anim || empty_wave || timing_pop || transcript_card || scrollbar
     }
 
     /// Advance empty-wave smoothing (cursor follow + amp ease). Call once per frame while active.

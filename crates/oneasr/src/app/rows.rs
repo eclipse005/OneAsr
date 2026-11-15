@@ -28,6 +28,13 @@ impl OneAsrApp {
         });
     }
 
+    /// 每帧一份整表快照。
+    ///
+    /// 这里仍然是 O(行数)：`uniform_list` 的渲染闭包拿不到 `&self`，数据只能在
+    /// render 里备好再 move 进去。但**贵的那一半不在这里**——行元素（每行约
+    /// 三十个节点、文字 shape、hitbox）是按可见区间懒构造的。这份快照只有
+    /// clone 与 `format!`，一千二百行实测不构成瓶颈（滚动是顺的）；
+    /// 真到了需要再省这一步的时候，得先把 `TaskRowView` 拆成「借用 + 少量派生」。
     pub(crate) fn snapshot_task_rows(&self, now: Instant) -> Vec<TaskRowView> {
         let ranks = queue_ranks(&self.tasks);
 

@@ -6,7 +6,11 @@
 use crate::app::prelude::*;
 
 impl OneAsrApp {
-    pub(super) fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_settings(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let page = self.settings_page;
         let form = self.settings_form_state(cx);
         // 语言按钮的 tooltip：当前档位 + 点击提示（按当前界面语言拼）。
@@ -24,7 +28,8 @@ impl OneAsrApp {
         // 快照回滚）只有一份，页只决定里面放哪几张卡。
         let cards: Vec<AnyElement> = match page {
             DrawerPage::Settings => vec![
-                self.render_settings_language(&form, cx).into_any_element(),
+                self.render_settings_language(&form, window, cx)
+                    .into_any_element(),
                 self.render_settings_chunk_duration(&form, cx)
                     .into_any_element(),
                 // 输出：格式 | 中文字形 并排平分（同「默认语言 | 字幕长度」）

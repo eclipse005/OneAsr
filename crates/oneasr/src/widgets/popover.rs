@@ -52,7 +52,8 @@ pub fn lang_menu_option(
     active: bool,
     target: crate::app::LangSelectTarget,
     lang_id: &'static str,
-    cx: &mut Context<crate::app::OneAsrApp>,
+    view: &gpui::Entity<crate::app::OneAsrApp>,
+    window: &gpui::Window,
 ) -> impl IntoElement {
     div()
         .id(option_id)
@@ -71,7 +72,7 @@ pub fn lang_menu_option(
                 crate::theme::BG
             })
         })
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(window.listener_for(view, move |this, _, _, cx| {
             this.pick_source_language(target.clone(), lang_id, cx);
         }))
         .child(
@@ -246,7 +247,8 @@ pub fn floating_lang_menu(
     option_id_prefix: &str,
     target: crate::app::LangSelectTarget,
     layout: crate::app::LangMenuLayout,
-    cx: &mut Context<crate::app::OneAsrApp>,
+    view: &gpui::Entity<crate::app::OneAsrApp>,
+    window: &gpui::Window,
 ) -> impl IntoElement {
     let opts: Vec<gpui::AnyElement> = oneasr_core::SOURCE_LANGUAGES
         .iter()
@@ -258,7 +260,8 @@ pub fn floating_lang_menu(
                 active,
                 target.clone(),
                 lang.id,
-                cx,
+                view,
+                window,
             )
             .into_any_element()
         })
@@ -303,7 +306,8 @@ fn hotword_menu_option(
     active: bool,
     task_id: String,
     group: Option<String>,
-    cx: &mut Context<crate::app::OneAsrApp>,
+    view: &gpui::Entity<crate::app::OneAsrApp>,
+    window: &gpui::Window,
 ) -> impl IntoElement {
     div()
         .id(option_id)
@@ -322,7 +326,7 @@ fn hotword_menu_option(
                 crate::theme::BG
             })
         })
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(window.listener_for(view, move |this, _, _, cx| {
             this.pick_hotword_group(&task_id, group.clone(), cx);
         }))
         .child(
@@ -369,7 +373,8 @@ pub fn floating_hotword_menu(
     current: Option<&str>,
     task_id: String,
     groups: &[(String, String)],
-    cx: &mut Context<crate::app::OneAsrApp>,
+    view: &gpui::Entity<crate::app::OneAsrApp>,
+    window: &gpui::Window,
 ) -> impl IntoElement {
     let mut opts: Vec<gpui::AnyElement> = Vec::with_capacity(groups.len() + 2);
     opts.push(
@@ -379,7 +384,8 @@ pub fn floating_hotword_menu(
             current.is_none(),
             task_id.clone(),
             None,
-            cx,
+            view,
+            window,
         )
         .into_any_element(),
     );
@@ -392,7 +398,8 @@ pub fn floating_hotword_menu(
                 active,
                 task_id.clone(),
                 Some(id.clone()),
-                cx,
+                view,
+                window,
             )
             .into_any_element(),
         );

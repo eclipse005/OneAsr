@@ -103,6 +103,22 @@ pub(crate) const TIMING_LEAVE_DELAY_MS: u64 = 120;
 /// Timing breakdown card width.
 pub(crate) const TIMING_POP_W: f32 = 220.;
 
+// ── 列表滚动条 ────────────────────────────────────────────────────────
+//
+// gpui 不画滚动条（见 `ui/scrollbar.rs` 的模块注释），所以下面这几个数是它
+// 全部的尺寸来源。
+/// 右侧热区宽度：指针进这一条就淡入，拖拽也在这里接。
+/// 14px 是 Windows 滚动条的常见命中宽度；再宽会盖住行右端的删除按钮。
+pub(crate) const SCROLLBAR_HIT_W: f32 = 14.;
+/// thumb 宽度：细。滚动条是位置提示，不该在行右端抢重量。
+pub(crate) const SCROLLBAR_THUMB_W: f32 = 6.;
+/// thumb 距列表右边缘的边距。
+pub(crate) const SCROLLBAR_MARGIN: f32 = 4.;
+/// thumb 最短高度：内容再长也留一个按得住的高度。
+pub(crate) const SCROLLBAR_MIN_THUMB_H: f32 = 28.;
+/// 淡入 / 淡出时长（秒）。
+pub(crate) const SCROLLBAR_FADE_SECS: f32 = 0.16;
+
 // ── Popover select layer model (GPUI has no built-in Select) ─────────────────
 // Two deferred layers, sorted by priority (higher paints + hit-tests on top):
 //

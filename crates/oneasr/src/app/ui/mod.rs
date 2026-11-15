@@ -12,6 +12,7 @@ pub(crate) mod chrome;
 pub(crate) mod empty_wave;
 pub(crate) mod hotword_page;
 pub(crate) mod metrics;
+pub(crate) mod scrollbar;
 pub(crate) mod settings_drawer;
 pub(crate) mod settings_sections;
 pub(crate) mod stats_grid;
@@ -80,6 +81,8 @@ impl Render for OneAsrApp {
                             .flex()
                             .flex_col()
                             .min_w_0()
+                            // 列表与滚动条是这里的两个兄弟（滚动条绝对定位到右缘）。
+                            .relative()
                             .bg(PANEL)
                             .border_2()
                             .border_color(LINE)
@@ -95,7 +98,7 @@ impl Render for OneAsrApp {
                             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                                 this.add_paths(paths.paths().to_vec(), cx);
                             }))
-                            .child(self.render_list(cx)),
+                            .children(self.render_list(cx)),
                     )
                     // Keep mounted while animating closed (p > 0).
                     // `occlude`: block hits + scroll to the list underneath (otherwise
@@ -131,7 +134,7 @@ impl Render for OneAsrApp {
                                         offset: point(px(-10.0), px(0.0)),
                                     },
                                 ])
-                                .child(self.render_settings(cx)),
+                                .child(self.render_settings(window, cx)),
                         )
                     }),
             )

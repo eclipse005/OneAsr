@@ -36,7 +36,8 @@ pub(crate) fn transcript_card(
     id: String,
     progress: f32,
     view: TranscriptCardView,
-    cx: &mut Context<OneAsrApp>,
+    entity: &gpui::Entity<OneAsrApp>,
+    window: &gpui::Window,
 ) -> impl IntoElement {
     let p = progress.clamp(0.0, 1.0);
     let id_hover = id.clone();
@@ -66,13 +67,15 @@ pub(crate) fn transcript_card(
             // Keeps the card open while the pointer is on it — that is what
             // makes the buttons reachable, and why a purely hover-driven card
             // would need the pin.
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.transcript_card_hover_enter(&id_hover, cx);
-                } else {
-                    this.transcript_card_hover_leave(&id_hover, cx);
-                }
-            }))
+            .on_hover(
+                window.listener_for(entity, move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.transcript_card_hover_enter(&id_hover, cx);
+                    } else {
+                        this.transcript_card_hover_leave(&id_hover, cx);
+                    }
+                }),
+            )
             // 「还没挂文稿」时只有这一句话。没有提示框来抢这个位置——提示框浮在
             // 光标附近，盖住芯片就会打断悬停，卡片一闪一闪。
             .when(!view.has_transcript, |el| {
@@ -174,7 +177,7 @@ pub(crate) fn transcript_card(
                                     t(L::TRANSCRIPT_BTN_BREAK),
                                     BtnKind::Secondary,
                                     view.actions_enabled,
-                                    cx.listener(move |this, _, _, cx| {
+                                    window.listener_for(entity, move |this, _, _, cx| {
                                         this.smart_break_transcript(cx)
                                     }),
                                 )),
@@ -204,7 +207,7 @@ pub(crate) fn transcript_card(
                                         t(L::TRANSCRIPT_BTN_REREAD),
                                         BtnKind::Secondary,
                                         view.actions_enabled,
-                                        cx.listener(move |this, _, _, cx| {
+                                        window.listener_for(entity, move |this, _, _, cx| {
                                             this.reread_transcript(cx)
                                         }),
                                     )),
@@ -231,7 +234,9 @@ pub(crate) fn transcript_card(
                                     t(L::TRANSCRIPT_BTN_REMOVE),
                                     BtnKind::Secondary,
                                     view.actions_enabled,
-                                    cx.listener(move |this, _, _, cx| this.remove_transcript(cx)),
+                                    window.listener_for(entity, move |this, _, _, cx| {
+                                        this.remove_transcript(cx)
+                                    }),
                                 )),
                         ),
                 )
