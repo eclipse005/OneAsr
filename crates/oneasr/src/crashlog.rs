@@ -37,9 +37,17 @@ const LOG_FILE_NAME: &str = "oneasr-error.log";
 const TASK_JOURNAL_PREFIX: &str = "oneasr-task-";
 const TASK_JOURNAL_SUFFIX: &str = ".pending";
 
-/// `ONEASR_KEEP_JOURNAL=1` keeps a **successful** task journal as `.log`
-/// in the data root and writes one INFO line pointing at it. Default off: a
-/// normal run must neither grow the error log nor leave journals behind.
+/// 成功任务留下的**唯一一份**过程记录，每次滚动覆盖。
+///
+/// 成功与失败的区别是「报没报出来」，而不是「有没有问题」：识别只覆盖了半条
+/// 音轨、后半段全部返回空文本，这类事故是**静默完成**的——错误日志里一个字都
+/// 没有（见文件顶部）。于是「完成后内容缺失」的报告只剩这里能拿证据：
+/// `converted:` 的实际时长、`plan:` 的分块、每块的 span 与字数都在里面。
+/// 固定名字、下次任务覆盖：留证据，但不像按任务命名那样越积越多。
+const LAST_JOURNAL_NAME: &str = "oneasr-task-last.log";
+
+/// `ONEASR_KEEP_JOURNAL=1` 给**这一趟**成功任务另存一份 `.log`（按任务留档）。
+/// 默认 off：成功任务只滚动覆盖 [`LAST_JOURNAL_NAME`]，不按任务累积。
 fn keep_journal() -> bool {
     std::env::var_os("ONEASR_KEEP_JOURNAL").is_some_and(|v| !v.is_empty() && v != "0")
 }
@@ -90,8 +98,9 @@ fn append_problem(level: &str, msg: &str) -> std::io::Result<PathBuf> {
     result
 }
 
-/// 当前 ASR 任务的临时记录。成功时删除，失败时并入错误日志；进程异常退出后，
-/// 下次启动会把未完成且已解锁的记录并入错误日志。
+/// 当前 ASR 任务的临时记录。成功时滚成一份日志（默认 [`LAST_JOURNAL_NAME`]，
+/// `ONEASR_KEEP_JOURNAL=1` 时按任务另存）；失败/进程中断时先并入错误日志，
+/// 同一个「最近一份」也照样滚过去，所以它总是**最近一次**任务的过程记录。
 pub struct TaskJournal {
     path: PathBuf,
     file: Option<File>,
@@ -154,28 +163,33 @@ impl TaskJournal {
     }
 
     pub fn complete(self) {
-        match self.finish(keep_journal()) {
-            Ok(Some(path)) => log_info(format!("task journal kept: {}", path.display())),
-            Ok(None) => {}
+        let per_task = keep_journal();
+        match self.finish(per_task) {
+            Ok(path) => {
+                // 滚动的那一份不写 INFO：成功任务不该往错误日志里加字。
+                if per_task {
+                    log_info(format!("task journal kept: {}", path.display()));
+                }
+            }
             Err(error) => log_warn(format!("task journal keep failed: {error}")),
         }
     }
 
-    /// 成功收尾：默认删掉；`keep` 为真时改名成 `.log` 留给诊断
-    /// （`ONEASR_KEEP_JOURNAL=1`）。写成功标记失败不改变结局。
-    fn finish(mut self, keep: bool) -> std::io::Result<Option<PathBuf>> {
+    /// 成功收尾：`keep_per_task` 为真时按任务另存 `.log`，否则滚动覆盖
+    /// [`LAST_JOURNAL_NAME`]。写成功标记失败不改变结局。
+    fn finish(mut self, keep_per_task: bool) -> std::io::Result<PathBuf> {
         // 若写入成功标记后清理被中断，恢复时只删除记录，不报成任务崩溃。
         let _ = self.record("task completed successfully");
-        if !keep {
-            self.remove_file();
-            return Ok(None);
-        }
-        self.keep().map(Some)
+        let kept = if keep_per_task {
+            self.path.with_extension("log")
+        } else {
+            self.path.with_file_name(LAST_JOURNAL_NAME)
+        };
+        self.keep_as(kept)
     }
 
-    /// 关闭文件句柄后把 `.pending` 改名成 `.log`；同名旧文件先删掉。
-    fn keep(mut self) -> std::io::Result<PathBuf> {
-        let kept = self.path.with_extension("log");
+    /// 关闭文件句柄后把 `.pending` 改名成 `kept`；同名旧文件先删掉。
+    fn keep_as(mut self, kept: PathBuf) -> std::io::Result<PathBuf> {
         drop(self.file.take());
         let _ = fs::remove_file(&kept);
         fs::rename(&self.path, &kept)?;
@@ -196,7 +210,11 @@ impl TaskJournal {
         );
         match result {
             Ok(_) => {
-                self.remove_file();
+                // 失败的那份也滚到同一个「最近一份」上：错误日志里已经有全文，
+                // 但「反馈问题」读的是这个文件——留着一份旧的成功任务在那里，
+                // 会让报障自带的日志和问题对不上。
+                let kept = self.path.with_file_name(LAST_JOURNAL_NAME);
+                let _ = self.keep_as(kept);
                 Ok(())
             }
             Err(error) => Err(error),
@@ -604,20 +622,51 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// 成功任务的临时过程记录应立即清理，不留在用户可见日志目录。
+    /// 成功任务的临时过程记录必须变成**唯一一份**滚动日志：
+    /// 「完成但内容缺失」这类事故只在它里面留下线索（错误日志一片空白），
+    /// 而它自身不能越积越多。
     #[test]
-    fn successful_task_journal_is_removed() {
+    fn successful_task_journal_becomes_the_single_rolling_log() {
         let dir =
             std::env::temp_dir().join(format!("oneasr-task-journal-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let path = dir.join("oneasr-task-test.pending");
-        let journal = TaskJournal::begin_at(path.clone(), "task-test", "file: input.wav")
+        let mut journal = TaskJournal::begin_at(path.clone(), "task-test", "file: input.wav")
             .expect("temporary task journal should open");
+        journal.record("plan: duration=2700.0s chunks=49").unwrap();
 
         assert!(path.exists(), "journal should exist while the task runs");
-        journal.finish(false).expect("successful finish");
+        let kept = journal.finish(false).expect("successful finish");
 
-        assert!(!path.exists(), "successful task journal should be deleted");
+        assert!(!path.exists(), ".pending name should be gone");
+        assert_eq!(
+            kept.file_name().and_then(|n| n.to_str()),
+            Some("oneasr-task-last.log"),
+            "成功任务滚到固定名字上"
+        );
+        let text = fs::read_to_string(&kept).unwrap();
+        assert!(text.contains("file: input.wav"), "{text}");
+        assert!(text.contains("chunks=49"), "{text}");
+        assert!(text.contains("task completed successfully"), "{text}");
+
+        // 第二次成功任务覆盖它，而不是再留一份。
+        let next = TaskJournal::begin_at(path.clone(), "task-test", "file: other.wav")
+            .expect("temp journal should open");
+        next.finish(false).expect("successful finish");
+        let logs = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("oneasr-task-") && name.ends_with(".log")
+            })
+            .count();
+        assert_eq!(logs, 1, "只该留一份滚动日志");
+        let text = fs::read_to_string(&kept).unwrap();
+        assert!(text.contains("other.wav"), "{text}");
+        assert!(!text.contains("input.wav"), "旧任务内容应被覆盖: {text}");
+
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -632,10 +681,7 @@ mod tests {
             .expect("temporary task journal should open");
         journal.record("chunk 1/2").unwrap();
 
-        let kept = journal
-            .finish(true)
-            .expect("keep should succeed")
-            .expect("kept path");
+        let kept = journal.finish(true).expect("keep should succeed");
         assert!(!path.exists(), "pending name should be gone");
         assert!(
             kept.exists(),

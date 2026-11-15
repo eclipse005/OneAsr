@@ -203,8 +203,9 @@ fn log_truncated_note(lang: UiLang) -> String {
     }
 }
 
-/// 数据目录里最近的一份任务日志（失败任务会留下 `.log`，成功任务需
-/// `ONEASR_KEEP_JOURNAL=1` 才会留）。读不到就返回 `None`，不报错。
+/// 数据目录里最近的一份任务日志（成功滚成 `oneasr-task-last.log`；失败先并入
+/// 错误日志，同一份也会滚过去——所以拿到的总是**最近一次**任务的过程记录）。
+/// 读不到就返回 `None`，不报错。
 pub(crate) fn latest_task_log(lang: UiLang, dir: &std::path::Path) -> Option<String> {
     let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
