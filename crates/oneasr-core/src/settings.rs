@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::i18n;
 use crate::lang::{default_source_language, normalize_source_language};
 use crate::model::{
-    ModelId, ModelKind, OMNI_ASR_CTC_300M, QWEN_ALIGN_06B, QWEN3_ASR_06B,
+    ModelId, ModelKind, OMNI_ASR_CTC_300M, QWEN_ALIGN_LEGACY, QWEN_ALIGN_ULTRA, QWEN3_ASR_06B,
     default_aligner_model_dir, default_asr_model_dir, resolve_model_dir,
 };
 use crate::paths;
@@ -71,10 +71,10 @@ pub struct Settings {
     /// into the config (and break a moved app).
     #[serde(default)]
     pub asr_dirs: BTreeMap<String, PathBuf>,
-    /// Active aligner catalog id (`omniASR-CTC-300M-v2-hf` |
-    /// `Qwen3-ForcedAligner-0.6B-hf`). Empty = unset (first run): normalize
-    /// decides — CTC when its weights are present or nothing is, Qwen when
-    /// only Qwen's are — and persists the choice.
+    /// Active aligner catalog id (`Qwen3-ForcedAligner-Ultra` |
+    /// `omniASR-CTC-300M-v2-hf`). The pre-Ultra `Qwen3-ForcedAligner-0.6B-hf`
+    /// string is accepted and canonicalized. Empty = unset (first run):
+    /// normalize decides — Qwen unless only CTC is on disk — and persists it.
     #[serde(default)]
     pub aligner_model: String,
     /// Directory loaded for the aligner (install layout or user-picked).
@@ -272,8 +272,8 @@ impl Default for Settings {
             asr_model_dir: default_asr_model_dir(),
             asr_dirs: BTreeMap::new(),
             // 自洽：引擎 id 与目录指向同一个模型。留空会让 `selected_aligner_id()`
-            // 兜底成默认（CTC）而目录还停在别处，于是「选了 CTC 却往 Qwen 目录加载/
-            // 下载」。磁盘上「只装了 Qwen」的情况由 `load_with_report` 的兜底分支
+            // 兜底成默认（Qwen）而目录还停在别处，于是「选了 Qwen 却往 CTC 目录加载/
+            // 下载」。磁盘上「只装了 CTC」的情况由 `load_with_report` 的兜底分支
             // 过一遍 `normalize` 来决定，不靠这个默认值猜。
             aligner_model: ModelId::default_aligner().as_str().to_string(),
             aligner_model_dir: default_aligner_model_dir(),
@@ -541,16 +541,26 @@ impl Settings {
         // the layout default, per-model picks survive, and a legacy
         // single-folder config (before aligner_model/aligner_dirs existed)
         // seeds that model's pick so a hand-picked path survives the upgrade.
+        // 旧版 Qwen 的 per-model 键跟着目录名一起改名。布局默认路径不是「手挑」，
+        // 直接丢掉让新默认目录生效；真正手挑的路径归到 Ultra 名下。
+        if let Some(dir) = self.aligner_dirs.remove(QWEN_ALIGN_LEGACY)
+            && dir != resolve_model_dir(QWEN_ALIGN_LEGACY)
+        {
+            self.aligner_dirs
+                .entry(ModelId::QwenAlignUltra.as_str().to_string())
+                .or_insert(dir);
+        }
+        let legacy_name = ModelId::is_legacy_aligner_name(&self.aligner_model);
         let parsed = ModelId::try_parse_aligner(&self.aligner_model);
         let align_id = match parsed {
             Some(id) => id,
             None => {
                 // Unset (first run / upgrade from a config without the
-                // field): keep CTC when its weights are on disk or nothing
-                // is — the default selection matches the default button;
-                // fall back to Qwen only when it is the one that exists.
+                // field): keep Qwen unless only CTC is on disk — the default
+                // selection matches the default button; fall back to CTC only
+                // when it is the one that exists.
                 let ctc = resolve_model_dir(OMNI_ASR_CTC_300M).is_dir();
-                let qwen = resolve_model_dir(QWEN_ALIGN_06B).is_dir();
+                let qwen = resolve_model_dir(QWEN_ALIGN_ULTRA).is_dir();
                 let id = decide_default_aligner(ctc, qwen);
                 notes.push(format!("aligner model unset -> {}", id.as_str()));
                 id
@@ -566,8 +576,9 @@ impl Settings {
         // 翻到别的引擎时被记成它的「专属选择」。
         let is_layout_default = ModelId::ALIGNER_CHOICES
             .iter()
-            .any(|m| self.aligner_model_dir == resolve_model_dir(m.as_str()));
-        if parsed.is_none()
+            .any(|m| self.aligner_model_dir == resolve_model_dir(m.as_str()))
+            || self.aligner_model_dir == resolve_model_dir(QWEN_ALIGN_LEGACY);
+        if (parsed.is_none() || legacy_name)
             && self.aligner_dirs.is_empty()
             && !self.aligner_model_dir.as_os_str().is_empty()
             && !is_layout_default
@@ -791,7 +802,7 @@ impl Settings {
     /// token 原生保留标点（零时长搭在前一字符上）。决定对齐阶段是否要做
     /// 标点恢复。
     pub fn aligner_strips_punctuation(&self) -> bool {
-        self.selected_aligner_id() == ModelId::QwenAlign06B
+        self.selected_aligner_id() == ModelId::QwenAlignUltra
     }
 
     /// Normalize in place, then persist to `settings.json`.
@@ -935,11 +946,11 @@ impl Settings {
 /// install-layout default does. Every actual switch is pushed into `notes` so
 /// the GUI can log the repair instead of silently rewriting settings; no-op
 /// calls record nothing.
-/// Aligner 模型的首次运行决策：CTC 缺席而 Qwen 在场才退 Qwen，否则一律 CTC
-/// （默认按钮 = 默认选择；两者都没装时选 CTC 让下载提示指向默认引擎）。
+/// Aligner 模型的首次运行决策：默认 Qwen；只有磁盘上仅装了 CTC 时才退 CTC
+/// （默认按钮 = 默认选择；两者都没装时选 Qwen 让下载提示指向默认引擎）。
 fn decide_default_aligner(ctc_present: bool, qwen_present: bool) -> ModelId {
-    if !ctc_present && qwen_present {
-        ModelId::QwenAlign06B
+    if !qwen_present && ctc_present {
+        ModelId::OmniAsrCtc300M
     } else {
         ModelId::default_aligner()
     }
@@ -1281,15 +1292,20 @@ mod tests {
     fn bind_aligner_download_only_when_selected() {
         let mut s = Settings::default();
         let ctc = ModelId::OmniAsrCtc300M;
+        // 默认现在是 Qwen；这条用例测的是「非选中引擎」这一支，先把 CTC 选上。
+        s.select_aligner_model(ctc);
         assert_eq!(s.selected_aligner_id(), ctc);
         let ctc_pick = std::env::temp_dir().join("oneasr_bind_ctc");
         s.set_aligner_dir(ctc_pick.clone());
 
         // 非选中引擎：目录不动，也不进 per-model 记忆。
         let qwen_dir = std::env::temp_dir().join("oneasr_bind_qwen");
-        assert!(!s.bind_download_if_active(ModelId::QwenAlign06B, qwen_dir.clone()));
+        assert!(!s.bind_download_if_active(ModelId::QwenAlignUltra, qwen_dir.clone()));
         assert_eq!(s.aligner_model_dir, ctc_pick);
-        assert!(!s.aligner_dirs.contains_key(ModelId::QwenAlign06B.as_str()));
+        assert!(
+            !s.aligner_dirs
+                .contains_key(ModelId::QwenAlignUltra.as_str())
+        );
 
         // 选中的那个：绑定并记住（是用户挑过的目录，不是布局默认）。
         assert!(s.bind_download_if_active(ctc, ctc_pick.clone()));
@@ -1626,13 +1642,13 @@ mod tests {
     }
 
     #[test]
-    fn default_aligner_decision_prefers_ctc_unless_only_qwen_exists() {
+    fn default_aligner_decision_prefers_qwen_unless_only_ctc_exists() {
         use ModelId::OmniAsrCtc300M as Ctc;
-        use ModelId::QwenAlign06B as Qwen;
-        assert_eq!(decide_default_aligner(false, false), Ctc);
+        use ModelId::QwenAlignUltra as Qwen;
+        assert_eq!(decide_default_aligner(false, false), Qwen);
+        // CTC is the fallback only when it is the one that exists.
         assert_eq!(decide_default_aligner(true, false), Ctc);
-        assert_eq!(decide_default_aligner(true, true), Ctc);
-        // Qwen is the fallback only when it is the one that exists.
+        assert_eq!(decide_default_aligner(true, true), Qwen);
         assert_eq!(decide_default_aligner(false, true), Qwen);
     }
 
@@ -1650,15 +1666,15 @@ mod tests {
             std::env::temp_dir().join(format!("oneasr_qwen_dir_{}", std::process::id()));
         s.set_aligner_dir(ctc_custom.clone());
         assert_eq!(s.selected_aligner_id(), ModelId::OmniAsrCtc300M);
-        s.select_aligner_model(ModelId::QwenAlign06B);
+        s.select_aligner_model(ModelId::QwenAlignUltra);
         assert!(s.aligner_strips_punctuation());
         s.set_aligner_dir(qwen_custom.clone());
-        assert_eq!(s.selected_aligner_id(), ModelId::QwenAlign06B);
+        assert_eq!(s.selected_aligner_id(), ModelId::QwenAlignUltra);
 
         // Switching back restores each model's own pick.
         s.select_aligner_model(ModelId::OmniAsrCtc300M);
         assert_eq!(s.aligner_model_dir, ctc_custom);
-        s.select_aligner_model(ModelId::QwenAlign06B);
+        s.select_aligner_model(ModelId::QwenAlignUltra);
         assert_eq!(s.aligner_model_dir, qwen_custom);
         assert_eq!(s.aligner_dirs.len(), 2);
 
@@ -1675,7 +1691,10 @@ mod tests {
         assert_eq!(id, ModelId::default_aligner());
         assert_eq!(s.aligner_model_dir, resolve_model_dir(id.as_str()));
         // 标点恢复的分流也跟着同一个 id 走，不看目录。
-        assert_eq!(s.aligner_strips_punctuation(), id == ModelId::QwenAlign06B);
+        assert_eq!(
+            s.aligner_strips_punctuation(),
+            id == ModelId::QwenAlignUltra
+        );
     }
 
     /// 老配置（无 `aligner_model` 字段）里手挑的目录必须在升级后活下来，
@@ -1688,7 +1707,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("oneasr_aligner_legacy_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        for name in [QWEN_ALIGN_06B, "my-own-aligner"] {
+        for name in [QWEN_ALIGN_ULTRA, QWEN_ALIGN_LEGACY, "my-own-aligner"] {
             let dir = root.join(name);
             std::fs::create_dir_all(&dir).unwrap();
 
@@ -1711,6 +1730,59 @@ mod tests {
                 assert_eq!(s.aligner_model_dir, dir);
             }
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 旧版把 Qwen 对齐器写成 `Qwen3-ForcedAligner-0.6B-hf`：active id、
+    /// 布局目录和 per-model 键都可能是旧名。改名后一次迁到 Ultra，且旧布局
+    /// 默认路径不能被记成 Ultra 的「手挑」。
+    #[test]
+    fn legacy_qwen_aligner_name_migrates_to_ultra() {
+        let root =
+            std::env::temp_dir().join(format!("oneasr_aligner_rename_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let custom = root.join("my-ultra");
+        std::fs::create_dir_all(&custom).unwrap();
+
+        // active id 旧名 + 手挑目录：保留路径，归到 Ultra。
+        let mut s = Settings {
+            aligner_model: QWEN_ALIGN_LEGACY.into(),
+            aligner_model_dir: custom.clone(),
+            ..Settings::default()
+        };
+        s.normalize();
+        assert_eq!(s.aligner_model, ModelId::QwenAlignUltra.as_str());
+        assert_eq!(s.aligner_model_dir, custom);
+        assert_eq!(
+            s.aligner_dirs.get(ModelId::QwenAlignUltra.as_str()),
+            Some(&custom)
+        );
+        assert!(!s.aligner_dirs.contains_key(QWEN_ALIGN_LEGACY));
+
+        // active id 旧名 + 旧布局默认：目录落到新布局，不记成手挑。
+        let mut s = Settings {
+            aligner_model: QWEN_ALIGN_LEGACY.into(),
+            aligner_model_dir: resolve_model_dir(QWEN_ALIGN_LEGACY),
+            ..Settings::default()
+        };
+        s.normalize();
+        assert_eq!(s.aligner_model, ModelId::QwenAlignUltra.as_str());
+        assert_eq!(s.aligner_model_dir, resolve_model_dir(QWEN_ALIGN_ULTRA));
+        assert!(s.aligner_dirs.is_empty(), "{:?}", s.aligner_dirs);
+
+        // 旧 per-model 键（即使当前选的是 CTC）也要迁到 Ultra 名下。
+        let mut s = Settings {
+            aligner_model: ModelId::OmniAsrCtc300M.as_str().into(),
+            aligner_dirs: BTreeMap::from([(QWEN_ALIGN_LEGACY.to_string(), custom.clone())]),
+            ..Settings::default()
+        };
+        s.normalize();
+        assert_eq!(
+            s.aligner_dirs.get(ModelId::QwenAlignUltra.as_str()),
+            Some(&custom)
+        );
+        assert!(!s.aligner_dirs.contains_key(QWEN_ALIGN_LEGACY));
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1780,11 +1852,11 @@ mod tests {
     fn a_stored_pick_is_returned_verbatim() {
         let mine = std::env::temp_dir().join("oneasr-my-weights");
         let s = Settings {
-            aligner_dirs: BTreeMap::from([(QWEN_ALIGN_06B.to_string(), mine.clone())]),
+            aligner_dirs: BTreeMap::from([(QWEN_ALIGN_ULTRA.to_string(), mine.clone())]),
             asr_dirs: BTreeMap::from([(QWEN3_ASR_06B.to_string(), mine.clone())]),
             ..Settings::default()
         };
-        assert_eq!(s.aligner_dir_for(ModelId::QwenAlign06B), mine);
+        assert_eq!(s.aligner_dir_for(ModelId::QwenAlignUltra), mine);
         assert_eq!(s.asr_dir_for(ModelId::Qwen3Asr06B), mine);
     }
 

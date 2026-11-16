@@ -243,7 +243,7 @@ mod tests {
 
     fn facts() -> Facts<'static> {
         Facts {
-            version: "1.4.2",
+            version: "1.5.0",
             backend: "auto",
             vulkan: Some("loader ok | wgpu adapters 0".into()),
             dx12: Some("DXC".into()),
@@ -306,7 +306,7 @@ mod tests {
     fn both_languages_carry_the_facts() {
         for lang in [UiLang::Zh, UiLang::En] {
             let d = draft(lang, &facts(), None);
-            assert!(d.body.contains("1.4.2"), "{:?}: {}", lang, d.body);
+            assert!(d.body.contains("1.5.0"), "{:?}: {}", lang, d.body);
             assert!(d.body.contains("auto"), "{:?}: {}", lang, d.body);
             assert!(
                 d.body.contains("Qwen3-ASR-0.6B-hf"),

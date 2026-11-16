@@ -815,7 +815,8 @@ transcribe options:
   --asr-model-dir <dir>    Override this run's ASR directory (per-model config
                            from settings.json wins when the flag is absent)
   --aligner <ctc|qwen>     Forced-aligner engine (settings.json selection when
-                           the flag is absent; no settings -> scan CTC first)
+                           the flag is absent; no settings -> scan the default
+                           aligner first)
   --aligner-model-dir <dir>
                            Override this run's aligner directory
   --preset <short|standard|loose>
@@ -1076,7 +1077,8 @@ transcribe 选项：
                            布局扫描已装目录
   --asr-model-dir <目录>   这一趟改用这个识别目录（不给时用 settings.json 里
                            该模型自己的目录）
-  --aligner <ctc|qwen>     对齐引擎（不给时用 settings.json 的选择；没有配置才扫描）
+  --aligner <ctc|qwen>     对齐引擎（不给时用 settings.json 的选择；没有配置才扫描，
+                           默认引擎优先）
   --aligner-model-dir <目录>
                            这一趟改用这个对齐目录
   --preset <short|standard|loose>

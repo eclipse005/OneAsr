@@ -18,20 +18,20 @@ Everything runs on your machine — no cloud, no account.
 
 | Mode | Input | Pipeline | Output |
 |---|---|---|---|
-| **Transcribe** | audio / video | VAD → Qwen3-ASR → CTC alignment → smart segmentation | SRT / ASS / TXT |
+| **Transcribe** | audio / video | VAD → Qwen3-ASR → word-level alignment (Qwen by default) → smart segmentation | SRT / ASS / TXT |
 | **Transcript matching** | audio / video + a checked .txt / .srt | CTC alignment (recognition is skipped) | SRT / ASS |
 
 Optional vocal separation (HTDemucs) can run before either mode.
 
 ## Download
 
-Current version **[v1.4.2](https://github.com/eclipse005/OneAsr/releases/tag/v1.4.2)** (click a file name to download):
+Current version **[v1.5.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.5.0)** (click a file name to download):
 
 | Platform | Download |
 |------|------|
-| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_windows_portable.zip) |
-| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_linux_x64.tar.gz) |
-| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_macos.dmg) |
+| Windows | [Installer](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_windows_setup.exe) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_windows_portable.zip) |
+| Linux x64 | [.deb](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_linux_x64.deb) · [Portable](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_linux_x64.tar.gz) |
+| macOS (Apple Silicon) | [Disk image](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_macos.dmg) |
 
 ## Quick start
 
@@ -56,8 +56,8 @@ The main window and the settings drawer (same window size, side by side):
 - **Reliable timing**: word-level alignment + smart sentence segmentation — not whole-segment guesses
 - **Transcript matching**: already have a verified script? Attach it and recognition is skipped — your lines keep their wording and get real timestamps
 - **ASS karaoke output**: CJK characters (words in spaced languages) each carry their own timing for player highlighting
-- **Local aligner (default)**: frame-synchronous and fully local, no language coverage limits
-- **Two aligners, your pick**: CTC (default, frame-synchronous) or the Qwen forced aligner — switchable in Settings
+- **Local alignment**: both aligners run on your machine; no cloud dependency
+- **Two aligners, your pick**: Qwen (default, word-level) or CTC (frame-synchronous) — switchable in Settings
 - **11 source languages**: 中文普通话, English, 粤语, 日本語, 한국어, Français, Deutsch, Italiano, Español, Português, Русский (set manually per task; no auto-detection)
 - **Two ASR sizes**: 0.6B (faster / less VRAM) · 1.7B (more accurate / more resources)
 - **Output options**: SRT / ASS / TXT, in any combination; saved next to the video by default
@@ -75,12 +75,12 @@ The installer ships **no** weights; models download from ModelScope on first use
 |------|--------|------|
 | Qwen3-ASR-0.6B-hf | ~1.6 GB | Default recommendation |
 | Qwen3-ASR-1.7B-hf | ~4.1 GB | Higher accuracy |
-| omniASR-CTC-300M-v2-hf | ~1.3 GB | Required, shared by all ASR sizes |
-| Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | Optional — only if you switch the aligner |
+| omniASR-CTC-300M-v2-hf | ~1.3 GB | Optional — transcript matching always uses it |
+| Qwen3-ForcedAligner-Ultra | ~1.8 GB | Default aligner — downloaded on first use |
 | HTDemucs v4 vocal weights | ~84 MB | Optional |
 | SenseVoiceSmall (hotword model) | ~940 MB | Optional — only when you use hotwords |
 
-Common setups total about 2.9–5.4 GB. Only the model download needs network; transcription itself runs offline.
+Common setups total about 3.5–6.0 GB. Only the model download needs network; transcription itself runs offline.
 
 ## CLI
 

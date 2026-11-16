@@ -102,8 +102,9 @@ pub fn check_asr_model_dir(model_dir: &Path) -> Result<(), AsrError> {
 
 /// Check Aligner model directory with success-path caching.
 ///
-/// Install-layout dirs (`omniASR-CTC-300M-v2-hf` / `Qwen3-ForcedAligner-0.6B-hf`)
-/// are validated against the catalog's exact sizes; custom user-picked dirs
+/// Install-layout dirs (`omniASR-CTC-300M-v2-hf` / `Qwen3-ForcedAligner-Ultra`;
+/// the pre-Ultra `Qwen3-ForcedAligner-0.6B-hf` name is accepted as a migration
+/// alias) are validated against the catalog's exact sizes; custom user-picked dirs
 /// fall back to an existence + non-trivial-size check, accepting either
 /// aligner's file contract.
 pub fn check_aligner_model_dir(model_dir: &Path) -> Result<(), AsrError> {

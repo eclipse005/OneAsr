@@ -8,7 +8,14 @@ pub const QWEN3_ASR_17B: &str = "Qwen3-ASR-1.7B-hf";
 /// identical to the fp16 checkpoints.
 pub const QWEN3_ASR_06B_INT8: &str = "Qwen3-ASR-0.6B-int8";
 pub const QWEN3_ASR_17B_INT8: &str = "Qwen3-ASR-1.7B-int8";
-pub const QWEN_ALIGN_06B: &str = "Qwen3-ForcedAligner-0.6B-hf";
+/// Qwen forced aligner (Ultra fine-tune of the official 0.6B checkpoint).
+/// The install-layout folder and the ModelScope repo share this name.
+pub const QWEN_ALIGN_ULTRA: &str = "Qwen3-ForcedAligner-Ultra";
+/// Pre-Ultra install-layout name. Kept only for `settings.json` and on-disk
+/// migration: old configs still carry this string, and an old custom pick may
+/// sit in a folder with this name. New downloads always use
+/// [`QWEN_ALIGN_ULTRA`].
+pub const QWEN_ALIGN_LEGACY: &str = "Qwen3-ForcedAligner-0.6B-hf";
 /// CTC forced-alignment checkpoint (Meta Omnilingual family, Apache-2.0
 /// upstream). The ModelScope repo name omits the `-hf` install-layout suffix.
 pub const OMNI_ASR_CTC_300M: &str = "omniASR-CTC-300M-v2-hf";
@@ -47,7 +54,7 @@ pub enum ModelId {
     Qwen3Asr17B,
     Qwen3Asr06BInt8,
     Qwen3Asr17BInt8,
-    QwenAlign06B,
+    QwenAlignUltra,
     OmniAsrCtc300M,
     /// HTDemucs v4 vocals shard (`htdemucs_ft_vocals.safetensors`).
     HtdemucsFt,
@@ -62,7 +69,7 @@ impl ModelId {
             Self::Qwen3Asr17B => QWEN3_ASR_17B,
             Self::Qwen3Asr06BInt8 => QWEN3_ASR_06B_INT8,
             Self::Qwen3Asr17BInt8 => QWEN3_ASR_17B_INT8,
-            Self::QwenAlign06B => QWEN_ALIGN_06B,
+            Self::QwenAlignUltra => QWEN_ALIGN_ULTRA,
             Self::OmniAsrCtc300M => OMNI_ASR_CTC_300M,
             Self::HtdemucsFt => HTDEMUCS_FT,
             Self::SenseVoiceSmall => SENSEVOICE_SMALL,
@@ -75,7 +82,7 @@ impl ModelId {
             | Self::Qwen3Asr17B
             | Self::Qwen3Asr06BInt8
             | Self::Qwen3Asr17BInt8 => ModelKind::Asr,
-            Self::QwenAlign06B | Self::OmniAsrCtc300M => ModelKind::Align,
+            Self::QwenAlignUltra | Self::OmniAsrCtc300M => ModelKind::Align,
             Self::HtdemucsFt => ModelKind::Demucs,
             Self::SenseVoiceSmall => ModelKind::Hotword,
         }
@@ -87,7 +94,7 @@ impl ModelId {
             Self::Qwen3Asr17B => "Qwen3-ASR 1.7B",
             Self::Qwen3Asr06BInt8 => "Qwen3-ASR 0.6B int8",
             Self::Qwen3Asr17BInt8 => "Qwen3-ASR 1.7B int8",
-            Self::QwenAlign06B => "ForcedAligner 0.6B",
+            Self::QwenAlignUltra => "ForcedAligner Ultra",
             Self::OmniAsrCtc300M => "omniASR-CTC 300M",
             Self::HtdemucsFt => match lang {
                 crate::i18n::UiLang::Zh => "人声分离 HTDemucs",
@@ -107,7 +114,7 @@ impl ModelId {
         match self {
             Self::Qwen3Asr06B | Self::Qwen3Asr06BInt8 => "0.6B",
             Self::Qwen3Asr17B | Self::Qwen3Asr17BInt8 => "1.7B",
-            Self::QwenAlign06B => "Qwen",
+            Self::QwenAlignUltra => "Qwen",
             Self::OmniAsrCtc300M => "CTC",
             Self::HtdemucsFt => "Demucs",
             Self::SenseVoiceSmall => "SenseVoice",
@@ -150,7 +157,7 @@ impl ModelId {
         Self::Qwen3Asr06BInt8,
         Self::Qwen3Asr17B,
         Self::Qwen3Asr17BInt8,
-        Self::QwenAlign06B,
+        Self::QwenAlignUltra,
         Self::OmniAsrCtc300M,
         Self::HtdemucsFt,
         Self::SenseVoiceSmall,
@@ -158,17 +165,20 @@ impl ModelId {
 
     pub const ASR_CHOICES: [ModelId; 2] = [ModelId::Qwen3Asr06B, ModelId::Qwen3Asr17B];
 
-    /// Aligner picker order: CTC first and **default** (单调 DP 打轴更稳，
-    /// 见 docs/ctc-aligner-adoption-analysis.md)，Qwen 兜底共存。
-    pub const ALIGNER_CHOICES: [ModelId; 2] = [ModelId::OmniAsrCtc300M, ModelId::QwenAlign06B];
+    /// Aligner picker order: CTC first (the order users already know), Qwen
+    /// second. **Picker order is not the default** — [`Self::default_aligner`]
+    /// is Qwen; the CTC chip stays first so the Settings drawer does not move.
+    pub const ALIGNER_CHOICES: [ModelId; 2] = [ModelId::OmniAsrCtc300M, ModelId::QwenAlignUltra];
 
     /// Default aligner for a fresh install / an unknown settings value.
+    /// Qwen (Ultra) is the default; CTC stays available in Settings and is
+    /// still what transcript matching uses.
     pub fn default_aligner() -> Self {
-        Self::OmniAsrCtc300M
+        Self::QwenAlignUltra
     }
 
     /// Parse a catalog name / settings field into an aligner model id.
-    /// Unknown strings fall back to the default (CTC).
+    /// Unknown strings fall back to the default (Qwen).
     pub fn parse_aligner(raw: &str) -> Self {
         Self::try_parse_aligner(raw).unwrap_or(Self::default_aligner())
     }
@@ -178,11 +188,19 @@ impl ModelId {
         let s = raw.trim();
         if s.eq_ignore_ascii_case(OMNI_ASR_CTC_300M) {
             Some(Self::OmniAsrCtc300M)
-        } else if s.eq_ignore_ascii_case(QWEN_ALIGN_06B) {
-            Some(Self::QwenAlign06B)
+        } else if s.eq_ignore_ascii_case(QWEN_ALIGN_ULTRA)
+            || s.eq_ignore_ascii_case(QWEN_ALIGN_LEGACY)
+        {
+            Some(Self::QwenAlignUltra)
         } else {
             None
         }
+    }
+
+    /// True for the pre-Ultra install-layout name. Only configuration and
+    /// directory migration ask this; new selections always use the Ultra name.
+    pub fn is_legacy_aligner_name(raw: &str) -> bool {
+        raw.trim().eq_ignore_ascii_case(QWEN_ALIGN_LEGACY)
     }
 
     /// Parse a catalog name / settings field into an ASR model id.
@@ -222,14 +240,17 @@ impl ModelId {
     }
 
     /// Infer the aligner model from an install-layout folder name only
-    /// (`Qwen3-ForcedAligner-0.6B-hf` / `omniASR-CTC-300M-v2-hf`); custom dir
-    /// names return `None`.
+    /// (`Qwen3-ForcedAligner-Ultra` / `omniASR-CTC-300M-v2-hf`). The pre-Ultra
+    /// folder name is accepted as a migration alias; custom dir names return
+    /// `None`.
     pub fn try_from_aligner_dir(path: &std::path::Path) -> Option<Self> {
         let name = path.file_name().and_then(|n| n.to_str())?;
         if name.eq_ignore_ascii_case(OMNI_ASR_CTC_300M) {
             Some(Self::OmniAsrCtc300M)
-        } else if name.eq_ignore_ascii_case(QWEN_ALIGN_06B) {
-            Some(Self::QwenAlign06B)
+        } else if name.eq_ignore_ascii_case(QWEN_ALIGN_ULTRA)
+            || name.eq_ignore_ascii_case(QWEN_ALIGN_LEGACY)
+        {
+            Some(Self::QwenAlignUltra)
         } else {
             None
         }
@@ -286,7 +307,12 @@ pub fn model_definition(id: ModelId) -> ModelDefinition {
             QWEN3_ASR_17B_INT8,
             qwen3_asr_17b_int8_files(),
         ),
-        ModelId::QwenAlign06B => model_def(id, "Qwen", QWEN_ALIGN_06B, qwen_align_files()),
+        ModelId::QwenAlignUltra => model_def(
+            id,
+            "eclipse005",
+            "Qwen3-ForcedAligner-Ultra",
+            qwen_align_files(),
+        ),
         // ModelScope repo name differs from the install-layout folder name.
         ModelId::HtdemucsFt => model_def(id, "eclipse005", "htdemucs", htdemucs_ft_files()),
         ModelId::OmniAsrCtc300M => model_def(
@@ -519,31 +545,56 @@ fn omni_asr_ctc_300m_files() -> Vec<CatalogFile> {
     ]
 }
 
+/// Qwen3-ForcedAligner-Ultra (eclipse005's fine-tune of the official 0.6B
+/// aligner) plus its optional Local Head package.
+///
+/// The install-layout folder and the hub repo share the Ultra name. Seven
+/// files: the four the main checkpoint's loader opens, and the three
+/// `local_head/` files the crate auto-loads when the directory is present.
+/// Sizes + hashes are the ModelScope file listing at the upload commit.
 fn qwen_align_files() -> Vec<CatalogFile> {
-    const REV: &str = "053506a54ad1c9deea6105050330d7c500b9f098";
+    const REV: &str = "2088fd62a25efd6d0949ed1ffe08356596742f18";
     vec![
         CatalogFile {
             file_name: "config.json",
-            size: 248_029,
-            sha256: "82ac390b36a8f80c5a0c4e202367debd149e5d8c30abe4cf5eed439101b1c5ce",
+            size: 5_632,
+            sha256: "a2521a05badbd1ab064dbc1645579b99e3ed5e31a317650753ded6a0bd4d1298",
             revision: REV,
         },
         CatalogFile {
             file_name: "model.safetensors",
-            size: 1_835_545_960,
-            sha256: "00568245ceca5af1991d28562a75fe1ddc9bfeb041c27fda66947ea05c47fb86",
+            size: 1_835_544_544,
+            sha256: "e6fcf5be2c11b265f7217ba6102917a7fe64438506357be6999f6ad5a707cb5f",
             revision: REV,
         },
         CatalogFile {
             file_name: "tokenizer.json",
-            size: 11_429_842,
-            sha256: "cadfb9cbd9ff8f4e309075ec6a71b063295ff796afb4b5dbc0fd2873fbb301f2",
+            size: 11_429_688,
+            sha256: "90934377d8ceace196d3c8f872df96c8b48c6206f019b65e4ac631c04ee18f59",
             revision: REV,
         },
         CatalogFile {
             file_name: "tokenizer_config.json",
-            size: 998,
-            sha256: "945e980986de2ca7768f3326bfdbb4fbea3406f972b8ae0be233089f2b253c11",
+            size: 12_696,
+            sha256: "bee4786e25db33d3e8acb4c7a37c4ccf8d5a3d843b9cafb75a91d4ba774ad38f",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "local_head/config.json",
+            size: 1_150,
+            sha256: "d3bb91b1c29742f4d5e71507d61e52754d8ee237dc3b2e92500e61c4aa0e3f8e",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "local_head/model.safetensors",
+            size: 1_623_376,
+            sha256: "50a70d6ed969446770fb9dc1063f5f4e6e4c86eac05fd3efb637492407d0e2ac",
+            revision: REV,
+        },
+        CatalogFile {
+            file_name: "local_head/normalizer.json",
+            size: 4_370,
+            sha256: "24f6d4fa08dd78e12f7d15a75b0d8b0cd3172bbdfdaa7ae055ca2c64db660ae7",
             revision: REV,
         },
     ]
@@ -554,20 +605,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn asr_and_align_catalogs_are_official_qwen_hf() {
+    fn asr_and_align_catalogs_pin_their_repos() {
         let asr = model_definition(ModelId::Qwen3Asr06B);
-        let align = model_definition(ModelId::QwenAlign06B);
+        let align = model_definition(ModelId::QwenAlignUltra);
         assert!(
             asr.download_files
                 .iter()
                 .all(|f| f.url.contains("models/Qwen/Qwen3-ASR-0.6B-hf/"))
         );
-        assert!(
-            align
-                .download_files
-                .iter()
-                .all(|f| f.url.contains("models/Qwen/Qwen3-ForcedAligner-0.6B-hf/"))
-        );
+        assert!(align.download_files.iter().all(|f| {
+            f.url
+                .contains("models/eclipse005/Qwen3-ForcedAligner-Ultra/")
+        }));
         let asr17 = model_definition(ModelId::Qwen3Asr17B);
         assert!(
             asr17
@@ -672,21 +721,28 @@ mod tests {
 
     #[test]
     fn parse_aligner_is_exact_catalog_name_only() {
-        // CTC first and default (settings button order follows ALIGNER_CHOICES).
+        // Picker order stays CTC-then-Qwen; the **default selection** is Qwen.
         assert_eq!(ModelId::ALIGNER_CHOICES[0], ModelId::OmniAsrCtc300M);
-        assert_eq!(ModelId::default_aligner(), ModelId::OmniAsrCtc300M);
+        assert_eq!(ModelId::default_aligner(), ModelId::QwenAlignUltra);
         assert_eq!(
             ModelId::parse_aligner(OMNI_ASR_CTC_300M),
             ModelId::OmniAsrCtc300M
         );
         assert_eq!(
-            ModelId::parse_aligner(QWEN_ALIGN_06B),
-            ModelId::QwenAlign06B
+            ModelId::parse_aligner(QWEN_ALIGN_ULTRA),
+            ModelId::QwenAlignUltra
         );
+        // 旧版写进 settings.json / 目录名的名字仍然认，并归到 Ultra。
+        assert_eq!(
+            ModelId::parse_aligner(QWEN_ALIGN_LEGACY),
+            ModelId::QwenAlignUltra
+        );
+        assert!(ModelId::is_legacy_aligner_name(QWEN_ALIGN_LEGACY));
+        assert!(!ModelId::is_legacy_aligner_name(QWEN_ALIGN_ULTRA));
         assert_eq!(ModelId::try_parse_aligner("ctc"), None);
         assert_eq!(
             ModelId::parse_aligner("something-else"),
-            ModelId::OmniAsrCtc300M
+            ModelId::QwenAlignUltra
         );
         assert_eq!(
             ModelId::try_from_aligner_dir(
@@ -695,14 +751,64 @@ mod tests {
             Some(ModelId::OmniAsrCtc300M)
         );
         assert_eq!(
-            ModelId::try_from_aligner_dir(
-                &std::path::Path::new("m").join("Qwen3-ForcedAligner-0.6B-hf")
-            ),
-            Some(ModelId::QwenAlign06B)
+            ModelId::try_from_aligner_dir(&std::path::Path::new("m").join(QWEN_ALIGN_ULTRA)),
+            Some(ModelId::QwenAlignUltra)
+        );
+        assert_eq!(
+            ModelId::try_from_aligner_dir(&std::path::Path::new("m").join(QWEN_ALIGN_LEGACY)),
+            Some(ModelId::QwenAlignUltra)
         );
         assert_eq!(
             ModelId::try_from_aligner_dir(&std::path::Path::new("m").join("custom")),
             None
+        );
+    }
+
+    /// Ultra 的清单是「主检查点 4 个文件 + Local Head 3 个文件」，七份都在
+    /// 同一个上传提交上；少一份 `local_head/`，对齐器会退回 80 ms 网格。
+    #[test]
+    fn qwen_align_catalog_is_the_ultra_checkpoint() {
+        let def = model_definition(ModelId::QwenAlignUltra);
+        assert_eq!(
+            def.required_files,
+            [
+                "config.json",
+                "model.safetensors",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "local_head/config.json",
+                "local_head/model.safetensors",
+                "local_head/normalizer.json",
+            ]
+        );
+        // 安装目录与 hub 仓库同名，URL 必须指向 Ultra 仓库，而不是旧名。
+        assert!(def.download_files.iter().all(|f| {
+            f.url
+                .contains("models/eclipse005/Qwen3-ForcedAligner-Ultra/")
+        }));
+        assert!(def.download_files.iter().all(|f| {
+            f.url
+                .contains("/resolve/2088fd62a25efd6d0949ed1ffe08356596742f18/")
+        }));
+        let weights = def
+            .download_files
+            .iter()
+            .find(|f| f.file_name == "model.safetensors")
+            .unwrap();
+        assert_eq!(weights.expected_size, 1_835_544_544);
+        assert_eq!(
+            weights.sha256,
+            "e6fcf5be2c11b265f7217ba6102917a7fe64438506357be6999f6ad5a707cb5f"
+        );
+        let head = def
+            .download_files
+            .iter()
+            .find(|f| f.file_name == "local_head/model.safetensors")
+            .unwrap();
+        assert_eq!(head.expected_size, 1_623_376);
+        assert_eq!(
+            head.sha256,
+            "50a70d6ed969446770fb9dc1063f5f4e6e4c86eac05fd3efb637492407d0e2ac"
         );
     }
 
@@ -753,10 +859,8 @@ mod tests {
             Some(ModelId::Qwen3Asr06BInt8)
         );
         assert_eq!(
-            ModelId::try_from_aligner_dir(
-                &std::path::Path::new("m").join("Qwen3-ForcedAligner-0.6B-hf")
-            ),
-            Some(ModelId::QwenAlign06B)
+            ModelId::try_from_aligner_dir(&std::path::Path::new("m").join(QWEN_ALIGN_ULTRA)),
+            Some(ModelId::QwenAlignUltra)
         );
     }
 
@@ -781,10 +885,10 @@ mod tests {
         );
         // Non-ASR ids are unaffected.
         assert_eq!(
-            ModelId::QwenAlign06B.with_quant(true),
-            ModelId::QwenAlign06B
+            ModelId::QwenAlignUltra.with_quant(true),
+            ModelId::QwenAlignUltra
         );
-        assert_eq!(ModelId::QwenAlign06B.asr_base(), ModelId::QwenAlign06B);
+        assert_eq!(ModelId::QwenAlignUltra.asr_base(), ModelId::QwenAlignUltra);
         // The four ASR ids carry their own size label.
         assert_eq!(ModelId::Qwen3Asr17BInt8.short_label(), "1.7B");
     }

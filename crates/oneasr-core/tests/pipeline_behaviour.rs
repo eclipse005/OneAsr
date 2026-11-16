@@ -116,7 +116,7 @@ impl Run {
             asr_model_dir: asr,
             // FakeAligner 输出无标点的词序列，模拟的是 Qwen 对齐器 —— 显式选中，
             // 让管线走「标点从转写贴回」的 Qwen 路径（CTC 路径 token 自带标点）。
-            aligner_model: oneasr_core::model::QWEN_ALIGN_06B.into(),
+            aligner_model: oneasr_core::model::QWEN_ALIGN_ULTRA.into(),
             aligner_model_dir: align,
             demucs_model_dir: demucs,
             output_dir: app_root.join("output"),

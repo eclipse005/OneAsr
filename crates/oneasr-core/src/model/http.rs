@@ -103,13 +103,25 @@ pub(super) fn initial_bytes(definition: &ModelDefinition, model_dir: &Path) -> (
     for file in &definition.download_files {
         let target = model_dir.join(&file.file_name);
         let part = model_dir.join(format!("{}.part", file.file_name.replace('/', "_")));
+        // 只有**正好是这次目录尺寸**的成品才算已完成；旧版模型的成品（换模型时
+        // 最常见：0.6B → Ultra）会在 `download_model` 里被删掉重下，不能提前
+        // 记成已下载，否则进度条一开始就是 100%。
         let have = if target.is_file() {
-            std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0)
+            match std::fs::metadata(&target) {
+                Ok(meta) if meta.len() == file.expected_size => meta.len(),
+                _ => 0,
+            }
         } else {
-            std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0)
+            // 超长的 `.part` 会被丢弃，同样不算进度；短的可以续传。
+            let part_len = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+            if part_len > file.expected_size {
+                0
+            } else {
+                part_len
+            }
         };
-        downloaded = downloaded.saturating_add(have.min(file.expected_size));
-        total = total.saturating_add(file.expected_size.max(have));
+        downloaded = downloaded.saturating_add(have);
+        total = total.saturating_add(file.expected_size);
     }
     (downloaded, total)
 }
@@ -223,6 +235,51 @@ mod tests {
             .sum();
         assert_eq!(downloaded, 8, "only the given directory counts");
         assert_eq!(total, full_total, "a .part never inflates the total");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 换模型时旧成品尺寸对不上：它的字节会在下载前被删掉重下，不能提前记成
+    /// 「已下载」，否则进度条一开始就是 100%。
+    #[test]
+    fn initial_bytes_ignores_wrong_size_and_oversized_parts() {
+        let definition = ModelDefinition {
+            id: crate::model::ModelId::HtdemucsFt,
+            required_files: vec!["w".into()],
+            download_files: vec![crate::model::ModelDownloadFile {
+                file_name: "w".into(),
+                url: String::new(),
+                expected_size: 4,
+                sha256: "",
+            }],
+        };
+        let base =
+            std::env::temp_dir().join(format!("oneasr-initial-bytes-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let exact = base.join("exact");
+        let wrong = base.join("wrong");
+        let part_over = base.join("part-over");
+        let part_resume = base.join("part-resume");
+        for dir in [&exact, &wrong, &part_over, &part_resume] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(exact.join("w"), [0u8; 4]).unwrap();
+        std::fs::write(wrong.join("w"), [0u8; 5]).unwrap();
+        std::fs::write(part_over.join("w.part"), [0u8; 5]).unwrap();
+        std::fs::write(part_resume.join("w.part"), [0u8; 3]).unwrap();
+
+        assert_eq!(initial_bytes(&definition, &exact), (4, 4));
+        assert_eq!(
+            initial_bytes(&definition, &wrong),
+            (0, 4),
+            "wrong-size product is not resumable progress"
+        );
+        assert_eq!(
+            initial_bytes(&definition, &part_over),
+            (0, 4),
+            "an oversized .part is discarded, not counted"
+        );
+        assert_eq!(initial_bytes(&definition, &part_resume), (3, 4));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

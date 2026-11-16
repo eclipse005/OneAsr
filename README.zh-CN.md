@@ -18,20 +18,20 @@
 
 | 模式 | 输入 | 管线 | 输出 |
 |---|---|---|---|
-| **转写** | 音视频 | VAD 分段 → Qwen3-ASR 转写 → CTC 词级打轴 → 智能断句 | SRT / ASS / TXT |
+| **转写** | 音视频 | VAD 分段 → Qwen3-ASR 转写 → 词级打轴（默认 Qwen）→ 智能断句 | SRT / ASS / TXT |
 | **文稿匹配** | 音视频 + 校对好的 .txt / .srt | CTC 对齐（跳过识别） | SRT / ASS |
 
 两种模式都可以先做人声分离（HTDemucs）。
 
 ## 下载安装
 
-当前版本 **[v1.4.2](https://github.com/eclipse005/OneAsr/releases/tag/v1.4.2)**（点文件名即下载）：
+当前版本 **[v1.5.0](https://github.com/eclipse005/OneAsr/releases/tag/v1.5.0)**（点文件名即下载）：
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_windows_portable.zip) |
-| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_linux_x64.tar.gz) |
-| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.4.2/OneAsr_1.4.2_macos.dmg) |
+| Windows | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_windows_setup.exe) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_windows_portable.zip) |
+| Linux x64 | [安装包](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_linux_x64.deb) · [便携包](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_linux_x64.tar.gz) |
+| macOS（M 芯片） | [磁盘映像](https://github.com/eclipse005/OneAsr/releases/download/v1.5.0/OneAsr_1.5.0_macos.dmg) |
 
 ## 快速上手
 
@@ -56,8 +56,8 @@
 - **时间轴可靠**：词级对齐 + 智能断句，不是整段估时间
 - **文稿匹配**：已有校对好的文稿？挂上去直接跳过识别，每一行都有真实时间轴
 - **ASS 卡拉OK输出**：中日韩逐字（空格语言逐词）各带时间戳，播放器可做逐字高亮
-- **本地对齐器（默认）**：帧同步、全程本地，不受语言覆盖限制
-- **两个对齐器可选**：CTC（默认，帧同步）与 Qwen3-ForcedAligner，在设置里随时切换
+- **本地对齐**：两种对齐器都在本机跑，不依赖云端
+- **两个对齐器可选**：Qwen（默认，词级）与 CTC（帧同步），在设置里随时切换
 - **11 种语言**：中文普通话、English、粤语、日本語、한국어、Français、Deutsch、Italiano、Español、Português、Русский（需手动指定，不自动检测）
 - **双规格 ASR**：0.6B（更快 / 省显存）· 1.7B（更准 / 更吃资源）
 - **输出可选**：SRT / ASS / TXT 任意组合，默认与视频同目录
@@ -75,12 +75,12 @@
 |------|--------|------|
 | Qwen3-ASR-0.6B-hf | ~1.6 GB | 默认推荐 |
 | Qwen3-ASR-1.7B-hf | ~4.1 GB | 更高精度 |
-| omniASR-CTC-300M-v2-hf | ~1.3 GB | 必需，所有 ASR 共用 |
-| Qwen3-ForcedAligner-0.6B-hf | ~1.8 GB | 可选 —— 切换对齐器时才需要 |
+| omniASR-CTC-300M-v2-hf | ~1.3 GB | 可选 —— 文稿匹配固定用它 |
+| Qwen3-ForcedAligner-Ultra | ~1.8 GB | 默认对齐器 —— 首次使用时下载 |
 | HTDemucs v4 人声权重 | ~84 MB | 可选 |
 | SenseVoiceSmall（热词模型） | ~940 MB | 可选 —— 用热词时才需要 |
 
-常用组合约 2.9～5.4 GB。仅下模型需要联网，转写过程可离线。
+常用组合约 3.5～6.0 GB。仅下模型需要联网，转写过程可离线。
 
 ## CLI 命令行
 

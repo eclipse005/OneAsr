@@ -82,7 +82,7 @@ fn main() {
     let asr_06 = app_root_path.join("models").join("Qwen3-ASR-0.6B-hf");
     let align = app_root_path
         .join("models")
-        .join("Qwen3-ForcedAligner-0.6B-hf");
+        .join("Qwen3-ForcedAligner-Ultra");
     if asr_06.is_dir() {
         settings.asr_model_dir = asr_06;
     }

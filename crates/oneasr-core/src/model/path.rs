@@ -60,7 +60,7 @@ pub fn default_asr_model_dir() -> PathBuf {
     resolve_model_dir(QWEN3_ASR_06B)
 }
 
-/// 默认对齐器的安装布局目录。跟着 [`ModelId::default_aligner`] 走（当前是 CTC），
+/// 默认对齐器的安装布局目录。跟着 [`ModelId::default_aligner`] 走（当前是 Qwen），
 /// 不钉死在某个引擎上——否则「默认引擎」和「默认目录」会指向两个模型。
 pub fn default_aligner_model_dir() -> PathBuf {
     resolve_model_dir(ModelId::default_aligner().as_str())

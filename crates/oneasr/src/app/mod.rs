@@ -647,10 +647,11 @@ fn log_environment_snapshot(settings: &Settings, app_root: &std::path::Path) {
         ModelId::Qwen3Asr17B,
         ModelId::Qwen3Asr06BInt8,
         ModelId::Qwen3Asr17BInt8,
-        // 两个对齐引擎都列：默认是 CTC，只列 Qwen 的话用户贴日志来问「为什么
-        // 跑不起来」时，恰恰查不到当前那个引擎的权重在不在。
+        // 两个对齐引擎都列：默认是 Qwen，CTC 仍可在设置里选用；只列当前
+        // 那个引擎的话，用户贴日志来问「为什么跑不起来」时就查不到另一份
+        // 权重的状态。
         ModelId::OmniAsrCtc300M,
-        ModelId::QwenAlign06B,
+        ModelId::QwenAlignUltra,
         ModelId::HtdemucsFt,
         // 热词粗转（SenseVoice）：贴日志来问「为什么热词没生效」时要能看到它在不在。
         ModelId::SenseVoiceSmall,

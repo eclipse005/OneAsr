@@ -1,5 +1,10 @@
 # 用 ctc-forced-aligner-wgpu 替换 Qwen3-ForcedAligner —— 采纳分析
 
+> **2026-11-16 状态更新**：默认对齐器已改为 Qwen3-ForcedAligner-Ultra（安装目录与
+> 仓库同名 `Qwen3-ForcedAligner-Ultra`；旧名 `Qwen3-ForcedAligner-0.6B-hf` 只作为
+> `settings.json` / 目录迁移别名保留）；CTC 保留为可选引擎与文稿匹配专用。下面
+> 「默认 CTC」等表述是当时的决策记录，保留不改。
+
 > 分析日期 2026-10-06 · 对比基线：OneAsr 现役 Qwen3-ForcedAligner-0.6B（qwen3-aligner-wgpu）
 > 素材：韩语真实综艺（266.6s，59 条人工 SRT 参考）+ FLEURS en/ja/zh 拼接音频（20 片段、片段时间已知）
 > 原始数据：`D:\OneAsr\tmp\segtest\`（`bakeoff.py` / `bakeoff_align.json` / `out/ctc_*.json`）

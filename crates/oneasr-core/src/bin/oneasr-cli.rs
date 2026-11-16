@@ -1576,8 +1576,8 @@ fn apply_app_root_paths(
         }
     }
     // 对齐模型：与 ASR 同一套优先级 —— `--aligner` 显式指定只认那一个，
-    // 扫不到就指向那个不存在的目录报缺，而不是退回默认的 CTC；没指定才按
-    // ALIGNER_CHOICES 顺序（CTC 优先）扫描安装布局。
+    // 扫不到就指向那个不存在的目录报缺，而不是退回默认的 Qwen；没指定才按
+    // 默认引擎优先（Qwen，其余按 ALIGNER_CHOICES）扫描安装布局。
     if let Some(id) = aligner_override {
         settings.aligner_model = id.as_str().into();
         settings.aligner_model_dir = roots
@@ -1586,15 +1586,22 @@ fn apply_app_root_paths(
             .find(|dir| dir.is_dir())
             .unwrap_or_else(|| roots[0].join("models").join(id.as_str()));
     } else {
-        // 与 ASR 那支同一个形状：候选在外层，引擎优先级（CTC 先）才是全局规则，
+        // 与 ASR 那支同一个形状：候选在外层，默认引擎优先才是全局规则，
         // 不被 root 顺序截胡；同一个候选仍按 root 顺序取。
-        let found = ModelId::ALIGNER_CHOICES.iter().find_map(|id| {
-            roots
-                .iter()
-                .map(|root| root.join("models").join(id.as_str()))
-                .find(|dir| dir.is_dir())
-                .map(|dir| (dir, *id))
-        });
+        let default = ModelId::default_aligner();
+        let found = std::iter::once(default)
+            .chain(
+                ModelId::ALIGNER_CHOICES
+                    .into_iter()
+                    .filter(|id| *id != default),
+            )
+            .find_map(|id| {
+                roots
+                    .iter()
+                    .map(|root| root.join("models").join(id.as_str()))
+                    .find(|dir| dir.is_dir())
+                    .map(|dir| (dir, id))
+            });
         if let Some((dir, id)) = found {
             settings.aligner_model = id.as_str().into();
             settings.aligner_model_dir = dir;
@@ -2375,7 +2382,7 @@ fn parse_aligner_arg(raw: &str) -> Option<ModelId> {
     // `qwen-align` 是 download 那边的写法（`--aligner` 只写 `qwen` 也能用，
     // 两个别名指同一个引擎，别让用户猜哪个旗标认哪个写法）。
     if s.eq_ignore_ascii_case("qwen") || s.eq_ignore_ascii_case("qwen-align") {
-        return Some(ModelId::QwenAlign06B);
+        return Some(ModelId::QwenAlignUltra);
     }
     ModelId::try_parse_aligner(s)
 }
@@ -2744,12 +2751,48 @@ mod tests {
         std::fs::create_dir_all(root.join("models").join(ModelId::OmniAsrCtc300M.as_str()))
             .unwrap();
         let mut s = Settings::default();
-        apply_app_root_paths(&mut s, &root, &root, None, Some(ModelId::QwenAlign06B));
-        assert_eq!(s.aligner_model, ModelId::QwenAlign06B.as_str());
+        apply_app_root_paths(&mut s, &root, &root, None, Some(ModelId::QwenAlignUltra));
+        assert_eq!(s.aligner_model, ModelId::QwenAlignUltra.as_str());
         assert_eq!(
             s.aligner_model_dir,
-            root.join("models").join(ModelId::QwenAlign06B.as_str()),
+            root.join("models").join(ModelId::QwenAlignUltra.as_str()),
             "没装就该指向它自己并报缺，而不是退回已装的 CTC"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 不带 `--aligner` 的安装布局扫描：默认引擎（Qwen）先，装了两个也选 Qwen；
+    /// 只有 CTC 时才退 CTC。断骨锚点：把扫描改回 `ALIGNER_CHOICES` 顺序
+    /// （CTC 先），第一条断言立刻变红。
+    #[test]
+    fn aligner_scan_prefers_the_default_engine_then_falls_back() {
+        let root = env::temp_dir().join(format!("oneasr-align-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for id in [ModelId::QwenAlignUltra, ModelId::OmniAsrCtc300M] {
+            std::fs::create_dir_all(root.join("models").join(id.as_str())).unwrap();
+        }
+
+        let mut both = Settings::default();
+        apply_app_root_paths(&mut both, &root, &root, None, None);
+        assert_eq!(both.aligner_model, ModelId::QwenAlignUltra.as_str());
+        assert_eq!(
+            both.aligner_model_dir,
+            root.join("models").join(ModelId::QwenAlignUltra.as_str()),
+            "两个都装了就该用默认的 Qwen"
+        );
+
+        std::fs::remove_dir_all(root.join("models").join(ModelId::QwenAlignUltra.as_str()))
+            .unwrap();
+        let mut ctc_only = Settings::default();
+        apply_app_root_paths(&mut ctc_only, &root, &root, None, None);
+        assert_eq!(
+            ctc_only.aligner_model,
+            ModelId::OmniAsrCtc300M.as_str(),
+            "Qwen 没装时才退已装的 CTC"
+        );
+        assert_eq!(
+            ctc_only.aligner_model_dir,
+            root.join("models").join(ModelId::OmniAsrCtc300M.as_str())
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2852,11 +2895,11 @@ mod tests {
         );
         assert_eq!(
             parse_download_arg("qwen").unwrap().target,
-            ModelId::QwenAlign06B
+            ModelId::QwenAlignUltra
         );
         assert_eq!(
             parse_download_arg("qwen-align").unwrap().target,
-            ModelId::QwenAlign06B
+            ModelId::QwenAlignUltra
         );
 
         // 没有转写旗标的两个可选模型：短别名与目录名都认。
@@ -3257,7 +3300,7 @@ mod tests {
 
         for (key, dir, id) in [
             ("asr", &asr, ModelId::Qwen3Asr06B),
-            ("aligner", &aligner, ModelId::OmniAsrCtc300M),
+            ("aligner", &aligner, ModelId::QwenAlignUltra),
             ("demucs", &demucs, ModelId::HtdemucsFt),
             ("sensevoice", &sensevoice, ModelId::SenseVoiceSmall),
         ] {
@@ -4082,7 +4125,7 @@ mod tests {
         let root = env::temp_dir().join(format!("oneasr-align-dir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ctc = root.join("omniASR-CTC-300M-v2-hf");
-        let qwen = root.join("Qwen3-ForcedAligner-0.6B-hf");
+        let qwen = root.join("Qwen3-ForcedAligner-Ultra");
         std::fs::create_dir_all(&ctc).unwrap();
         std::fs::create_dir_all(&qwen).unwrap();
         // CTC 那份：config.json + vocab.json（没有 tokenizer.json）。

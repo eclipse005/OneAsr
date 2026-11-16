@@ -655,7 +655,7 @@ impl OneAsrApp {
                     )),
             )
             .child({
-                // 对齐引擎选择：CTC 在前、默认 CTC（与 ASR 尺寸 chip 同款交互）。
+                // 对齐引擎选择：CTC 在前（用户熟悉的顺序）、默认 Qwen（与 ASR 尺寸 chip 同款交互）。
                 let chips: Vec<AnyElement> = ModelId::ALIGNER_CHOICES
                     .into_iter()
                     .map(|id| {
