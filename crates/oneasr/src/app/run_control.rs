@@ -412,9 +412,9 @@ impl OneAsrApp {
         else {
             return;
         };
-        // OS explorer is the feedback; no in-app banner — but a dead click must
-        // still leave a trace for "点开文件夹没反应" reports.
+        // 成功时系统窗口就是反馈；失败必须留痕（日志 + 状态栏提示）。
         if let Err(e) = shell::open_containing_folder(&path) {
+            self.flash_hint(t(L::OPEN_OUTPUT_FAILED), cx);
             crashlog::log_warn(format!(
                 "open output folder failed: {e}\n  file: {}",
                 path.display()

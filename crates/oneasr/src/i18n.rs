@@ -102,6 +102,10 @@ pub mod L {
 
     // ---- 任务行 ----
     pub const TIP_OPEN_OUTPUT: Str = Str::new("打开输出位置", "Open output location");
+    pub const OPEN_OUTPUT_FAILED: Str = Str::new(
+        "打不开输出位置，详情见 oneasr-error.log",
+        "Can't open the output location — see oneasr-error.log",
+    );
     pub const TIP_START: Str = Str::new("开始", "Start");
     pub const TIP_DELETE: Str = Str::new("删除", "Delete");
     pub const TIMING_TITLE: Str = Str::new("处理耗时", "Processing time");
